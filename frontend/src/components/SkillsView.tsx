@@ -20,10 +20,16 @@ import {
 import { useDialog } from '../context/DialogContext';
 
 interface SkillsViewProps {
+  selectedId?: string | null;
+  onSelectId?: (name: string | null) => void;
   onRefreshConversations?: () => void;
 }
 
-export const SkillsView: React.FC<SkillsViewProps> = ({ onRefreshConversations }) => {
+export const SkillsView: React.FC<SkillsViewProps> = ({ 
+  selectedId, 
+  onSelectId, 
+  onRefreshConversations 
+}) => {
   const dialog = useDialog();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
@@ -43,8 +49,9 @@ export const SkillsView: React.FC<SkillsViewProps> = ({ onRefreshConversations }
     try {
       const data = await api.listSkills();
       setSkills(data);
-      if (data.length > 0 && !selectedSkill && !isCreating) {
+      if (data.length > 0 && !selectedSkill && !isCreating && !selectedId) {
         setSelectedSkill(data[0]);
+        onSelectId?.(data[0].name);
       }
     } catch (error) {
       console.error('Failed to load skills:', error);
@@ -54,6 +61,28 @@ export const SkillsView: React.FC<SkillsViewProps> = ({ onRefreshConversations }
   useEffect(() => {
     loadSkills();
   }, []);
+
+  useEffect(() => {
+    if (selectedId) {
+      if (selectedId === 'new') {
+        setIsCreating(true);
+        setSelectedSkill(null);
+        setName('');
+        setDescription('');
+        setInstructions('# Skill Title\n\nDetailed instructions for the agent...\n');
+        setConversationId(null);
+      } else {
+        const found = skills.find((s) => s.name === selectedId);
+        if (found) {
+          setIsCreating(false);
+          setSelectedSkill(found);
+        }
+      }
+    } else if (skills.length > 0 && !selectedSkill && !isCreating) {
+      setSelectedSkill(skills[0]);
+      onSelectId?.(skills[0].name);
+    }
+  }, [selectedId, skills]);
 
   useEffect(() => {
     if (selectedSkill && !isCreating) {
@@ -179,7 +208,10 @@ export const SkillsView: React.FC<SkillsViewProps> = ({ onRefreshConversations }
             </h2>
           </div>
           <button
-            onClick={handleStartCreate}
+            onClick={() => {
+              handleStartCreate();
+              onSelectId?.('new');
+            }}
             className="p-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs flex items-center gap-1 font-semibold transition-colors shadow-xs"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -201,6 +233,7 @@ export const SkillsView: React.FC<SkillsViewProps> = ({ onRefreshConversations }
                   onClick={() => {
                     setIsCreating(false);
                     setSelectedSkill(skill);
+                    onSelectId?.(skill.name);
                   }}
                   className={`p-3.5 rounded-xl cursor-pointer transition-all border ${
                     isSelected

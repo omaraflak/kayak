@@ -1,22 +1,66 @@
 import asyncio
 import importlib.util
+import json
 import os
 from pathlib import Path
 import re
 import tempfile
+from typing import Optional
+from backend.app.agent.sandbox import sandbox_manager
 from backend.app.config import settings
 from backend.app.tools.registry import extract_tool_schema, tool_registry
 
 
-async def verify_tool(tool_name: str, tool_code: str, verify_code: str) -> str:
+async def verify_tool(
+    tool_name: str,
+    tool_code: str,
+    verify_code: str,
+    container_id: Optional[str] = None,
+) -> str:
     """Executes the verification unit tests for a tool in an isolated test environment and checks schema extraction.
 
     Args:
         tool_name: Identifier for the tool (e.g. 'fetch_weather').
         tool_code: Python source code for `tool.py`.
         verify_code: Python verification test code for `verify.py`.
+        container_id: Optional container ID for running verification inside the sandbox.
     """
     clean_name = re.sub(r"[^a-zA-Z0-9_-]", "_", tool_name.lower().strip())
+
+    if container_id:
+        script = f"""
+import sys
+import os
+import tempfile
+from pathlib import Path
+
+with tempfile.TemporaryDirectory(prefix="kayak_verify_") as tmpdir:
+    tmp_path = Path(tmpdir)
+    tool_file = tmp_path / "tool.py"
+    verify_file = tmp_path / "verify.py"
+    
+    tool_file.write_text({repr(tool_code)}, encoding="utf-8")
+    verify_file.write_text({repr(verify_code)}, encoding="utf-8")
+    
+    import subprocess
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"{{str(tmp_path)}}:{{env.get('PYTHONPATH', '')}}"
+    
+    res = subprocess.run(
+        [sys.executable, "verify.py"],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30
+    )
+    
+    if res.returncode == 0:
+        print(f"✓ Verification Passed!\\n\\nSTDOUT:\\n{{res.stdout}}")
+    else:
+        print(f"✗ Verification Failed (exit code {{res.returncode}})\\n\\nSTDOUT:\\n{{res.stdout}}\\n\\nSTDERR:\\n{{res.stderr}}")
+"""
+        return await sandbox_manager.exec_python(container_id, script)
 
     with tempfile.TemporaryDirectory(
         prefix=f"kayak_verify_{clean_name}_"

@@ -268,6 +268,18 @@ class ToolRegistry:
         context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Executes a tool with the provided arguments and runtime context."""
+        # 1. If executing in a Docker sandbox container and this is a custom tool
+        container_id = context.get("container_id") if context else None
+        if container_id and name in self._custom_source_codes:
+            from backend.app.agent.sandbox import sandbox_manager
+            tool_code = self._custom_source_codes[name]
+            return await sandbox_manager.exec_custom_tool(
+                container_id=container_id,
+                tool_name=name,
+                tool_code=tool_code,
+                arguments=arguments,
+            )
+
         func = self.get_tool(name)
         if not func:
             return f"Error: Tool '{name}' not found."

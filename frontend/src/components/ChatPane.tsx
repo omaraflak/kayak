@@ -7,6 +7,7 @@ import { Conversation, Message } from '../types';
 import { api } from '../api/client';
 import { useSSE } from '../hooks/useSSE';
 import { ToolCallCard } from './ToolCallCard';
+import { ToolCallsAccordion } from './ToolCallsAccordion';
 import { CodeBlock } from './CodeBlock';
 import { 
   Send, 
@@ -41,7 +42,6 @@ export function extractToolDraftFromText(text: string): {
 } {
   const result: { name?: string; toolCode?: string; verifyCode?: string } = {};
 
-  // Extract python code blocks: ```python ... ``` or ```py ... ``` or unclosed ```python ...
   const codeBlockRegex = /```(?:python|py)?\n([\s\S]*?)(?:```|$)/g;
   const blocks: string[] = [];
   let match;
@@ -56,7 +56,6 @@ export function extractToolDraftFromText(text: string): {
       result.verifyCode = block;
     } else if (block.includes('def ') || block.includes('import ')) {
       result.toolCode = block;
-      // Try to extract function name
       const fnMatch = /def\s+([a-zA-Z0-9_]+)\s*\(/.exec(block);
       if (fnMatch && fnMatch[1] && !['test_', 'main', 'execute'].includes(fnMatch[1])) {
         result.name = fnMatch[1];
@@ -64,7 +63,6 @@ export function extractToolDraftFromText(text: string): {
     }
   }
 
-  // Check for explicit tool name: "tool_name: xyz" or "Tool Name: `xyz`"
   const nameMatch = /(?:tool\s*name|tool_name)\s*[:=]\s*[`"']?([a-zA-Z0-9_-]+)[`"']?/i.exec(text);
   if (nameMatch && nameMatch[1]) {
     result.name = nameMatch[1];
@@ -80,7 +78,6 @@ export function extractSkillDraftFromText(text: string): {
 } {
   const result: { name?: string; description?: string; instructions?: string } = {};
 
-  // Check if text has YAML frontmatter: --- ... ---
   const fmMatch = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/m.exec(text);
   if (fmMatch) {
     const yaml = fmMatch[1];
@@ -92,7 +89,6 @@ export function extractSkillDraftFromText(text: string): {
     return result;
   }
 
-  // Check if there is a markdown code block containing instructions
   const mdBlockMatch = /```(?:markdown|md)?\n([\s\S]*?)(?:```|$)/.exec(text);
   if (mdBlockMatch && mdBlockMatch[1] && (mdBlockMatch[1].includes('# ') || mdBlockMatch[1].includes('---'))) {
     const content = mdBlockMatch[1];
@@ -105,7 +101,6 @@ export function extractSkillDraftFromText(text: string): {
     return result;
   }
 
-  // If text itself starts with or contains a top-level markdown heading # Skill
   if (text.includes('# ')) {
     const headingIndex = text.indexOf('# ');
     const candidateInstructions = text.slice(headingIndex);
@@ -119,6 +114,86 @@ export function extractSkillDraftFromText(text: string): {
   }
 
   return result;
+}
+
+interface GroupedTurn {
+  id: string;
+  role: 'user' | 'assistant';
+  content?: string;
+  toolCalls: {
+    id: string;
+    name: string;
+    argumentsStr: string;
+    output?: string;
+    isError?: boolean;
+  }[];
+}
+
+export function groupMessagesIntoTurns(messages: Message[]): GroupedTurn[] {
+  const turns: GroupedTurn[] = [];
+  let currentAssistantTurn: GroupedTurn | null = null;
+  const toolOutputsMap: Record<string, { output: string; name?: string; isError?: boolean }> = {};
+
+  // First pass: collect tool outputs by tool_call_id
+  for (const msg of messages) {
+    if (msg.role === 'tool' && msg.tool_call_id) {
+      toolOutputsMap[msg.tool_call_id] = {
+        output: msg.content || '',
+        name: msg.name || undefined,
+        isError: msg.content?.startsWith('Error:') || msg.content?.startsWith('✗'),
+      };
+    }
+  }
+
+  for (let index = 0; index < messages.length; index++) {
+    const msg = messages[index];
+    if (msg.role === 'user') {
+      if (currentAssistantTurn) {
+        turns.push(currentAssistantTurn);
+        currentAssistantTurn = null;
+      }
+      turns.push({
+        id: msg.id || `user_${index}`,
+        role: 'user',
+        content: msg.content || '',
+        toolCalls: [],
+      });
+    } else if (msg.role === 'assistant') {
+      if (!currentAssistantTurn) {
+        currentAssistantTurn = {
+          id: msg.id || `assistant_${index}`,
+          role: 'assistant',
+          content: msg.content || '',
+          toolCalls: [],
+        };
+      } else {
+        if (msg.content) {
+          currentAssistantTurn.content = currentAssistantTurn.content 
+            ? `${currentAssistantTurn.content}\n\n${msg.content}`
+            : msg.content;
+        }
+      }
+
+      if (msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          const matched = toolOutputsMap[tc.id];
+          currentAssistantTurn.toolCalls.push({
+            id: tc.id,
+            name: tc.function.name,
+            argumentsStr: tc.function.arguments,
+            output: matched?.output,
+            isError: matched?.isError,
+          });
+        }
+      }
+    }
+  }
+
+  if (currentAssistantTurn) {
+    turns.push(currentAssistantTurn);
+  }
+
+  return turns;
 }
 
 export const ChatPane: React.FC<ChatPaneProps> = ({
@@ -188,7 +263,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       const data = await api.getConversation(conversationId);
       setMessages(data.messages);
 
-      // Scan existing messages for tool calls and text drafts to populate initial editor state
+      // Scan existing messages for tool calls and text drafts
       for (const msg of data.messages) {
         if (msg.tool_calls) {
           for (const tc of msg.tool_calls) {
@@ -333,7 +408,6 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
             onRefreshConversations?.();
           }
         } else {
-          // Regular conversation creation with LLM title computation on first message!
           const conv = await api.createConversation({
             agent_id: agentId,
             initial_message: text,
@@ -372,25 +446,109 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     }
   };
 
-  const markdownComponents = {
+  // Markdown renderer for Assistant messages (on light background)
+  const assistantMarkdownComponents = {
+    h1({ children, ...props }: any) {
+      return <h1 className="text-lg font-bold text-zinc-950 mt-6 mb-3 tracking-tight" {...props}>{children}</h1>;
+    },
+    h2({ children, ...props }: any) {
+      return <h2 className="text-base font-bold text-zinc-900 mt-5 mb-2 tracking-tight" {...props}>{children}</h2>;
+    },
+    h3({ children, ...props }: any) {
+      return <h3 className="text-sm font-bold text-zinc-900 mt-4 mb-1.5" {...props}>{children}</h3>;
+    },
+    p({ children, ...props }: any) {
+      return <p className="mb-3.5 text-zinc-800 text-[14px] leading-7 font-normal" {...props}>{children}</p>;
+    },
+    ul({ children, ...props }: any) {
+      return <ul className="list-disc pl-5 my-3 space-y-1.5 text-zinc-800 text-[14px] leading-7" {...props}>{children}</ul>;
+    },
+    ol({ children, ...props }: any) {
+      return <ol className="list-decimal pl-5 my-3 space-y-1.5 text-zinc-800 text-[14px] leading-7" {...props}>{children}</ol>;
+    },
+    li({ children, ...props }: any) {
+      return <li className="leading-relaxed" {...props}>{children}</li>;
+    },
+    blockquote({ children, ...props }: any) {
+      return (
+        <blockquote className="border-l-3 border-indigo-500 pl-4 py-1.5 my-3.5 text-zinc-700 bg-indigo-50/40 rounded-r-xl italic text-[13.5px] leading-relaxed" {...props}>
+          {children}
+        </blockquote>
+      );
+    },
+    table({ children, ...props }: any) {
+      return (
+        <div className="my-4 overflow-x-auto rounded-xl border border-zinc-200 shadow-xs">
+          <table className="w-full text-left text-xs border-collapse" {...props}>
+            {children}
+          </table>
+        </div>
+      );
+    },
+    th({ children, ...props }: any) {
+      return <th className="bg-zinc-100/80 p-3 font-bold text-zinc-800 border-b border-zinc-200" {...props}>{children}</th>;
+    },
+    td({ children, ...props }: any) {
+      return <td className="p-3 border-b border-zinc-100 text-zinc-700" {...props}>{children}</td>;
+    },
     code({ node, inline, className, children, ...props }: any) {
       const match = /language-(\w+)/.exec(className || '');
       const codeStr = String(children).replace(/\n$/, '');
       if (!inline && (match || codeStr.includes('\n'))) {
         return (
-          <CodeBlock
-            language={match ? match[1] : 'text'}
-            code={codeStr}
-          />
+          <div className="my-3.5">
+            <CodeBlock
+              language={match ? match[1] : 'text'}
+              code={codeStr}
+            />
+          </div>
         );
       }
       return (
-        <code className="px-1.5 py-0.5 rounded bg-zinc-100 border border-zinc-200 text-zinc-800 font-mono text-[11px]" {...props}>
+        <code className="px-1.5 py-0.5 rounded-md bg-zinc-200/70 border border-zinc-300/60 text-zinc-900 font-mono text-[12px]" {...props}>
           {children}
         </code>
       );
     }
   };
+
+  // Markdown renderer for User message bubble (pure white text on dark background)
+  const userMarkdownComponents = {
+    h1({ children, ...props }: any) {
+      return <h1 className="text-base font-bold text-white my-2" {...props}>{children}</h1>;
+    },
+    h2({ children, ...props }: any) {
+      return <h2 className="text-sm font-bold text-white my-1.5" {...props}>{children}</h2>;
+    },
+    h3({ children, ...props }: any) {
+      return <h3 className="text-xs font-bold text-white my-1" {...props}>{children}</h3>;
+    },
+    p({ children, ...props }: any) {
+      return <p className="text-white text-[14px] leading-relaxed mb-2 last:mb-0 font-normal" {...props}>{children}</p>;
+    },
+    ul({ children, ...props }: any) {
+      return <ul className="list-disc pl-5 my-2 text-white text-[14px] space-y-1" {...props}>{children}</ul>;
+    },
+    ol({ children, ...props }: any) {
+      return <ol className="list-decimal pl-5 my-2 text-white text-[14px] space-y-1" {...props}>{children}</ol>;
+    },
+    li({ children, ...props }: any) {
+      return <li className="text-white leading-relaxed" {...props}>{children}</li>;
+    },
+    strong({ children, ...props }: any) {
+      return <strong className="font-bold text-white" {...props}>{children}</strong>;
+    },
+    code({ node, inline, className, children, ...props }: any) {
+      const codeStr = String(children).replace(/\n$/, '');
+      return (
+        <code className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-100 font-mono text-[12px]" {...props}>
+          {codeStr}
+        </code>
+      );
+    }
+  };
+
+  const groupedTurns = groupMessagesIntoTurns(messages);
 
   return (
     <div className="flex-1 flex flex-col h-full bg-zinc-50 overflow-hidden">
@@ -408,9 +566,9 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       )}
 
       {/* Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 && !streamingTokenText && (
-          <div className="text-center py-16 space-y-3">
+      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
+        {groupedTurns.length === 0 && !streamingTokenText && Object.keys(activeToolExecutions).length === 0 && (
+          <div className="text-center py-20 space-y-3">
             <div className="w-12 h-12 rounded-2xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600 mx-auto shadow-xs">
               <Sparkles className="w-6 h-6" />
             </div>
@@ -421,63 +579,51 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
           </div>
         )}
 
-        {messages.map((msg, index) => {
-          if (msg.role === 'user') {
+        {groupedTurns.map((turn) => {
+          if (turn.role === 'user') {
             return (
-              <div key={index} className="flex justify-end">
-                <div className="max-w-xl bg-zinc-900 text-white rounded-2xl rounded-tr-xs px-4 py-2.5 text-xs shadow-xs leading-relaxed">
+              <div key={turn.id} className="flex justify-end pt-2">
+                <div className="max-w-2xl bg-zinc-900 text-white rounded-2xl rounded-tr-xs px-5 py-3 text-[14px] shadow-xs leading-relaxed">
                   <ReactMarkdown 
                     remarkPlugins={[remarkGfm, remarkMath]} 
                     rehypePlugins={[rehypeKatex]}
-                    components={markdownComponents}
+                    components={userMarkdownComponents}
                   >
-                    {msg.content || ''}
+                    {turn.content || ''}
                   </ReactMarkdown>
                 </div>
               </div>
             );
           }
 
-          if (msg.role === 'assistant') {
+          if (turn.role === 'assistant') {
             return (
-              <div key={index} className="flex space-x-3 text-xs">
-                <div className="w-7 h-7 rounded-lg bg-zinc-100 border border-zinc-200 flex items-center justify-center shrink-0 text-zinc-700 text-xs mt-0.5 shadow-xs">
-                  <Bot className="w-3.5 h-3.5" />
-                </div>
-                <div className="flex-1 space-y-2 overflow-hidden min-w-0">
-                  {msg.content && (
-                    <div className="prose prose-zinc max-w-none text-zinc-800 text-xs leading-relaxed bg-white p-4 rounded-2xl border border-zinc-200 shadow-xs">
-                      <ReactMarkdown 
-                        remarkPlugins={[remarkGfm, remarkMath]} 
-                        rehypePlugins={[rehypeKatex]}
-                        components={markdownComponents}
-                      >
-                        {msg.content}
-                      </ReactMarkdown>
-                    </div>
-                  )}
+              <div key={turn.id} className="w-full space-y-2 pt-2">
+                {/* Direct Response Text on Background without enclosing white card or icons */}
+                {turn.content && (
+                  <div className="text-zinc-800 text-[14px] leading-7">
+                    <ReactMarkdown 
+                      remarkPlugins={[remarkGfm, remarkMath]} 
+                      rehypePlugins={[rehypeKatex]}
+                      components={assistantMarkdownComponents}
+                    >
+                      {turn.content}
+                    </ReactMarkdown>
+                  </div>
+                )}
 
-                  {msg.tool_calls && msg.tool_calls.map((tc) => (
-                    <ToolCallCard
-                      key={tc.id}
-                      name={tc.function?.name || 'tool'}
-                      argumentsStr={tc.function?.arguments || '{}'}
-                    />
-                  ))}
-                </div>
-              </div>
-            );
-          }
-
-          if (msg.role === 'tool') {
-            return (
-              <div key={index} className="pl-10">
-                <ToolCallCard
-                  name={msg.name || 'tool'}
-                  argumentsStr={`Call ID: ${msg.tool_call_id || ''}`}
-                  output={msg.content || ''}
-                  isError={msg.content?.startsWith('Error:') || msg.content?.startsWith('✗')}
-                />
+                {/* Collapsible Dropdown Button for Tool Calls */}
+                {turn.toolCalls && turn.toolCalls.length > 0 && (
+                  <ToolCallsAccordion
+                    toolCalls={turn.toolCalls.map((tc) => ({
+                      id: tc.id,
+                      name: tc.name,
+                      argumentsStr: tc.argumentsStr,
+                      output: tc.output,
+                      isError: tc.isError,
+                    }))}
+                  />
+                )}
               </div>
             );
           }
@@ -487,34 +633,35 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
         {/* Live Streaming Active Turn */}
         {(streamingTokenText || Object.keys(activeToolExecutions).length > 0) && (
-          <div className="flex space-x-3 text-xs animate-fade-in">
-            <div className="w-7 h-7 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center justify-center shrink-0 text-indigo-700 text-xs mt-0.5 shadow-xs">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            </div>
-            <div className="flex-1 space-y-2 overflow-hidden min-w-0">
-              {streamingTokenText && (
-                <div className="prose prose-zinc max-w-none text-zinc-800 text-xs leading-relaxed bg-white p-4 rounded-2xl border border-zinc-200 shadow-xs">
-                  <ReactMarkdown 
-                    remarkPlugins={[remarkGfm, remarkMath]} 
-                    rehypePlugins={[rehypeKatex]}
-                    components={markdownComponents}
-                  >
-                    {streamingTokenText}
-                  </ReactMarkdown>
-                </div>
-              )}
+          <div className="w-full space-y-2 pt-2 animate-fade-in">
+            {/* Streaming token text directly on background */}
+            {streamingTokenText && (
+              <div className="text-zinc-800 text-[14px] leading-7">
+                <ReactMarkdown 
+                  remarkPlugins={[remarkGfm, remarkMath]} 
+                  rehypePlugins={[rehypeKatex]}
+                  components={assistantMarkdownComponents}
+                >
+                  {streamingTokenText}
+                </ReactMarkdown>
+              </div>
+            )}
 
-              {Object.entries(activeToolExecutions).map(([id, t]) => (
-                <ToolCallCard
-                  key={id}
-                  name={t.name}
-                  argumentsStr={t.args}
-                  output={t.output}
-                  isExecuting={!t.output}
-                  isError={t.isError}
-                />
-              ))}
-            </div>
+            {/* Active Executing Tool Calls Live */}
+            {Object.keys(activeToolExecutions).length > 0 && (
+              <div className="space-y-2 pt-1">
+                {Object.entries(activeToolExecutions).map(([id, t]) => (
+                  <ToolCallCard
+                    key={id}
+                    name={t.name}
+                    argumentsStr={t.args}
+                    output={t.output}
+                    isExecuting={!t.output}
+                    isError={t.isError}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -522,7 +669,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       </div>
 
       {/* Input Composer */}
-      <div className="p-3 border-t border-zinc-200 bg-white shrink-0">
+      <div className="p-4 border-t border-zinc-200 bg-white shrink-0">
         <form
           onSubmit={handleSend}
           className="relative bg-zinc-50 border border-zinc-300 rounded-xl overflow-hidden focus-within:bg-white focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-600 shadow-xs transition-all"
@@ -533,14 +680,18 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
             onKeyDown={handleKeyDown}
             rows={2}
             placeholder={placeholder || `Message ${agentName}... (Enter to send, Shift+Enter for new line)`}
-            className="w-full bg-transparent px-3 py-2 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none resize-none leading-relaxed"
+            className="w-full bg-transparent px-3.5 py-2.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none resize-none leading-relaxed"
           />
 
-          <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-100/50 border-t border-zinc-200">
+          <div className="flex items-center justify-between px-3.5 py-2 bg-zinc-100/50 border-t border-zinc-200">
             <div className="flex items-center space-x-2 text-[11px] text-zinc-500">
               <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-              <span className="font-medium">{agentName}</span>
-              {agentModel && <span className="font-mono text-[10px] text-zinc-400">({agentModel})</span>}
+              <span className="font-semibold text-zinc-700">{agentName}</span>
+              {agentModel && (
+                <span className="font-mono text-[10px] text-zinc-400">
+                  ({agentModel.split('/')[1] || agentModel})
+                </span>
+              )}
             </div>
 
             <div className="flex items-center space-x-2">
@@ -548,7 +699,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                 <button
                   type="button"
                   onClick={handleCancelGeneration}
-                  className="inline-flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition-colors shadow-xs"
+                  className="inline-flex items-center space-x-1 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition-colors shadow-xs"
                 >
                   <Square className="w-3 h-3 fill-white" />
                   <span>Stop</span>
@@ -557,7 +708,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                 <button
                   type="submit"
                   disabled={!inputContent.trim()}
-                  className="inline-flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white transition-colors shadow-xs"
+                  className="inline-flex items-center space-x-1 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white transition-colors shadow-xs"
                 >
                   <span>Send</span>
                   <Send className="w-3 h-3" />

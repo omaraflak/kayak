@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Conversation, AgentConfig, NavigationTab } from './types';
 import { api } from './api/client';
 import { Sidebar } from './components/Sidebar';
@@ -8,12 +8,17 @@ import { SkillsView } from './components/SkillsView';
 import { ToolsView } from './components/ToolsView';
 import { TasksMonitor } from './components/TasksMonitor';
 import { SettingsView } from './components/SettingsView';
+import { parseCurrentUrl, navigateTo } from './utils/router';
 
 export const App: React.FC = () => {
+  const initialRoute = parseCurrentUrl();
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(
+    initialRoute.tab === 'chat' ? initialRoute.conversationId || null : null
+  );
   const [agents, setAgents] = useState<AgentConfig[]>([]);
-  const [currentTab, setCurrentTab] = useState<NavigationTab>('chat');
+  const [currentTab, setCurrentTab] = useState<NavigationTab>(initialRoute.tab);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(initialRoute.itemId || null);
 
   const loadInitialData = async () => {
     try {
@@ -24,25 +29,62 @@ export const App: React.FC = () => {
       setConversations(convs);
       setAgents(ags);
 
-      if (convs.length > 0 && !activeConversationId) {
-        setActiveConversationId(convs[0].id);
+      const route = parseCurrentUrl();
+      if (route.tab === 'chat') {
+        if (route.conversationId) {
+          setActiveConversationId(route.conversationId);
+        } else if (convs.length > 0 && !activeConversationId) {
+          // If at root and has conversations, select first
+          setActiveConversationId(convs[0].id);
+          navigateTo('chat', convs[0].id, true);
+        }
       }
     } catch (err) {
       console.error('Failed to load initial data:', err);
     }
   };
 
+  const handlePopState = useCallback(() => {
+    const route = parseCurrentUrl();
+    setCurrentTab(route.tab);
+    if (route.tab === 'chat') {
+      setActiveConversationId(route.conversationId || null);
+    } else {
+      setSelectedItemId(route.itemId || null);
+    }
+  }, []);
+
   useEffect(() => {
+    window.addEventListener('popstate', handlePopState);
     loadInitialData();
-    // Periodic refresh every 5 seconds to update conversation statuses across tabs
+
     const interval = setInterval(async () => {
       try {
         const convs = await api.listConversations();
         setConversations(convs);
       } catch {}
     }, 5000);
-    return () => clearInterval(interval);
-  }, []);
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      clearInterval(interval);
+    };
+  }, [handlePopState]);
+
+  const handleSelectTab = (tab: NavigationTab) => {
+    setCurrentTab(tab);
+    if (tab === 'chat') {
+      navigateTo('chat', activeConversationId);
+    } else {
+      navigateTo(tab, selectedItemId);
+    }
+  };
+
+  const handleSelectConversation = (id: string | null) => {
+    setActiveConversationId(id);
+    setCurrentTab('chat');
+    navigateTo('chat', id);
+  };
 
   const handleCreateConversation = async (data: {
     title?: string;
@@ -55,6 +97,7 @@ export const App: React.FC = () => {
       setConversations((prev) => [newConv, ...prev]);
       setActiveConversationId(newConv.id);
       setCurrentTab('chat');
+      navigateTo('chat', newConv.id);
     } catch (err) {
       console.error('Failed to create conversation:', err);
     }
@@ -66,11 +109,18 @@ export const App: React.FC = () => {
       const updated = conversations.filter((c) => c.id !== id);
       setConversations(updated);
       if (activeConversationId === id) {
-        setActiveConversationId(updated[0]?.id || null);
+        const nextId = updated[0]?.id || null;
+        setActiveConversationId(nextId);
+        navigateTo('chat', nextId);
       }
     } catch (err) {
       console.error('Failed to delete conversation:', err);
     }
+  };
+
+  const handleSelectItem = (tab: NavigationTab, id: string | null) => {
+    setSelectedItemId(id);
+    navigateTo(tab, id);
   };
 
   return (
@@ -79,14 +129,11 @@ export const App: React.FC = () => {
       <Sidebar
         conversations={conversations}
         activeConversationId={activeConversationId}
-        onSelectConversation={(id) => {
-          setActiveConversationId(id);
-          setCurrentTab('chat');
-        }}
+        onSelectConversation={handleSelectConversation}
         onDeleteConversation={handleDeleteConversation}
         agents={agents}
         currentTab={currentTab}
-        onSelectTab={setCurrentTab}
+        onSelectTab={handleSelectTab}
       />
 
       {/* Main Content Pane */}
@@ -101,15 +148,28 @@ export const App: React.FC = () => {
         )}
 
         {currentTab === 'agents' && (
-          <AgentsView agents={agents} onRefresh={loadInitialData} />
+          <AgentsView 
+            agents={agents} 
+            selectedId={selectedItemId}
+            onSelectId={(id) => handleSelectItem('agents', id)}
+            onRefresh={loadInitialData} 
+          />
         )}
 
         {currentTab === 'skills' && (
-          <SkillsView onRefreshConversations={loadInitialData} />
+          <SkillsView 
+            selectedId={selectedItemId}
+            onSelectId={(id) => handleSelectItem('skills', id)}
+            onRefreshConversations={loadInitialData} 
+          />
         )}
 
         {currentTab === 'tools' && (
-          <ToolsView onRefreshConversations={loadInitialData} />
+          <ToolsView 
+            selectedId={selectedItemId}
+            onSelectId={(id) => handleSelectItem('tools', id)}
+            onRefreshConversations={loadInitialData} 
+          />
         )}
 
         {currentTab === 'tasks' && (

@@ -7,10 +7,16 @@ import { CodeBlock } from './CodeBlock';
 import { useDialog } from '../context/DialogContext';
 
 interface ToolsViewProps {
+  selectedId?: string | null;
+  onSelectId?: (name: string | null) => void;
   onRefreshConversations?: () => void;
 }
 
-export const ToolsView: React.FC<ToolsViewProps> = ({ onRefreshConversations }) => {
+export const ToolsView: React.FC<ToolsViewProps> = ({ 
+  selectedId, 
+  onSelectId, 
+  onRefreshConversations 
+}) => {
   const dialog = useDialog();
   const [tools, setTools] = useState<ToolDefinition[]>([]);
   const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
@@ -21,8 +27,9 @@ export const ToolsView: React.FC<ToolsViewProps> = ({ onRefreshConversations }) 
     try {
       const data = await api.listTools();
       setTools(data);
-      if (data.length > 0 && !selectedTool && !isCreating) {
+      if (data.length > 0 && !selectedTool && !isCreating && !selectedId) {
         setSelectedTool(data[0]);
+        onSelectId?.(data[0].name);
       }
     } catch (error) {
       console.error('Failed to load tools:', error);
@@ -32,6 +39,24 @@ export const ToolsView: React.FC<ToolsViewProps> = ({ onRefreshConversations }) 
   useEffect(() => {
     loadTools();
   }, []);
+
+  useEffect(() => {
+    if (selectedId) {
+      if (selectedId === 'new') {
+        setIsCreating(true);
+        setSelectedTool(null);
+      } else {
+        const found = tools.find((t) => t.name === selectedId);
+        if (found) {
+          setIsCreating(false);
+          setSelectedTool(found);
+        }
+      }
+    } else if (tools.length > 0 && !selectedTool && !isCreating) {
+      setSelectedTool(tools[0]);
+      onSelectId?.(tools[0].name);
+    }
+  }, [selectedId, tools]);
 
   const handleReload = async () => {
     setIsReloading(true);
@@ -82,6 +107,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({ onRefreshConversations }) 
               onClick={() => {
                 setIsCreating(true);
                 setSelectedTool(null);
+                onSelectId?.('new');
               }}
               className="p-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs flex items-center gap-1 font-semibold transition-colors shadow-xs"
             >
@@ -105,6 +131,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({ onRefreshConversations }) 
                   onClick={() => {
                     setIsCreating(false);
                     setSelectedTool(tool);
+                    onSelectId?.(tool.name);
                   }}
                   className={`p-3.5 rounded-xl cursor-pointer transition-all border ${
                     isSelected

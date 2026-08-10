@@ -7,10 +7,17 @@ import { ModelSelectorModal } from './ModelSelectorModal';
 
 interface AgentsViewProps {
   agents: AgentConfig[];
+  selectedId?: string | null;
+  onSelectId?: (id: string | null) => void;
   onRefresh: () => void;
 }
 
-export const AgentsView: React.FC<AgentsViewProps> = ({ agents, onRefresh }) => {
+export const AgentsView: React.FC<AgentsViewProps> = ({ 
+  agents, 
+  selectedId, 
+  onSelectId, 
+  onRefresh 
+}) => {
   const dialog = useDialog();
   const [selectedAgent, setSelectedAgent] = useState<AgentConfig | null>(agents[0] || null);
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -33,6 +40,33 @@ export const AgentsView: React.FC<AgentsViewProps> = ({ agents, onRefresh }) => 
   useEffect(() => {
     loadPrerequisites();
   }, []);
+
+  useEffect(() => {
+    if (selectedId) {
+      if (selectedId === 'new') {
+        setIsCreating(true);
+        setSelectedAgent(null);
+        setId('new_agent');
+        setName('New Custom Agent');
+        setDescription('Description for this agent profile.');
+        setModel('gemini/gemini-3.6-flash');
+        setTemperature(0.7);
+        setSystemPrompt('');
+        setAllowedTools([]);
+        setAllowedSkills([]);
+        setPreloadedSkills([]);
+      } else {
+        const found = agents.find((a) => a.id === selectedId);
+        if (found) {
+          setIsCreating(false);
+          setSelectedAgent(found);
+        }
+      }
+    } else if (agents.length > 0 && !selectedAgent && !isCreating) {
+      setSelectedAgent(agents[0]);
+      onSelectId?.(agents[0].id);
+    }
+  }, [selectedId, agents]);
 
   useEffect(() => {
     if (selectedAgent && !isCreating) {
@@ -208,7 +242,10 @@ export const AgentsView: React.FC<AgentsViewProps> = ({ agents, onRefresh }) => 
             <h2 className="font-bold text-xs text-zinc-900 uppercase tracking-wider">Agent Profiles</h2>
           </div>
           <button
-            onClick={handleStartCreate}
+            onClick={() => {
+              handleStartCreate();
+              onSelectId?.('new');
+            }}
             className="p-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs flex items-center gap-1 font-semibold transition-colors shadow-xs"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -225,6 +262,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({ agents, onRefresh }) => 
                 onClick={() => {
                   setIsCreating(false);
                   setSelectedAgent(agent);
+                  onSelectId?.(agent.id);
                 }}
                 className={`p-3.5 rounded-xl cursor-pointer transition-all border ${
                   isSelected

@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -86,10 +86,12 @@ if FRONTEND_DIST.exists():
 
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
-        if full_path.startswith("api/"):
-            return None
+        if full_path.startswith("api"):
+            raise HTTPException(status_code=404, detail="API endpoint not found")
         index_path = FRONTEND_DIST / "index.html"
-        return FileResponse(str(index_path))
+        if index_path.exists():
+            return FileResponse(str(index_path))
+        raise HTTPException(status_code=404, detail="Frontend build index.html not found")
 
 
 if __name__ == "__main__":
