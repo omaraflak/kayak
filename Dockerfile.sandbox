@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+# Install common development utilities and build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    curl \
+    git \
+    jq \
+    build-essential \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Preinstall common standard data science & utility libraries
+RUN pip install --no-cache-dir \
+    requests \
+    httpx \
+    pytest \
+    pytest-asyncio \
+    pydantic \
+    pyyaml
+
+WORKDIR /workspace
+
+CMD ["tail", "-f", "/dev/null"]

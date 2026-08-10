@@ -1,0 +1,72 @@
+from pathlib import Path
+from typing import List, Optional
+from backend.app.models import AgentConfig
+from backend.app.skills.registry import skill_registry
+
+
+def build_system_prompt(
+    agent_config: AgentConfig,
+    workspace_dir: Optional[Path] = None,
+    container_id: Optional[str] = None,
+) -> str:
+    """Constructs the comprehensive system prompt for the agent turn."""
+    parts = []
+
+    # 1. Base Agent Persona & System Prompt
+    parts.append(agent_config.system_prompt.strip())
+
+    # 2. Environment & Execution Context
+    parts.append("\n## Environment Context")
+    if container_id:
+        parts.append(
+            f"- Sandbox: Isolated Docker Container `{container_id[:12]}`"
+        )
+        parts.append(
+            "- Workspace: Mounted at `/workspace` with full root shell execution permissions."
+        )
+    else:
+        ws_str = str(workspace_dir.resolve()) if workspace_dir else "Local"
+        parts.append(f"- Workspace Directory: `{ws_str}`")
+        parts.append(
+            "- Mode: Host execution mode. Relative file paths are resolved relative to this workspace directory."
+        )
+
+    # 3. Preloaded Skills (Full instructions)
+    if agent_config.preloaded_skills:
+        parts.append("\n## Preloaded Active Skills")
+        for skill_name in agent_config.preloaded_skills:
+            skill = skill_registry.get_skill(skill_name)
+            if skill:
+                parts.append(f"### Skill: {skill.name}")
+                parts.append(f"{skill.instructions.strip()}\n")
+
+    # 4. Available Skills Index (On-demand via load_skill)
+    all_skills = skill_registry.list_skills()
+    available_on_demand = [
+        s
+        for s in all_skills
+        if s.name not in agent_config.preloaded_skills
+        and (not agent_config.allowed_skills or s.name in agent_config.allowed_skills)
+    ]
+
+    if available_on_demand:
+        parts.append("\n## Available Skills (Load on-demand)")
+        parts.append(
+            "The following specialized skills are available. Call `load_skill(skill_name)` before executing complex workflows in these domains:"
+        )
+        for s in available_on_demand:
+            parts.append(f"- **{s.name}**: {s.description}")
+
+    # 5. Background Tasks & Sub-Agent Guidance
+    parts.append("\n## Execution & Tool Guidelines")
+    parts.append(
+        "- **File Modifications**: Always inspect existing files using `read_file` before calling `edit_file` or `write_file`. Make minimal, precise replacements."
+    )
+    parts.append(
+        "- **Long-running Jobs**: If a command is long-running (e.g. running a test suite, building assets, starting a server), use `start_background_task` rather than blocking the turn with a high timeout."
+    )
+    parts.append(
+        "- **Delegation**: For complex multi-part investigations or tasks that benefit from separate context, use `spawn_subagent`."
+    )
+
+    return "\n".join(parts)

@@ -1,0 +1,14 @@
+# SQLite Database files
+kayak.db
+kayak.db-wal
+kayak.db-shm
+*.db
+*.sqlite
+*.sqlite3
+
+# Runtime settings with user API keys & credentials
+settings.json
+
+# Dynamic conversation runtime workspaces
+workspaces/*
+!workspaces/.gitkeep

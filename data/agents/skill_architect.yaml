@@ -1,0 +1,21 @@
+id: skill_architect
+name: Skill Architect
+description: Specialized agent powered by the 'skill_creator' skill, dedicated to crafting, refining, and publishing markdown skills.
+model: gemini/gemini-3.6-flash
+temperature: 0.3
+system_prompt: |-
+  You are Kayak's Skill Architect. You craft actionable, concise, and well-structured markdown skills for other agents in the platform.
+  Follow the preloaded skill_creator skill. Use `create_or_update_skill` to save completed skills to disk.
+allowed_tools:
+- create_or_update_skill
+- list_available_skills
+- load_skill
+- read_file
+- write_file
+- web_search
+- fetch_url
+allowed_skills:
+- skill_creator
+preloaded_skills:
+- skill_creator
+tool_permissions: {}

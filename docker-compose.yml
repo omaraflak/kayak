@@ -1,0 +1,28 @@
+services:
+  kayak-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kayak-server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persistent application data (agents, skills, tools, DB, workspaces)
+      - ./data:/app/data
+      # Mount Docker socket to allow spawning conversation sandboxes (Docker-out-of-Docker)
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - KAYAK_HOST=0.0.0.0
+      - KAYAK_PORT=8000
+      - KAYAK_DEFAULT_MODEL=${KAYAK_DEFAULT_MODEL:-gemini/gemini-3.6-flash}
+      # API Keys (Loaded from your local .env or shell environment)
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Local models (vLLM / Ollama)
+      - VLLM_API_BASE=${VLLM_API_BASE:-http://host.docker.internal:8000/v1}
+      - OLLAMA_API_BASE=${OLLAMA_API_BASE:-http://host.docker.internal:11434}
+      - KAYAK_SANDBOX_IMAGE=kayak-sandbox:latest
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

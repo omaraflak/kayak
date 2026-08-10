@@ -1,0 +1,183 @@
+import os
+from pathlib import Path
+import re
+from typing import Dict, List, Optional
+import yaml
+from backend.app.config import settings
+from backend.app.models import AgentConfig
+
+DEFAULT_AGENTS: List[AgentConfig] = [
+    AgentConfig(
+        id="general",
+        name="General Assistant",
+        description="Friendly, all-purpose assistant for questions, brainstorming, and everyday tasks.",
+        model="gemini/gemini-3.6-flash",
+        temperature=0.7,
+        system_prompt="You are Kayak, an intelligent, helpful, and concise AI assistant. Answer clearly and format code snippets in Markdown.",
+        allowed_tools=["web_search", "fetch_url", "load_skill"],
+        allowed_skills=[],
+        preloaded_skills=[],
+        tool_permissions={},
+    ),
+    AgentConfig(
+        id="coding",
+        name="Coding Engineer",
+        description="Autonomous software engineering agent capable of reading, writing, editing code, running commands, and monitoring background tasks.",
+        model="gemini/gemini-3.6-flash",
+        temperature=0.2,
+        system_prompt=(
+            "You are Kayak's Autonomous Coding Engineer. You have full access to workspace file operations, command line tools, and background task management.\n"
+            "Always inspect directory structure and files before making edits. Use precise search-and-replace for file edits. Test your changes by running commands or automated test suites.\n"
+            "If a task is long-running (such as starting a server or long build), use start_background_task and monitor it."
+        ),
+        allowed_tools=[
+            "read_file",
+            "write_file",
+            "edit_file",
+            "list_directory",
+            "run_command",
+            "start_background_task",
+            "get_task_status",
+            "send_task_input",
+            "stop_task",
+            "spawn_subagent",
+            "get_subagent_result",
+            "load_skill",
+            "web_search",
+        ],
+        allowed_skills=["coding_best_practices", "test_driven_development"],
+        preloaded_skills=["coding_best_practices"],
+        tool_permissions={"run_command": "auto_approve"},
+    ),
+    AgentConfig(
+        id="tool_architect",
+        name="Tool Architect",
+        description="Specialized agent powered by the 'tool_creator' skill, dedicated to designing, coding, testing, and activating new Python tools in Kayak.",
+        model="gemini/gemini-3.6-flash",
+        temperature=0.1,
+        system_prompt=(
+            "You are Kayak's Tool Architect. Your role is to design clean, robust, opinionated tools with auto-extractable JSON schemas and automated verify.py test suites.\n"
+            "Follow the preloaded tool_creator skill instructions. When drafting tools, test them thoroughly using `verify_tool` before calling `activate_tool`."
+        ),
+        allowed_tools=[
+            "verify_tool",
+            "activate_tool",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "list_directory",
+            "run_command",
+            "load_skill",
+            "web_search",
+        ],
+        allowed_skills=["tool_creator"],
+        preloaded_skills=["tool_creator"],
+        tool_permissions={},
+    ),
+    AgentConfig(
+        id="skill_architect",
+        name="Skill Architect",
+        description="Specialized agent powered by the 'skill_creator' skill, dedicated to crafting, refining, and publishing markdown skills.",
+        model="gemini/gemini-3.6-flash",
+        temperature=0.3,
+        system_prompt=(
+            "You are Kayak's Skill Architect. You craft actionable, concise, and well-structured markdown skills for other agents in the platform.\n"
+            "Follow the preloaded skill_creator skill. Use `create_or_update_skill` to save completed skills to disk."
+        ),
+        allowed_tools=[
+            "create_or_update_skill",
+            "list_available_skills",
+            "load_skill",
+            "read_file",
+            "write_file",
+            "web_search",
+            "fetch_url",
+        ],
+        allowed_skills=["skill_creator"],
+        preloaded_skills=["skill_creator"],
+        tool_permissions={},
+    ),
+    AgentConfig(
+        id="researcher",
+        name="Research Analyst",
+        description="Deep research agent that investigates topics across the web, synthesizes sources, and spawns sub-agents for parallel exploration.",
+        model="gemini/gemini-3.6-flash",
+        temperature=0.5,
+        system_prompt="You are Kayak's Research Analyst. Perform thorough investigations using web search and URL fetching. Synthesize findings into structured, cited markdown reports. When appropriate, spawn sub-agents to explore parallel research questions.",
+        allowed_tools=[
+            "web_search",
+            "fetch_url",
+            "spawn_subagent",
+            "get_subagent_result",
+            "load_skill",
+            "read_file",
+            "write_file",
+        ],
+        allowed_skills=["web_researcher"],
+        preloaded_skills=["web_researcher"],
+        tool_permissions={},
+    ),
+]
+
+
+class AgentManager:
+
+    def __init__(self):
+        self._agents: Dict[str, AgentConfig] = {}
+        self.ensure_default_agents()
+
+    def ensure_default_agents(self):
+        """Ensures default YAML agent configurations exist on disk."""
+        agents_dir = settings.AGENTS_DIR
+        agents_dir.mkdir(parents=True, exist_ok=True)
+
+        for default_agent in DEFAULT_AGENTS:
+            file_path = agents_dir / f"{default_agent.id}.yaml"
+            if not file_path.exists():
+                self.save_agent(default_agent)
+
+    def load_all_agents(self):
+        self._agents.clear()
+        agents_dir = settings.AGENTS_DIR
+        if not agents_dir.exists():
+            return
+
+        for file_path in agents_dir.iterdir():
+            if file_path.suffix in [".yaml", ".yml"]:
+                try:
+                    data = yaml.safe_load(file_path.read_text(encoding="utf-8"))
+                    if isinstance(data, dict):
+                        agent = AgentConfig(**data)
+                        self._agents[agent.id] = agent
+                except Exception as e:
+                    print(f"Error loading agent from '{file_path.name}': {e}")
+
+    def list_agents(self) -> List[AgentConfig]:
+        self.load_all_agents()
+        return list(self._agents.values())
+
+    def get_agent(self, agent_id: str) -> Optional[AgentConfig]:
+        self.load_all_agents()
+        return self._agents.get(agent_id)
+
+    def save_agent(self, agent: AgentConfig):
+        clean_id = re.sub(r"[^a-zA-Z0-9_-]", "_", agent.id.lower().strip())
+        agent.id = clean_id
+        file_path = settings.AGENTS_DIR / f"{clean_id}.yaml"
+
+        data = agent.model_dump()
+        file_path.write_text(
+            yaml.dump(data, sort_keys=False), encoding="utf-8"
+        )
+        self._agents[clean_id] = agent
+
+    def delete_agent(self, agent_id: str) -> bool:
+        file_path = settings.AGENTS_DIR / f"{agent_id}.yaml"
+        if file_path.exists():
+            file_path.unlink()
+            self._agents.pop(agent_id, None)
+            return True
+        return False
+
+
+agent_manager = AgentManager()

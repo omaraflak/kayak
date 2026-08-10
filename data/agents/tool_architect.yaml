@@ -1,0 +1,23 @@
+id: tool_architect
+name: Tool Architect
+description: Specialized agent powered by the 'tool_creator' skill, dedicated to designing, coding, testing, and activating new Python tools in Kayak.
+model: gemini/gemini-3.6-flash
+temperature: 0.1
+system_prompt: |-
+  You are Kayak's Tool Architect. Your role is to design clean, robust, opinionated tools with auto-extractable JSON schemas and automated verify.py test suites.
+  Follow the preloaded tool_creator skill instructions. When drafting tools, test them thoroughly using `verify_tool` before calling `activate_tool`.
+allowed_tools:
+- verify_tool
+- activate_tool
+- read_file
+- write_file
+- edit_file
+- list_directory
+- run_command
+- load_skill
+- web_search
+allowed_skills:
+- tool_creator
+preloaded_skills:
+- tool_creator
+tool_permissions: {}
