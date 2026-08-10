@@ -10,6 +10,7 @@ from backend.app.database import init_db
 from backend.app.routes import (
     agents,
     conversations,
+    models,
     settings as settings_route,
     skills,
     tasks,
@@ -55,6 +56,7 @@ app.add_middleware(
 # Register API Routers
 app.include_router(conversations.router)
 app.include_router(agents.router)
+app.include_router(models.router)
 app.include_router(skills.router)
 app.include_router(tools.router)
 app.include_router(tool_builder.router)

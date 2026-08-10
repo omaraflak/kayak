@@ -9,7 +9,6 @@ import {
   CheckCircle2, 
   Save, 
   ExternalLink,
-  Shield,
   Loader2
 } from 'lucide-react';
 
@@ -18,6 +17,7 @@ export const SettingsView: React.FC = () => {
   const [geminiKey, setGeminiKey] = useState('');
   const [openaiKey, setOpenaiKey] = useState('');
   const [anthropicKey, setAnthropicKey] = useState('');
+  const [huggingfaceKey, setHuggingfaceKey] = useState('');
   const [vllmBase, setVllmBase] = useState('');
   const [ollamaBase, setOllamaBase] = useState('');
   const [defaultModel, setDefaultModel] = useState('gemini/gemini-3.6-flash');
@@ -35,33 +35,35 @@ export const SettingsView: React.FC = () => {
       setGeminiKey(data.GEMINI_API_KEY || '');
       setOpenaiKey(data.OPENAI_API_KEY || '');
       setAnthropicKey(data.ANTHROPIC_API_KEY || '');
+      setHuggingfaceKey(data.HUGGINGFACE_API_KEY || '');
       setVllmBase(data.VLLM_API_BASE || 'http://localhost:8000/v1');
       setOllamaBase(data.OLLAMA_API_BASE || 'http://localhost:11434');
       setDefaultModel(data.DEFAULT_MODEL || 'gemini/gemini-3.6-flash');
-    } catch (e) {
-      console.error('Failed to load settings:', e);
+    } catch (error) {
+      console.error('Failed to load settings:', error);
     }
   };
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSave = async (event: React.FormEvent) => {
+    event.preventDefault();
     setIsSaving(true);
     setSaveSuccess(false);
 
     try {
-      const res = await api.updateSettings({
+      const response = await api.updateSettings({
         GEMINI_API_KEY: geminiKey.trim(),
         OPENAI_API_KEY: openaiKey.trim(),
         ANTHROPIC_API_KEY: anthropicKey.trim(),
+        HUGGINGFACE_API_KEY: huggingfaceKey.trim(),
         VLLM_API_BASE: vllmBase.trim(),
         OLLAMA_API_BASE: ollamaBase.trim(),
         DEFAULT_MODEL: defaultModel.trim(),
       });
-      setSettings(res.settings);
+      setSettings(response.settings);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
-    } catch (e) {
-      console.error('Failed to save settings:', e);
+    } catch (error) {
+      console.error('Failed to save settings:', error);
     } finally {
       setIsSaving(false);
     }
@@ -109,10 +111,10 @@ export const SettingsView: React.FC = () => {
         )}
 
         {/* Cloud Providers API Keys Card */}
-        <div className="bg-white border border-zinc-200 rounded-2xl p-6 shadow-sm space-y-5">
+        <div className="bg-white border border-zinc-200 rounded-2xl p-6 shadow-xs space-y-5">
           <div className="flex items-center space-x-2.5 border-b border-zinc-100 pb-3">
             <Key className="w-4 h-4 text-zinc-600" />
-            <h2 className="text-sm font-bold text-zinc-900">Cloud Model Providers</h2>
+            <h2 className="text-sm font-bold text-zinc-900">Cloud Model Providers & Hugging Face</h2>
           </div>
 
           <div className="space-y-4">
@@ -126,18 +128,18 @@ export const SettingsView: React.FC = () => {
                   href="https://aistudio.google.com/app/apikey"
                   target="_blank"
                   rel="noreferrer"
-                  className="text-[11px] text-teal-600 hover:text-teal-700 flex items-center gap-1"
+                  className="text-[11px] text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
                 >
-                  <span>Get API Key</span>
+                  <span>Get Gemini Key</span>
                   <ExternalLink className="w-3 h-3" />
                 </a>
               </div>
               <input
                 type="password"
                 value={geminiKey}
-                onChange={(e) => setGeminiKey(e.target.value)}
+                onChange={(event) => setGeminiKey(event.target.value)}
                 placeholder="AIzaSy..."
-                className="w-full bg-zinc-50 border border-zinc-300 rounded-lg px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-all"
+                className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 transition-all"
               />
             </div>
 
@@ -151,18 +153,18 @@ export const SettingsView: React.FC = () => {
                   href="https://platform.openai.com/api-keys"
                   target="_blank"
                   rel="noreferrer"
-                  className="text-[11px] text-teal-600 hover:text-teal-700 flex items-center gap-1"
+                  className="text-[11px] text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
                 >
-                  <span>Get API Key</span>
+                  <span>Get OpenAI Key</span>
                   <ExternalLink className="w-3 h-3" />
                 </a>
               </div>
               <input
                 type="password"
                 value={openaiKey}
-                onChange={(e) => setOpenaiKey(e.target.value)}
+                onChange={(event) => setOpenaiKey(event.target.value)}
                 placeholder="sk-proj-..."
-                className="w-full bg-zinc-50 border border-zinc-300 rounded-lg px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-all"
+                className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 transition-all"
               />
             </div>
 
@@ -176,25 +178,53 @@ export const SettingsView: React.FC = () => {
                   href="https://console.anthropic.com/settings/keys"
                   target="_blank"
                   rel="noreferrer"
-                  className="text-[11px] text-teal-600 hover:text-teal-700 flex items-center gap-1"
+                  className="text-[11px] text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
                 >
-                  <span>Get API Key</span>
+                  <span>Get Claude Key</span>
                   <ExternalLink className="w-3 h-3" />
                 </a>
               </div>
               <input
                 type="password"
                 value={anthropicKey}
-                onChange={(e) => setAnthropicKey(e.target.value)}
+                onChange={(event) => setAnthropicKey(event.target.value)}
                 placeholder="sk-ant-..."
-                className="w-full bg-zinc-50 border border-zinc-300 rounded-lg px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-all"
+                className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 transition-all"
               />
+            </div>
+
+            {/* Hugging Face */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-zinc-700">
+                  Hugging Face User Access Token (HF_TOKEN)
+                </label>
+                <a
+                  href="https://huggingface.co/settings/tokens"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[11px] text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+                >
+                  <span>Get Hugging Face Token</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+              <input
+                type="password"
+                value={huggingfaceKey}
+                onChange={(event) => setHuggingfaceKey(event.target.value)}
+                placeholder="hf_..."
+                className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 transition-all"
+              />
+              <p className="text-[11px] text-zinc-500 mt-1">
+                Used to search the Hugging Face Hub, query serverless inference endpoints, and access gated models.
+              </p>
             </div>
           </div>
         </div>
 
         {/* Local Inference Card */}
-        <div className="bg-white border border-zinc-200 rounded-2xl p-6 shadow-sm space-y-5">
+        <div className="bg-white border border-zinc-200 rounded-2xl p-6 shadow-xs space-y-5">
           <div className="flex items-center space-x-2.5 border-b border-zinc-100 pb-3">
             <Server className="w-4 h-4 text-zinc-600" />
             <h2 className="text-sm font-bold text-zinc-900">Local & Self-Hosted Endpoints</h2>
@@ -208,9 +238,9 @@ export const SettingsView: React.FC = () => {
               <input
                 type="text"
                 value={vllmBase}
-                onChange={(e) => setVllmBase(e.target.value)}
+                onChange={(event) => setVllmBase(event.target.value)}
                 placeholder="http://localhost:8000/v1"
-                className="w-full bg-zinc-50 border border-zinc-300 rounded-lg px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-all"
+                className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 transition-all"
               />
             </div>
 
@@ -221,16 +251,16 @@ export const SettingsView: React.FC = () => {
               <input
                 type="text"
                 value={ollamaBase}
-                onChange={(e) => setOllamaBase(e.target.value)}
+                onChange={(event) => setOllamaBase(event.target.value)}
                 placeholder="http://localhost:11434"
-                className="w-full bg-zinc-50 border border-zinc-300 rounded-lg px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-all"
+                className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 transition-all"
               />
             </div>
           </div>
         </div>
 
         {/* Default Model Selection Card */}
-        <div className="bg-white border border-zinc-200 rounded-2xl p-6 shadow-sm space-y-4">
+        <div className="bg-white border border-zinc-200 rounded-2xl p-6 shadow-xs space-y-4">
           <div className="flex items-center space-x-2.5 border-b border-zinc-100 pb-3">
             <Cpu className="w-4 h-4 text-zinc-600" />
             <h2 className="text-sm font-bold text-zinc-900">Default Global Model</h2>
@@ -243,15 +273,15 @@ export const SettingsView: React.FC = () => {
             <input
               type="text"
               value={defaultModel}
-              onChange={(e) => setDefaultModel(e.target.value)}
+              onChange={(event) => setDefaultModel(event.target.value)}
               placeholder="gemini/gemini-3.6-flash"
-              className="w-full bg-zinc-50 border border-zinc-300 rounded-lg px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-all"
+              className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 transition-all"
             />
           </div>
         </div>
 
         {/* Environment Status Card */}
-        <div className="bg-white border border-zinc-200 rounded-2xl p-6 shadow-sm flex items-center justify-between">
+        <div className="bg-white border border-zinc-200 rounded-2xl p-6 shadow-xs flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <div className="w-9 h-9 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-lg">
               🐳

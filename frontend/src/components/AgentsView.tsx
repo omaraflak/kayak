@@ -1,23 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { AgentConfig, Skill, ToolDefinition } from '../types';
 import { api } from '../api/client';
-import { Bot, Plus, Trash2, Save, Sparkles, Wrench, Check, Sliders, RotateCcw } from 'lucide-react';
+import { Bot, Plus, Trash2, Save, Sparkles, Wrench, Check, Sliders, RotateCcw, Cpu } from 'lucide-react';
 import { useDialog } from '../context/DialogContext';
+import { ModelSelectorModal } from './ModelSelectorModal';
 
 interface AgentsViewProps {
   agents: AgentConfig[];
   onRefresh: () => void;
 }
-
-const COMMON_MODELS = [
-  'gemini/gemini-3.6-flash',
-  'openai/gpt-4o',
-  'openai/gpt-4o-mini',
-  'anthropic/claude-3-5-sonnet-20241022',
-  'ollama/llama3',
-  'ollama/mistral',
-  'vllm/meta-llama/Meta-Llama-3-8B-Instruct',
-];
 
 export const AgentsView: React.FC<AgentsViewProps> = ({ agents, onRefresh }) => {
   const dialog = useDialog();
@@ -26,6 +17,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({ agents, onRefresh }) => 
   const [tools, setTools] = useState<ToolDefinition[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [isModelModalOpen, setIsModelModalOpen] = useState(false);
 
   // Form State
   const [id, setId] = useState('');
@@ -188,8 +180,26 @@ export const AgentsView: React.FC<AgentsViewProps> = ({ agents, onRefresh }) => 
     );
   };
 
+  const getProviderIcon = (modelStr: string) => {
+    if (modelStr.startsWith('gemini/')) return '✨';
+    if (modelStr.startsWith('openai/')) return '🧠';
+    if (modelStr.startsWith('anthropic/')) return '⚡';
+    if (modelStr.startsWith('ollama/')) return '🦙';
+    if (modelStr.startsWith('vllm/')) return '🚀';
+    if (modelStr.startsWith('huggingface/') || modelStr.startsWith('hf/')) return '🤗';
+    return '🤖';
+  };
+
   return (
     <div className="flex-1 flex h-screen bg-zinc-50 overflow-hidden">
+      {/* Model Selection Modal */}
+      <ModelSelectorModal
+        isOpen={isModelModalOpen}
+        onClose={() => setIsModelModalOpen(false)}
+        selectedModel={model}
+        onSelectModel={(newModel) => setModel(newModel)}
+      />
+
       {/* Agents List Sidebar */}
       <div className="w-80 border-r border-zinc-200 bg-white flex flex-col shrink-0">
         <div className="p-4 border-b border-zinc-200 flex items-center justify-between">
@@ -236,7 +246,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({ agents, onRefresh }) => 
                   {agent.description}
                 </p>
                 <div className="text-[10px] text-zinc-500 font-mono flex items-center gap-1">
-                  <span>{agent.model}</span>
+                  <span>{getProviderIcon(agent.model)} {agent.model}</span>
                 </div>
               </div>
             );
@@ -346,45 +356,58 @@ export const AgentsView: React.FC<AgentsViewProps> = ({ agents, onRefresh }) => 
               />
             </div>
 
-            {/* Swappable Model Selection & Temperature */}
+            {/* Visual Interactive Model Selector Card & Sampling Temperature */}
             <div className="p-5 bg-white border border-zinc-200 rounded-2xl shadow-xs space-y-4">
               <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-700 flex items-center gap-1.5">
                 <Sliders className="w-3.5 h-3.5 text-indigo-600" /> LLM Model & Sampling Configuration
               </h3>
 
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                {/* Model Selector Card */}
                 <div>
                   <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
-                    Model String (LiteLLM Format)
+                    Selected LLM Model
                   </label>
-                  <div className="space-y-2">
-                    <input
-                      type="text"
-                      value={model}
-                      onChange={(event) => setModel(event.target.value)}
-                      placeholder="e.g. gemini/gemini-3.6-flash, openai/gpt-4o, ollama/llama3"
-                      className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3.5 py-2.5 text-xs text-zinc-900 font-mono focus:bg-white focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
-                      required
-                    />
-                    <div className="flex flex-wrap gap-1.5">
-                      {COMMON_MODELS.map((modelName) => (
-                        <button
-                          key={modelName}
-                          type="button"
-                          onClick={() => setModel(modelName)}
-                          className={`text-[10px] px-2 py-0.5 rounded font-mono border transition-colors ${
-                            model === modelName
-                              ? 'bg-indigo-600 text-white border-indigo-600 font-semibold'
-                              : 'bg-zinc-100 text-zinc-700 border-zinc-200 hover:bg-zinc-200'
-                          }`}
-                        >
-                          {modelName.split('/')[1] || modelName}
-                        </button>
-                      ))}
+                  <div className="p-4 bg-zinc-50/80 border border-zinc-300 rounded-xl flex items-center justify-between shadow-xs">
+                    <div className="flex items-center space-x-3 overflow-hidden mr-2">
+                      <div className="w-10 h-10 rounded-xl bg-white border border-zinc-200 flex items-center justify-center text-xl shrink-0 shadow-2xs">
+                        {getProviderIcon(model)}
+                      </div>
+                      <div className="truncate min-w-0">
+                        <div className="text-xs font-bold text-zinc-900 font-mono truncate">
+                          {model}
+                        </div>
+                        <div className="text-[11px] text-zinc-500 mt-0.5 flex items-center gap-1.5">
+                          {model.startsWith('vllm/') || model.startsWith('ollama/') ? (
+                            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 font-semibold">
+                              Local Server
+                            </span>
+                          ) : model.startsWith('huggingface/') || model.startsWith('hf/') ? (
+                            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 border border-amber-200 font-semibold">
+                              Hugging Face
+                            </span>
+                          ) : (
+                            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-zinc-100 text-zinc-600 border border-zinc-200">
+                              Cloud Provider
+                            </span>
+                          )}
+                          <span>· LiteLLM Engine</span>
+                        </div>
+                      </div>
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsModelModalOpen(true)}
+                      className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 shrink-0"
+                    >
+                      <Cpu className="w-3.5 h-3.5" />
+                      <span>Change</span>
+                    </button>
                   </div>
                 </div>
 
+                {/* Sampling Temperature */}
                 <div>
                   <div className="flex justify-between items-center mb-1.5">
                     <label className="text-xs font-semibold text-zinc-700">

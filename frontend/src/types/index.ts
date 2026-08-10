@@ -110,11 +110,42 @@ export interface VerifyToolResponse {
   error?: string | null;
 }
 
+export interface ModelItem {
+  id: string;
+  name: string;
+  provider: string;
+  description: string;
+  context_window?: string | null;
+  is_available: boolean;
+  is_running_locally?: boolean;
+}
+
+export interface ProviderModels {
+  provider_id: string;
+  provider_name: string;
+  icon: string;
+  is_configured: boolean;
+  status_message: string;
+  models: ModelItem[];
+}
+
+export interface HuggingFaceModelSearchResult {
+  id: string;
+  name: string;
+  downloads: number;
+  likes: number;
+  pipeline_tag?: string | null;
+  model_string_hf: string;
+  model_string_vllm: string;
+  model_string_ollama: string;
+}
+
 export interface AppSettings {
   DEFAULT_MODEL: string;
   OPENAI_API_KEY: string;
   GEMINI_API_KEY: string;
   ANTHROPIC_API_KEY: string;
+  HUGGINGFACE_API_KEY?: string;
   VLLM_API_BASE: string;
   OLLAMA_API_BASE: string;
   DOCKER_AVAILABLE: boolean;

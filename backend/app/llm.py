@@ -24,12 +24,14 @@ def get_llm_kwargs(model: str, temperature: float = 0.7) -> Dict[str, Any]:
     }
 
     # Pass API keys or custom endpoints based on model prefix
-    if settings.OPENAI_API_KEY:
+    if settings.OPENAI_API_KEY and ("gpt" in model.lower() or "o1" in model.lower() or "o3" in model.lower()):
         kwargs["api_key"] = settings.OPENAI_API_KEY
-    if "gemini" in model.lower() and settings.GEMINI_API_KEY:
+    elif "gemini" in model.lower() and settings.GEMINI_API_KEY:
         kwargs["api_key"] = settings.GEMINI_API_KEY
     elif "claude" in model.lower() and settings.ANTHROPIC_API_KEY:
         kwargs["api_key"] = settings.ANTHROPIC_API_KEY
+    elif ("huggingface" in model.lower() or model.startswith("hf/")) and settings.HUGGINGFACE_API_KEY:
+        kwargs["api_key"] = settings.HUGGINGFACE_API_KEY
     elif model.startswith("ollama/"):
         kwargs["api_base"] = settings.OLLAMA_API_BASE
     elif model.startswith("vllm/") or model.startswith("openai/vllm"):

@@ -50,6 +50,8 @@ class Settings:
             "OLLAMA_API_BASE", "http://localhost:11434"
         )
 
+        self.HUGGINGFACE_API_KEY: str = os.getenv("HUGGINGFACE_API_KEY", "")
+
         # Docker Sandbox Configuration
         self.DOCKER_SANDBOX_IMAGE: str = os.getenv(
             "KAYAK_SANDBOX_IMAGE", "kayak-sandbox:latest"
@@ -63,7 +65,8 @@ class Settings:
 
         self.load_from_file()
 
-    def load_from_file(self):
+    def load_from_file(self) -> None:
+        """Loads persistent user credentials and endpoints from data/settings.json."""
         if self.SETTINGS_FILE.exists():
             try:
                 data = json.loads(self.SETTINGS_FILE.read_text(encoding="utf-8"))
@@ -75,26 +78,34 @@ class Settings:
                     self.GEMINI_API_KEY = data["GEMINI_API_KEY"]
                 if "ANTHROPIC_API_KEY" in data:
                     self.ANTHROPIC_API_KEY = data["ANTHROPIC_API_KEY"]
+                if "HUGGINGFACE_API_KEY" in data:
+                    self.HUGGINGFACE_API_KEY = data["HUGGINGFACE_API_KEY"]
                 if "VLLM_API_BASE" in data:
                     self.VLLM_API_BASE = data["VLLM_API_BASE"]
                 if "OLLAMA_API_BASE" in data:
                     self.OLLAMA_API_BASE = data["OLLAMA_API_BASE"]
-            except Exception as e:
-                print(f"Error reading settings file: {e}")
+            except Exception as error:
+                print(f"Error reading settings file: {error}")
 
-    def save_settings(self, updates: Dict[str, Any]):
+    def save_settings(self, updates: Dict[str, Any]) -> None:
+        """Persists updated configuration dictionary to data/settings.json.
+
+        Args:
+            updates: Dictionary of setting keys and their new values.
+        """
         current = {
             "DEFAULT_MODEL": self.DEFAULT_MODEL,
             "OPENAI_API_KEY": self.OPENAI_API_KEY,
             "GEMINI_API_KEY": self.GEMINI_API_KEY,
             "ANTHROPIC_API_KEY": self.ANTHROPIC_API_KEY,
+            "HUGGINGFACE_API_KEY": self.HUGGINGFACE_API_KEY,
             "VLLM_API_BASE": self.VLLM_API_BASE,
             "OLLAMA_API_BASE": self.OLLAMA_API_BASE,
         }
-        for k, v in updates.items():
-            if v is not None and k in current:
-                current[k] = v
-                setattr(self, k, v)
+        for key, value in updates.items():
+            if value is not None and key in current:
+                current[key] = value
+                setattr(self, key, value)
 
         self.SETTINGS_FILE.write_text(
             json.dumps(current, indent=2), encoding="utf-8"

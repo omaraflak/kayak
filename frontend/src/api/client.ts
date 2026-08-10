@@ -6,7 +6,9 @@ import {
   Message, 
   Skill, 
   ToolDefinition, 
-  VerifyToolResponse 
+  VerifyToolResponse,
+  ProviderModels,
+  HuggingFaceModelSearchResult
 } from '../types';
 
 const API_BASE = '/api';
@@ -163,6 +165,17 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),
     });
+    return res.json();
+  },
+
+  // Models Discovery & Hugging Face Hub
+  listModels: async (): Promise<ProviderModels[]> => {
+    const res = await fetch(`${API_BASE}/models`);
+    return res.json();
+  },
+
+  searchHuggingFaceModels: async (query: string): Promise<HuggingFaceModelSearchResult[]> => {
+    const res = await fetch(`${API_BASE}/models/huggingface/search?query=${encodeURIComponent(query)}`);
     return res.json();
   },
 };
