@@ -137,7 +137,6 @@ export interface HuggingFaceModelSearchResult {
   pipeline_tag?: string | null;
   model_string_hf: string;
   model_string_vllm: string;
-  model_string_ollama: string;
 }
 
 export interface AppSettings {
@@ -147,6 +146,28 @@ export interface AppSettings {
   ANTHROPIC_API_KEY: string;
   HUGGINGFACE_API_KEY?: string;
   VLLM_API_BASE: string;
-  OLLAMA_API_BASE: string;
   DOCKER_AVAILABLE: boolean;
+}
+
+export interface VLLMDeploymentProgress {
+  model_id?: string | null;
+  state: 'idle' | 'pulling_image' | 'starting_container' | 'downloading_model' | 'initializing_weights' | 'ready' | 'error' | 'stopped';
+  message: string;
+  progress_percent?: number | null;
+  download_speed?: string | null;
+  eta?: string | null;
+  logs_tail: string[];
+  port: number;
+  endpoint: string;
+  container_id?: string | null;
+  error?: string | null;
+}
+
+export interface VLLMDeployRequest {
+  model_id: string;
+  gpu_memory_utilization?: number;
+  max_model_len?: number;
+  enforce_eager?: boolean;
+  dtype?: string;
+  trust_remote_code?: boolean;
 }

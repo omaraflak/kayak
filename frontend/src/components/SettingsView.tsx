@@ -9,8 +9,10 @@ import {
   CheckCircle2, 
   Save, 
   ExternalLink,
-  Loader2
+  Loader2,
+  Rocket
 } from 'lucide-react';
+import { VLLMDeploymentModal } from './VLLMDeploymentModal';
 
 export const SettingsView: React.FC = () => {
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -19,10 +21,10 @@ export const SettingsView: React.FC = () => {
   const [anthropicKey, setAnthropicKey] = useState('');
   const [huggingfaceKey, setHuggingfaceKey] = useState('');
   const [vllmBase, setVllmBase] = useState('');
-  const [ollamaBase, setOllamaBase] = useState('');
   const [defaultModel, setDefaultModel] = useState('gemini/gemini-3.6-flash');
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [isVLLMModalOpen, setIsVLLMModalOpen] = useState(false);
 
   useEffect(() => {
     loadSettings();
@@ -37,7 +39,6 @@ export const SettingsView: React.FC = () => {
       setAnthropicKey(data.ANTHROPIC_API_KEY || '');
       setHuggingfaceKey(data.HUGGINGFACE_API_KEY || '');
       setVllmBase(data.VLLM_API_BASE || 'http://localhost:8000/v1');
-      setOllamaBase(data.OLLAMA_API_BASE || 'http://localhost:11434');
       setDefaultModel(data.DEFAULT_MODEL || 'gemini/gemini-3.6-flash');
     } catch (error) {
       console.error('Failed to load settings:', error);
@@ -56,7 +57,6 @@ export const SettingsView: React.FC = () => {
         ANTHROPIC_API_KEY: anthropicKey.trim(),
         HUGGINGFACE_API_KEY: huggingfaceKey.trim(),
         VLLM_API_BASE: vllmBase.trim(),
-        OLLAMA_API_BASE: ollamaBase.trim(),
         DEFAULT_MODEL: defaultModel.trim(),
       });
       setSettings(response.settings);
@@ -225,37 +225,36 @@ export const SettingsView: React.FC = () => {
 
         {/* Local Inference Card */}
         <div className="bg-white border border-zinc-200 rounded-2xl p-6 shadow-xs space-y-5">
-          <div className="flex items-center space-x-2.5 border-b border-zinc-100 pb-3">
-            <Server className="w-4 h-4 text-zinc-600" />
-            <h2 className="text-sm font-bold text-zinc-900">Local & Self-Hosted Endpoints</h2>
+          <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+            <div className="flex items-center space-x-2.5">
+              <Server className="w-4 h-4 text-zinc-600" />
+              <h2 className="text-sm font-bold text-zinc-900">Local & Self-Hosted Endpoints</h2>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsVLLMModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 transition-colors shadow-2xs"
+            >
+              <Rocket className="w-3.5 h-3.5" />
+              <span>Manage vLLM Docker Server</span>
+            </button>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
-                vLLM Base URL
-              </label>
-              <input
-                type="text"
-                value={vllmBase}
-                onChange={(event) => setVllmBase(event.target.value)}
-                placeholder="http://localhost:8000/v1"
-                className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 transition-all"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
-                Ollama Base URL
-              </label>
-              <input
-                type="text"
-                value={ollamaBase}
-                onChange={(event) => setOllamaBase(event.target.value)}
-                placeholder="http://localhost:11434"
-                className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 transition-all"
-              />
-            </div>
+          <div>
+            <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
+              vLLM Endpoint Base URL
+            </label>
+            <input
+              type="text"
+              value={vllmBase}
+              onChange={(event) => setVllmBase(event.target.value)}
+              placeholder="http://localhost:8000/v1"
+              className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3.5 py-2 text-xs font-mono text-zinc-900 focus:bg-white focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 transition-all"
+            />
+            <p className="text-[11px] text-zinc-500 mt-1">
+              The local OpenAI-compatible inference endpoint served by the vLLM Docker container.
+            </p>
           </div>
         </div>
 
@@ -307,6 +306,12 @@ export const SettingsView: React.FC = () => {
           </span>
         </div>
       </div>
+
+      {/* vLLM Container Modal */}
+      <VLLMDeploymentModal
+        isOpen={isVLLMModalOpen}
+        onClose={() => setIsVLLMModalOpen(false)}
+      />
     </div>
   );
 };

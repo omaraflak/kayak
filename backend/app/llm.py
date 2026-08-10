@@ -32,10 +32,11 @@ def get_llm_kwargs(model: str, temperature: float = 0.7) -> Dict[str, Any]:
         kwargs["api_key"] = settings.ANTHROPIC_API_KEY
     elif ("huggingface" in model.lower() or model.startswith("hf/")) and settings.HUGGINGFACE_API_KEY:
         kwargs["api_key"] = settings.HUGGINGFACE_API_KEY
-    elif model.startswith("ollama/"):
-        kwargs["api_base"] = settings.OLLAMA_API_BASE
     elif model.startswith("vllm/") or model.startswith("openai/vllm"):
+        raw_model = model.replace("openai/vllm/", "").replace("vllm/", "")
+        kwargs["model"] = f"openai/{raw_model}"
         kwargs["api_base"] = settings.VLLM_API_BASE
+        kwargs["api_key"] = "EMPTY"
 
     return kwargs
 

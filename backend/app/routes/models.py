@@ -5,6 +5,8 @@ import httpx
 import litellm
 from pydantic import BaseModel
 from backend.app.config import settings
+from backend.app.vllm.manager import vllm_manager
+from backend.app.vllm.models import VLLMServerState
 
 router = APIRouter(prefix="/api/models", tags=["models"])
 
@@ -42,7 +44,7 @@ class HuggingFaceModelSearchResult(BaseModel):
     model_string_ollama: str
 
 
-def _get_context_window(model_id: str) -> Optional[str]:
+def _get_context_window(model_id: str, default: str) -> str:
     """Retrieves context window limit from LiteLLM model info."""
     try:
         info = litellm.get_model_info(model_id)
@@ -51,47 +53,47 @@ def _get_context_window(model_id: str) -> Optional[str]:
             return f"{max_tokens:,} tokens"
     except Exception:
         pass
-    return None
+    return default
 
 
 @router.get("", response_model=List[ProviderModels])
 async def list_available_models() -> List[ProviderModels]:
-    """Inspects configured API keys, probes local servers, and queries litellm.models_by_provider.
+    """Returns provider-specific curated models, active local servers, and configured API statuses.
 
     Returns:
-        A list of ProviderModels grouped by provider.
+        A list of ProviderModels distinctly separated by provider.
     """
     providers: List[ProviderModels] = []
-    models_by_provider = getattr(litellm, "models_by_provider", {})
 
-    # 1. Google Gemini (from models_by_provider['gemini'] or fallback)
+    # =========================================================================
+    # 1. Google Gemini
+    # =========================================================================
     has_gemini_key = bool(settings.GEMINI_API_KEY)
-    gemini_raw_models = models_by_provider.get("gemini", [
-        "gemini-3.6-flash",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
-    ])
+    gemini_curated = [
+        ("gemini/gemini-2.5-pro", "Gemini 2.5 Pro", "Flagship model for complex agentic workflows, deep coding, and complex tool reasoning.", "2,000,000 tokens"),
+        ("gemini/gemini-2.5-flash", "Gemini 2.5 Flash", "Next-gen balanced frontier model with rapid response and multimodal reasoning.", "1,000,000 tokens"),
+        ("gemini/gemini-2.5-flash-thinking", "Gemini 2.5 Flash Thinking", "Integrated chain-of-thought reasoning model for difficult logic and multi-step tasks.", "1,000,000 tokens"),
+        ("gemini/gemini-3.6-flash", "Gemini 3.6 Flash", "Default ultra-fast agent synthesis engine with sub-second token latency.", "1,000,000 tokens"),
+        ("gemini/gemini-1.5-pro", "Gemini 1.5 Pro", "Massive context multimodal model for large codebase comprehension.", "2,000,000 tokens"),
+        ("gemini/gemini-1.5-flash", "Gemini 1.5 Flash", "High-frequency lightweight model optimized for rapid tool calling.", "1,000,000 tokens"),
+    ]
     gemini_items: List[ModelItem] = []
-    for model_name in gemini_raw_models:
-        model_id = model_name if model_name.startswith("gemini/") else f"gemini/{model_name}"
-        clean_name = model_name.replace("gemini/", "").replace("-", " ").title()
+    for mid, name, desc, ctx in gemini_curated:
         gemini_items.append(
             ModelItem(
-                id=model_id,
-                name=f"Gemini {clean_name}",
+                id=mid,
+                name=name,
                 provider="gemini",
-                description=f"Google {clean_name} model via Gemini API.",
-                context_window=_get_context_window(model_id) or "1,000,000 tokens",
+                description=desc,
+                context_window=_get_context_window(mid, ctx),
                 is_available=has_gemini_key,
+                is_running_locally=False,
             )
         )
-
     providers.append(
         ProviderModels(
             provider_id="gemini",
-            provider_name="Google Gemini",
+            provider_name="Google",
             icon="✨",
             is_configured=has_gemini_key,
             status_message="API Key Configured" if has_gemini_key else "Missing API Key in Settings",
@@ -99,32 +101,30 @@ async def list_available_models() -> List[ProviderModels]:
         )
     )
 
-    # 2. OpenAI (from models_by_provider['openai'] or fallback)
+    # =========================================================================
+    # 2. OpenAI
+    # =========================================================================
     has_openai_key = bool(settings.OPENAI_API_KEY)
-    openai_raw_models = models_by_provider.get("openai", [
-        "gpt-4o",
-        "gpt-4o-mini",
-        "o1",
-        "o3-mini",
-        "gpt-4-turbo",
-    ])
+    openai_curated = [
+        ("openai/gpt-4o", "GPT-4o", "OpenAI's flagship omni model for advanced reasoning and general agent workflows.", "128,000 tokens"),
+        ("openai/gpt-4o-mini", "GPT-4o Mini", "Fast and lightweight model offering high intelligence at low latency.", "128,000 tokens"),
+        ("openai/o1", "o1", "Deep reasoning model designed to think through math, code, and difficult logic.", "200,000 tokens"),
+        ("openai/o3-mini", "o3-mini", "High-speed reasoning model specialized for coding, math, and tool execution.", "200,000 tokens"),
+        ("openai/gpt-4-turbo", "GPT-4 Turbo", "High-capability model with 128k context and accurate function calling.", "128,000 tokens"),
+    ]
     openai_items: List[ModelItem] = []
-    # Filter to chat-capable models
-    for model_name in openai_raw_models:
-        if any(skip in model_name for skip in ["whisper", "tts", "dall-e", "embedding", "davinci", "babbage"]):
-            continue
-        model_id = model_name if model_name.startswith("openai/") else f"openai/{model_name}"
+    for mid, name, desc, ctx in openai_curated:
         openai_items.append(
             ModelItem(
-                id=model_id,
-                name=model_name.replace("openai/", "").upper(),
+                id=mid,
+                name=name,
                 provider="openai",
-                description=f"OpenAI {model_name} model for conversational reasoning.",
-                context_window=_get_context_window(model_id) or "128,000 tokens",
+                description=desc,
+                context_window=_get_context_window(mid, ctx),
                 is_available=has_openai_key,
+                is_running_locally=False,
             )
         )
-
     providers.append(
         ProviderModels(
             provider_id="openai",
@@ -136,28 +136,29 @@ async def list_available_models() -> List[ProviderModels]:
         )
     )
 
-    # 3. Anthropic (from models_by_provider['anthropic'] or fallback)
+    # =========================================================================
+    # 3. Anthropic
+    # =========================================================================
     has_anthropic_key = bool(settings.ANTHROPIC_API_KEY)
-    anthropic_raw_models = models_by_provider.get("anthropic", [
-        "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022",
-        "claude-3-opus-20240229",
-    ])
+    anthropic_curated = [
+        ("anthropic/claude-3-7-sonnet-latest", "Claude 3.7 Sonnet", "Anthropic's flagship hybrid reasoning model for precision engineering.", "200,000 tokens"),
+        ("anthropic/claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", "Industry-leading precision coding and agentic execution model.", "200,000 tokens"),
+        ("anthropic/claude-3-5-haiku-20241022", "Claude 3.5 Haiku", "Near-instantaneous token generation with exceptional coding intelligence.", "200,000 tokens"),
+        ("anthropic/claude-3-opus-20240229", "Claude 3 Opus", "Deep analytical model for complex synthesis and writing tasks.", "200,000 tokens"),
+    ]
     anthropic_items: List[ModelItem] = []
-    for model_name in anthropic_raw_models:
-        model_id = model_name if model_name.startswith("anthropic/") else f"anthropic/{model_name}"
-        clean_name = model_name.replace("anthropic/", "").replace("-", " ").title()
+    for mid, name, desc, ctx in anthropic_curated:
         anthropic_items.append(
             ModelItem(
-                id=model_id,
-                name=clean_name,
+                id=mid,
+                name=name,
                 provider="anthropic",
-                description=f"Anthropic Claude model ({clean_name}) for precision coding and agent reasoning.",
-                context_window=_get_context_window(model_id) or "200,000 tokens",
+                description=desc,
+                context_window=_get_context_window(mid, ctx),
                 is_available=has_anthropic_key,
+                is_running_locally=False,
             )
         )
-
     providers.append(
         ProviderModels(
             provider_id="anthropic",
@@ -169,13 +170,15 @@ async def list_available_models() -> List[ProviderModels]:
         )
     )
 
-    # 4. Local Ollama Server Probe (from live server or models_by_provider['ollama'])
+    # =========================================================================
+    # 4. Local Ollama Server Probe
+    # =========================================================================
     ollama_models: List[ModelItem] = []
     ollama_connected = False
     ollama_status = f"Unreachable at {settings.OLLAMA_API_BASE}"
 
     try:
-        async with httpx.AsyncClient(timeout=1.5) as client:
+        async with httpx.AsyncClient(timeout=1.0) as client:
             response = await client.get(f"{settings.OLLAMA_API_BASE.rstrip('/')}/api/tags")
             if response.status_code == 200:
                 data = response.json()
@@ -185,12 +188,14 @@ async def list_available_models() -> List[ProviderModels]:
                 for model_entry in models_list:
                     model_name = model_entry.get("name", "")
                     if model_name:
+                        param_size = model_entry.get("details", {}).get("parameter_size", "")
+                        desc = f"Locally installed Ollama model ({param_size})." if param_size else "Locally installed Ollama model."
                         ollama_models.append(
                             ModelItem(
                                 id=f"ollama/{model_name}",
                                 name=f"Ollama: {model_name}",
                                 provider="ollama",
-                                description=f"Locally running Ollama model ({model_entry.get('details', {}).get('parameter_size', 'local')}).",
+                                description=desc,
                                 context_window="Local context",
                                 is_available=True,
                                 is_running_locally=True,
@@ -200,18 +205,24 @@ async def list_available_models() -> List[ProviderModels]:
         pass
 
     if not ollama_models:
-        # Fallback to litellm.models_by_provider['ollama']
-        ollama_catalog = models_by_provider.get("ollama", ["llama3", "qwen2.5-coder:7b", "mistral"])
-        for model_name in ollama_catalog:
-            model_id = model_name if model_name.startswith("ollama/") else f"ollama/{model_name}"
+        ollama_catalog = [
+            ("ollama/qwen2.5-coder:7b", "Qwen 2.5 Coder 7B", "Popular open-source coding model running locally via Ollama."),
+            ("ollama/qwen2.5-coder:14b", "Qwen 2.5 Coder 14B", "High-capacity code intelligence model for local execution."),
+            ("ollama/llama3.2:3b", "Llama 3.2 3B", "Ultra-compact fast model from Meta running locally on CPU/GPU."),
+            ("ollama/llama3.1:8b", "Llama 3.1 8B", "Balanced general-purpose open model from Meta."),
+            ("ollama/mistral:7b", "Mistral 7B Instruct", "Fast, high-quality open-source instruction-tuned model."),
+            ("ollama/deepseek-r1:8b", "DeepSeek R1 Distill 8B", "Local reasoning model distilled from DeepSeek-R1."),
+        ]
+        for mid, name, desc in ollama_catalog:
             ollama_models.append(
                 ModelItem(
-                    id=model_id,
-                    name=f"Ollama: {model_name.replace('ollama/', '')}",
+                    id=mid,
+                    name=name,
                     provider="ollama",
-                    description="Open-weight model running locally via Ollama.",
+                    description=desc,
                     context_window="Local context",
                     is_available=ollama_connected,
+                    is_running_locally=ollama_connected,
                 )
             )
 
@@ -223,101 +234,6 @@ async def list_available_models() -> List[ProviderModels]:
             is_configured=ollama_connected,
             status_message=ollama_status,
             models=ollama_models,
-        )
-    )
-
-    # 5. Local vLLM Server Probe
-    vllm_models: List[ModelItem] = []
-    vllm_connected = False
-    vllm_status = f"Unreachable at {settings.VLLM_API_BASE}"
-
-    try:
-        async with httpx.AsyncClient(timeout=1.5) as client:
-            response = await client.get(f"{settings.VLLM_API_BASE.rstrip('/')}/models")
-            if response.status_code == 200:
-                data = response.json()
-                models_list = data.get("data", [])
-                vllm_connected = True
-                vllm_status = f"Connected ({len(models_list)} served models active)"
-                for model_entry in models_list:
-                    model_id = model_entry.get("id", "")
-                    if model_id:
-                        vllm_models.append(
-                            ModelItem(
-                                id=f"vllm/{model_id}",
-                                name=f"vLLM: {model_id.split('/')[-1]}",
-                                provider="vllm",
-                                description=f"Locally served vLLM model ({model_id}) with high-throughput PagedAttention.",
-                                context_window="Local GPU context",
-                                is_available=True,
-                                is_running_locally=True,
-                            )
-                        )
-    except Exception:
-        pass
-
-    if not vllm_models:
-        vllm_models = [
-            ModelItem(
-                id="vllm/meta-llama/Meta-Llama-3-8B-Instruct",
-                name="Meta Llama 3 8B Instruct",
-                provider="vllm",
-                description="Served by local vLLM cluster with OpenAI-compatible API.",
-                context_window="8,000 tokens",
-                is_available=vllm_connected,
-            ),
-            ModelItem(
-                id="vllm/Qwen/Qwen2.5-Coder-7B-Instruct",
-                name="Qwen 2.5 Coder 7B Instruct",
-                provider="vllm",
-                description="High-performance open weights served with local vLLM.",
-                context_window="32,000 tokens",
-                is_available=vllm_connected,
-            ),
-        ]
-
-    providers.append(
-        ProviderModels(
-            provider_id="vllm",
-            provider_name="Local vLLM Server",
-            icon="🚀",
-            is_configured=vllm_connected,
-            status_message=vllm_status,
-            models=vllm_models,
-        )
-    )
-
-    # 6. Hugging Face (from models_by_provider['huggingface'] or Hub)
-    has_hf_key = bool(settings.HUGGINGFACE_API_KEY)
-    hf_raw_models = models_by_provider.get("huggingface", [
-        "Qwen/Qwen2.5-Coder-7B-Instruct",
-        "meta-llama/Meta-Llama-3.1-8B-Instruct",
-        "mistralai/Mistral-7B-Instruct-v0.3",
-        "deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct",
-    ])
-    hf_items: List[ModelItem] = []
-    for model_name in hf_raw_models:
-        model_id = model_name if model_name.startswith("huggingface/") else f"huggingface/{model_name}"
-        clean_name = model_name.replace("huggingface/", "")
-        hf_items.append(
-            ModelItem(
-                id=model_id,
-                name=clean_name.split("/")[-1],
-                provider="huggingface",
-                description=f"Hugging Face repository: {clean_name}",
-                context_window="Open Weights",
-                is_available=True,
-            )
-        )
-
-    providers.append(
-        ProviderModels(
-            provider_id="huggingface",
-            provider_name="Hugging Face",
-            icon="🤗",
-            is_configured=has_hf_key,
-            status_message="API Token Set" if has_hf_key else "Free Serverless / Local Deployment",
-            models=hf_items,
         )
     )
 

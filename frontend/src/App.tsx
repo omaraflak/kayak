@@ -8,6 +8,7 @@ import { SkillsView } from './components/SkillsView';
 import { ToolsView } from './components/ToolsView';
 import { TasksMonitor } from './components/TasksMonitor';
 import { SettingsView } from './components/SettingsView';
+import { GlobalVLLMStatusWidget } from './components/GlobalVLLMStatusWidget';
 import { parseCurrentUrl, navigateTo } from './utils/router';
 
 export const App: React.FC = () => {
@@ -180,6 +181,9 @@ export const App: React.FC = () => {
           <SettingsView />
         )}
       </main>
+
+      {/* Persistent Global vLLM Server Status & Download Progress Widget */}
+      <GlobalVLLMStatusWidget />
     </div>
   );
 };

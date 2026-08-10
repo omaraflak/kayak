@@ -15,7 +15,6 @@ class UpdateSettingsRequest(BaseModel):
     ANTHROPIC_API_KEY: Optional[str] = None
     HUGGINGFACE_API_KEY: Optional[str] = None
     VLLM_API_BASE: Optional[str] = None
-    OLLAMA_API_BASE: Optional[str] = None
 
 
 @router.get("")
@@ -32,7 +31,6 @@ async def get_settings() -> Dict[str, Any]:
         "ANTHROPIC_API_KEY": settings.ANTHROPIC_API_KEY,
         "HUGGINGFACE_API_KEY": settings.HUGGINGFACE_API_KEY,
         "VLLM_API_BASE": settings.VLLM_API_BASE,
-        "OLLAMA_API_BASE": settings.OLLAMA_API_BASE,
         "DOCKER_AVAILABLE": sandbox_manager.is_available,
     }
 
@@ -58,7 +56,6 @@ async def update_settings(request: UpdateSettingsRequest) -> Dict[str, Any]:
             "ANTHROPIC_API_KEY": settings.ANTHROPIC_API_KEY,
             "HUGGINGFACE_API_KEY": settings.HUGGINGFACE_API_KEY,
             "VLLM_API_BASE": settings.VLLM_API_BASE,
-            "OLLAMA_API_BASE": settings.OLLAMA_API_BASE,
             "DOCKER_AVAILABLE": sandbox_manager.is_available,
         },
     }

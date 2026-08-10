@@ -46,10 +46,6 @@ class Settings:
         self.VLLM_API_BASE: str = os.getenv(
             "VLLM_API_BASE", "http://localhost:8000/v1"
         )
-        self.OLLAMA_API_BASE: str = os.getenv(
-            "OLLAMA_API_BASE", "http://localhost:11434"
-        )
-
         self.HUGGINGFACE_API_KEY: str = os.getenv("HUGGINGFACE_API_KEY", "")
 
         # Docker Sandbox Configuration
@@ -82,8 +78,6 @@ class Settings:
                     self.HUGGINGFACE_API_KEY = data["HUGGINGFACE_API_KEY"]
                 if "VLLM_API_BASE" in data:
                     self.VLLM_API_BASE = data["VLLM_API_BASE"]
-                if "OLLAMA_API_BASE" in data:
-                    self.OLLAMA_API_BASE = data["OLLAMA_API_BASE"]
             except Exception as error:
                 print(f"Error reading settings file: {error}")
 
@@ -100,7 +94,6 @@ class Settings:
             "ANTHROPIC_API_KEY": self.ANTHROPIC_API_KEY,
             "HUGGINGFACE_API_KEY": self.HUGGINGFACE_API_KEY,
             "VLLM_API_BASE": self.VLLM_API_BASE,
-            "OLLAMA_API_BASE": self.OLLAMA_API_BASE,
         }
         for key, value in updates.items():
             if value is not None and key in current:

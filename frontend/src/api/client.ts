@@ -8,7 +8,9 @@ import {
   ToolDefinition, 
   VerifyToolResponse,
   ProviderModels,
-  HuggingFaceModelSearchResult
+  HuggingFaceModelSearchResult,
+  VLLMDeploymentProgress,
+  VLLMDeployRequest
 } from '../types';
 
 const API_BASE = '/api';
@@ -176,6 +178,28 @@ export const api = {
 
   searchHuggingFaceModels: async (query: string): Promise<HuggingFaceModelSearchResult[]> => {
     const res = await fetch(`${API_BASE}/models/huggingface/search?query=${encodeURIComponent(query)}`);
+    return res.json();
+  },
+
+  // vLLM Local Container Orchestration
+  getVLLMStatus: async (): Promise<VLLMDeploymentProgress> => {
+    const res = await fetch(`${API_BASE}/vllm/status`);
+    return res.json();
+  },
+
+  deployVLLMModel: async (data: VLLMDeployRequest): Promise<VLLMDeploymentProgress> => {
+    const res = await fetch(`${API_BASE}/vllm/deploy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return res.json();
+  },
+
+  stopVLLMServer: async (): Promise<{ status: string; message: string }> => {
+    const res = await fetch(`${API_BASE}/vllm/stop`, {
+      method: 'POST',
+    });
     return res.json();
   },
 };

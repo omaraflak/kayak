@@ -53,10 +53,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from backend.app.vllm import routes as vllm_routes
+
 # Register API Routers
 app.include_router(conversations.router)
 app.include_router(agents.router)
 app.include_router(models.router)
+app.include_router(vllm_routes.router)
 app.include_router(skills.router)
 app.include_router(tools.router)
 app.include_router(tool_builder.router)
