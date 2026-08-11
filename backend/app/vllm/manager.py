@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import threading
 from typing import Any, Callable, Dict, List, Optional, Set
 import docker
 from docker.errors import DockerException, NotFound, ImageNotFound
@@ -39,6 +40,7 @@ class VLLMManager:
         self._log_history: List[str] = []
         self._listeners: Set[asyncio.Queue] = set()
         self._monitor_task: Optional[asyncio.Task] = None
+        self._log_stop_event: Optional[threading.Event] = None
         self._init_docker()
 
     def _init_docker(self):
@@ -197,7 +199,7 @@ class VLLMManager:
                         else:
                             msg = f"{status_str} {progress_detail}".strip()
                         if msg:
-                            self._add_log(msg)
+                            loop.call_soon_threadsafe(self._add_log, msg)
 
                 await loop.run_in_executor(None, _stream_pull)
                 self._add_log(f"✓ Image {image_name} successfully pulled.")
@@ -246,6 +248,18 @@ class VLLMManager:
             if request.max_model_len:
                 cmd_args.extend(["--max-model-len", str(request.max_model_len)])
 
+            # Enable auto tool calling support for OpenAI-compatible endpoint
+            tool_parser = "hermes"
+            if "llama" in request.model_id.lower():
+                tool_parser = "llama3_json"
+            elif "mistral" in request.model_id.lower():
+                tool_parser = "mistral"
+
+            cmd_args.extend([
+                "--enable-auto-tool-choice",
+                "--tool-call-parser", tool_parser,
+            ])
+
             self._update_status(
                 state=VLLMServerState.LOADING,
                 message=f"Starting container for {request.model_id}...",
@@ -291,22 +305,14 @@ class VLLMManager:
             self._status.container_id = container.id
             self._add_log(f"Container created with ID: {container.id[:12]}")
 
-            # 5. Stream logs (display only) and poll health in parallel
-            log_task = asyncio.create_task(self._stream_container_logs(container))
-            health_task = asyncio.create_task(
-                self._poll_health_endpoint(request.model_id)
-            )
+            # 5. Spawn background non-blocking daemon thread for container log streaming
+            if self._log_stop_event:
+                self._log_stop_event.set()
+            self._log_stop_event = threading.Event()
+            self._spawn_log_stream_thread(container, loop, self._log_stop_event)
 
-            # Wait for health check to complete (it returns when ready or error)
-            await health_task
-
-            # Once health resolves, cancel log streaming (it would block forever)
-            if not log_task.done():
-                log_task.cancel()
-                try:
-                    await log_task
-                except asyncio.CancelledError:
-                    pass
+            # 6. Poll health endpoint until healthy (non-blocking)
+            await self._poll_health_endpoint(request.model_id)
 
         except Exception as error:
             self._add_log(f"Deployment encountered error: {str(error)}")
@@ -316,25 +322,28 @@ class VLLMManager:
                 error=str(error),
             )
 
-    async def _stream_container_logs(self, container: Any):
-        """Streams container logs for display only. No state transitions."""
-        loop = asyncio.get_running_loop()
-
-        def _log_generator():
+    def _spawn_log_stream_thread(
+        self,
+        container: Any,
+        loop: asyncio.AbstractEventLoop,
+        stop_event: threading.Event,
+    ):
+        """Streams container logs in a separate OS thread to avoid blocking asyncio event loop."""
+        def _worker():
             try:
-                for line in container.logs(stream=True, follow=True):
-                    yield line.decode("utf-8", errors="replace")
+                for chunk in container.logs(stream=True, follow=True):
+                    if stop_event.is_set():
+                        break
+                    text = chunk.decode("utf-8", errors="replace")
+                    for line in text.splitlines():
+                        clean = line.strip()
+                        if clean and not stop_event.is_set():
+                            loop.call_soon_threadsafe(self._add_log, clean)
             except Exception:
-                return
+                pass
 
-        try:
-            for log_line in _log_generator():
-                clean = log_line.strip()
-                if clean:
-                    self._add_log(clean)
-                await asyncio.sleep(0.01)
-        except asyncio.CancelledError:
-            pass
+        thread = threading.Thread(target=_worker, daemon=True, name="vllm-log-streamer")
+        thread.start()
 
     async def _poll_health_endpoint(self, model_id: str, max_attempts: int = 300):
         """Polls vLLM health endpoint until healthy or timeout.
@@ -342,14 +351,15 @@ class VLLMManager:
         This is the sole mechanism for transitioning to READY state.
         """
         urls_to_try = [
-            f"{settings.VLLM_API_BASE.rstrip('/')}/models",
             f"http://host.docker.internal:{settings.VLLM_PORT}/v1/models",
+            f"http://host.docker.internal:{settings.VLLM_PORT}/health",
+            f"{settings.VLLM_API_BASE.rstrip('/')}/models",
             f"http://localhost:{settings.VLLM_PORT}/v1/models",
             f"http://127.0.0.1:{settings.VLLM_PORT}/v1/models",
         ]
-        async with httpx.AsyncClient(timeout=1.5) as client:
-            for attempt in range(max_attempts):
-                await asyncio.sleep(2.0)
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            for _ in range(max_attempts):
+                await asyncio.sleep(1.0)
 
                 # Bail if deployment was cancelled or errored
                 if self._status.state in (
@@ -371,23 +381,19 @@ class VLLMManager:
                     except Exception:
                         pass
 
-                # Update message periodically so the UI shows something alive
-                elapsed = (attempt + 1) * 2
-                if self._status.state == VLLMServerState.LOADING:
-                    self._update_status(
-                        state=VLLMServerState.LOADING,
-                        message=f"Loading {model_id}... ({elapsed}s elapsed)",
-                    )
-
         # Exhausted all attempts
         self._update_status(
             state=VLLMServerState.ERROR,
-            message=f"vLLM server did not become healthy after {max_attempts * 2}s",
+            message=f"vLLM server did not become healthy after {max_attempts}s",
             error="Health check timeout",
         )
 
     async def stop_server(self):
         """Stops and removes the running vLLM container."""
+        if self._log_stop_event:
+            self._log_stop_event.set()
+            self._log_stop_event = None
+
         if not self._docker_available or not self._client:
             return
 

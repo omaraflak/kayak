@@ -92,6 +92,24 @@ async def generate_completion_stream(
                         else "",
                     }
     except Exception as error:
+        # If tool calling failed on the provider, gracefully fall back to plain text generation
+        if tools and ("tool" in str(error).lower() or "400" in str(error)):
+            try:
+                fallback_kwargs = dict(kwargs)
+                fallback_kwargs.pop("tools", None)
+                fallback_kwargs.pop("tool_choice", None)
+                fallback_response = await litellm.acompletion(**fallback_kwargs)
+                async for chunk in fallback_response:
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    if not delta:
+                        continue
+                    if hasattr(delta, "content") and delta.content:
+                        yield {"type": "token", "content": delta.content}
+                return
+            except Exception as fallback_error:
+                yield {"type": "error", "error": str(fallback_error)}
+                return
+
         yield {"type": "error", "error": str(error)}
 
 
@@ -139,6 +157,17 @@ async def generate_completion(
             else None,
         }
     except Exception as error:
+        if tools and ("tool" in str(error).lower() or "400" in str(error)):
+            try:
+                fallback_kwargs = dict(kwargs)
+                fallback_kwargs.pop("tools", None)
+                fallback_kwargs.pop("tool_choice", None)
+                response = await litellm.acompletion(**fallback_kwargs)
+                message = response.choices[0].message
+                return {"content": message.content, "tool_calls": None}
+            except Exception as fallback_error:
+                return {"content": None, "tool_calls": None, "error": str(fallback_error)}
+
         return {"content": None, "tool_calls": None, "error": str(error)}
 
 

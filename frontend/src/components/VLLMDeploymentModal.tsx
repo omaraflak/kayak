@@ -124,7 +124,8 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
     }
   };
 
-  if (!isOpen) return null;
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
+  const startTimeRef = useRef<number | null>(null);
 
   const isReady = status?.state === 'ready';
   const isError = status?.state === 'error';
@@ -132,6 +133,26 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
   const isPulling = status?.state === 'pulling_image';
   const isStarting = status?.state === 'starting_container';
   const isBusy = isLoading || isPulling || isStarting || isDeploying;
+
+  // Continuous client-side stopwatch for provisioning duration
+  useEffect(() => {
+    if (isBusy) {
+      if (!startTimeRef.current) {
+        startTimeRef.current = Date.now();
+      }
+      const interval = setInterval(() => {
+        if (startTimeRef.current) {
+          setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
+        }
+      }, 1000);
+      return () => clearInterval(interval);
+    } else {
+      startTimeRef.current = null;
+      setElapsedSeconds(0);
+    }
+  }, [isBusy]);
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/60 backdrop-blur-xs animate-fade-in font-sans">
@@ -213,7 +234,13 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
             <div className="flex items-center justify-between text-xs">
               <span className="font-medium text-zinc-800 flex items-center gap-1.5">
                 {isBusy && <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />}
-                {status?.message || (isBusy ? 'Starting vLLM container...' : isReady ? 'Live & Serving' : 'vLLM server is idle')}
+                {isReady
+                  ? (status?.message || 'vLLM server is healthy and ready!')
+                  : isError
+                  ? (status?.message || 'vLLM deployment encountered an error')
+                  : isBusy
+                  ? `${status?.message || 'Provisioning vLLM container...'} (${elapsedSeconds}s)`
+                  : 'vLLM server is idle'}
               </span>
             </div>
 
