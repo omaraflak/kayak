@@ -801,36 +801,6 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
       {/* Input Composer - Constrained to match max-w-3xl */}
       <div className="p-4 border-t border-zinc-200 bg-white shrink-0">
-        {/* Model Status Banner for local vLLM agents */}
-        {isVllmModelOffline && (
-          <div className="max-w-3xl mx-auto mb-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center justify-between shadow-2xs">
-            <div className="flex items-center space-x-2">
-              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>
-                Local model <code className="font-mono font-bold text-amber-950">{vllmModelId}</code> is offline.
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={handleStartVllmModel}
-              disabled={isStartingVllm}
-              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold transition-colors shadow-xs cursor-pointer"
-            >
-              {isStartingVllm ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-white" />}
-              <span>Start Model</span>
-            </button>
-          </div>
-        )}
-
-        {isVllmModelLoading && (
-          <div className="max-w-3xl mx-auto mb-3 p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs flex items-center space-x-2.5 shadow-2xs">
-            <Loader2 className="w-4 h-4 animate-spin text-indigo-600 shrink-0" />
-            <span className="truncate">
-              Local model <code className="font-mono font-bold text-indigo-950">{vllmModelId}</code> is starting up ({vllmStatus?.message || 'Provisioning container...'})
-            </span>
-          </div>
-        )}
-
         <form
           onSubmit={handleSend}
           className="max-w-3xl mx-auto relative bg-zinc-50 border border-zinc-300 rounded-xl overflow-hidden focus-within:bg-white focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-600 shadow-xs transition-all"
@@ -843,7 +813,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
             disabled={isVllmModelOffline || isVllmModelLoading}
             placeholder={
               isVllmModelOffline
-                ? `Local model ${vllmModelId} is offline. Click 'Start Model' above to begin...`
+                ? `Local model ${vllmModelId} is offline. Click 'Start Model' to begin...`
                 : isVllmModelLoading
                 ? `Local model ${vllmModelId} is initializing...`
                 : placeholder || `Message ${agentName}... (Enter to send, Shift+Enter for new line)`

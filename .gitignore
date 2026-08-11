@@ -20,6 +20,7 @@ data/kayak.db-shm
 data/workspaces/*
 !data/workspaces/.gitkeep
 data/huggingface_cache/
+data/agents/new_agent.yaml
 
 # --- Python ---
 __pycache__/
