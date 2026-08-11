@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(200%); }
+  100% { transform: translateX(-100%); }
+}
+
 @layer base {
   body {
     @apply bg-zinc-50 text-zinc-900 selection:bg-teal-100 selection:text-teal-900;

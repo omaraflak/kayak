@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Conversation, AgentConfig } from '../types';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Conversation, AgentConfig, VLLMDeploymentProgress } from '../types';
 import { api } from '../api/client';
 import { ChatPane } from './ChatPane';
 import { 
@@ -7,7 +7,11 @@ import {
   Cpu, 
   Check,
   Sparkles,
-  Send
+  Send,
+  Loader2,
+  CircleDot,
+  AlertCircle,
+  Play
 } from 'lucide-react';
 
 interface ChatViewProps {
@@ -29,6 +33,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [draftAgentId, setDraftAgentId] = useState<string>(agents[0]?.id || 'general');
   const [draftUseContainer, setDraftUseContainer] = useState<boolean>(false);
   const [draftInput, setDraftInput] = useState<string>('');
+  const [vllmStatus, setVllmStatus] = useState<VLLMDeploymentProgress | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   const loadConversationData = async () => {
     if (!conversationId) {
@@ -53,14 +59,100 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   }, [agents]);
 
+  // Check if any agent uses a vLLM model
+  const hasAnyVllmAgent = agents.some((a) => a.model.startsWith('vllm/'));
+
+  // Subscribe to vLLM status via SSE when any agent uses vLLM
+  useEffect(() => {
+    if (!hasAnyVllmAgent) {
+      setVllmStatus(null);
+      return;
+    }
+
+    // Fetch initial status
+    api.getVLLMStatus()
+      .then((data) => setVllmStatus(data))
+      .catch((err) => console.error('Failed to fetch vLLM status:', err));
+
+    // SSE for real-time updates
+    const es = new EventSource('/api/vllm/events');
+    eventSourceRef.current = es;
+
+    const handleEvent = (e: MessageEvent) => {
+      try {
+        const payload = JSON.parse(e.data);
+        if (payload.data) {
+          setVllmStatus(payload.data);
+        }
+      } catch { /* ignore parse errors */ }
+    };
+
+    es.addEventListener('status', handleEvent);
+    es.addEventListener('update', handleEvent);
+
+    return () => {
+      es.close();
+      eventSourceRef.current = null;
+    };
+  }, [hasAnyVllmAgent]);
+
+  // Helper: extract HF model id from an agent model string like "vllm/Org/Model"
+  const getVllmModelId = useCallback((model: string): string | null => {
+    if (!model.startsWith('vllm/')) return null;
+    return model.slice('vllm/'.length);
+  }, []);
+
   const activeAgent = conversationId 
     ? agents.find((agent) => agent.id === conversation?.agent_id)
     : agents.find((agent) => agent.id === draftAgentId);
 
+  // Compute whether the selected agent's vLLM model is ready
+  const selectedAgentVllmModelId = activeAgent ? getVllmModelId(activeAgent.model) : null;
+  const isVllmAgent = selectedAgentVllmModelId !== null;
+  const loadingStates = ['pulling_image', 'starting_container', 'loading'];
+  const isVllmModelReady =
+    !isVllmAgent ||
+    (vllmStatus?.state === 'ready' && vllmStatus?.model_id === selectedAgentVllmModelId);
+  const isVllmModelLoading =
+    isVllmAgent &&
+    vllmStatus !== null &&
+    loadingStates.includes(vllmStatus.state) &&
+    vllmStatus.model_id === selectedAgentVllmModelId;
+
+  // Deploys the vLLM model for the currently selected agent
+  const handleStartModel = useCallback(async (modelId: string) => {
+    try {
+      await api.deployVLLMModel({ model_id: modelId });
+    } catch (err) {
+      console.error('Failed to deploy vLLM model:', err);
+    }
+  }, []);
+
+  // Helper: get vLLM badge info for a given agent
+  const getVllmBadge = useCallback(
+    (agent: AgentConfig): { color: 'green' | 'yellow' | 'red'; label: string; spinning: boolean; canStart: boolean } | null => {
+      const modelId = getVllmModelId(agent.model);
+      if (!modelId) return null; // cloud model — no badge
+      if (!vllmStatus) return { color: 'red', label: 'Not Running', spinning: false, canStart: true };
+
+      const isThisModel = vllmStatus.model_id === modelId;
+
+      if (vllmStatus.state === 'ready' && isThisModel) {
+        return { color: 'green', label: 'Ready', spinning: false, canStart: false };
+      }
+      if (loadingStates.includes(vllmStatus.state) && isThisModel) {
+        return { color: 'yellow', label: 'Loading...', spinning: true, canStart: false };
+      }
+      return { color: 'red', label: 'Not Running', spinning: false, canStart: true };
+    },
+    [vllmStatus, getVllmModelId]
+  );
+
+
   const handleDraftSend = (event?: React.FormEvent) => {
     if (event) event.preventDefault();
     const text = draftInput.trim();
-    if (!text) return;
+    if (!text || !isVllmModelReady) return;
 
     setDraftInput('');
     onCreateConversation({
@@ -159,11 +251,48 @@ export const ChatView: React.FC<ChatViewProps> = ({
                             <span className="text-zinc-400 font-mono">
                               {agent.allowed_tools?.length || 0} tools · {agent.preloaded_skills?.length || 0} skills
                             </span>
-                            {isSelected && (
-                              <span className="inline-flex items-center gap-1 text-indigo-600 font-bold">
-                                <Check className="w-3.5 h-3.5 stroke-[3]" /> Selected
-                              </span>
-                            )}
+                            <div className="flex items-center gap-2">
+                              {(() => {
+                                const badge = getVllmBadge(agent);
+                                if (!badge) return null;
+                                const colorClasses = {
+                                  green: 'text-emerald-600 bg-emerald-50 border-emerald-200',
+                                  yellow: 'text-amber-600 bg-amber-50 border-amber-200',
+                                  red: 'text-zinc-500 bg-zinc-50 border-zinc-200',
+                                };
+                                if (badge.canStart) {
+                                  return (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const modelId = getVllmModelId(agent.model);
+                                        if (modelId) handleStartModel(modelId);
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-400 transition-colors"
+                                    >
+                                      <Play className="w-3 h-3" />
+                                      Start
+                                    </button>
+                                  );
+                                }
+                                return (
+                                  <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold border ${colorClasses[badge.color]}`}>
+                                    {badge.spinning ? (
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                    ) : (
+                                      <CircleDot className="w-3 h-3" />
+                                    )}
+                                    {badge.label}
+                                  </span>
+                                );
+                              })()}
+                              {isSelected && (
+                                <span className="inline-flex items-center gap-1 text-indigo-600 font-bold">
+                                  <Check className="w-3.5 h-3.5 stroke-[3]" /> Selected
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       );
@@ -215,27 +344,58 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   }
                 }}
                 rows={2}
-                placeholder={`Message ${activeAgent?.name || 'Kayak Agent'}... (Enter to send, Shift+Enter for new line)`}
-                className="w-full bg-transparent px-3.5 py-2.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none resize-none leading-relaxed"
+                disabled={!isVllmModelReady}
+                placeholder={
+                  !isVllmModelReady
+                    ? 'Waiting for vLLM model to be ready...'
+                    : `Message ${activeAgent?.name || 'Kayak Agent'}... (Enter to send, Shift+Enter for new line)`
+                }
+                className={`w-full bg-transparent px-3.5 py-2.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none resize-none leading-relaxed ${
+                  !isVllmModelReady ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
               />
 
               <div className="flex items-center justify-between px-3.5 py-2 bg-zinc-100/50 border-t border-zinc-200">
                 <div className="flex items-center space-x-2 text-[11px] text-zinc-500">
-                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                  {!isVllmModelReady ? (
+                    isVllmModelLoading ? (
+                      <Loader2 className="w-3.5 h-3.5 text-amber-500 animate-spin" />
+                    ) : (
+                      <AlertCircle className="w-3.5 h-3.5 text-zinc-400" />
+                    )
+                  ) : (
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                  )}
                   <span className="font-semibold text-zinc-700">{activeAgent?.name}</span>
                   {activeAgent?.model && (
                     <span className="font-mono text-[10px] text-zinc-400">({activeAgent.model})</span>
                   )}
+                  {!isVllmModelReady && isVllmModelLoading && vllmStatus && (
+                    <span className="font-mono text-[10px] text-amber-600">
+                      — {vllmStatus.message || 'Model is loading...'}
+                    </span>
+                  )}
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={!draftInput.trim()}
-                  className="inline-flex items-center space-x-1 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white transition-colors shadow-xs"
-                >
-                  <span>Send</span>
-                  <Send className="w-3 h-3" />
-                </button>
+                {!isVllmModelReady && !isVllmModelLoading && isVllmAgent && selectedAgentVllmModelId ? (
+                  <button
+                    type="button"
+                    onClick={() => handleStartModel(selectedAgentVllmModelId)}
+                    className="inline-flex items-center space-x-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors shadow-xs"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    <span>Start Model</span>
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={!draftInput.trim() || !isVllmModelReady}
+                    className="inline-flex items-center space-x-1 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white transition-colors shadow-xs"
+                  >
+                    <span>{isVllmModelLoading ? 'Model Loading...' : 'Send'}</span>
+                    {isVllmModelLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                  </button>
+                )}
               </div>
             </form>
           </div>

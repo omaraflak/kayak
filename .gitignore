@@ -19,6 +19,7 @@ data/kayak.db-shm
 *.sqlite3
 data/workspaces/*
 !data/workspaces/.gitkeep
+data/huggingface_cache/
 
 # --- Python ---
 __pycache__/

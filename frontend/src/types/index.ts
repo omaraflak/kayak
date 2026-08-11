@@ -151,11 +151,8 @@ export interface AppSettings {
 
 export interface VLLMDeploymentProgress {
   model_id?: string | null;
-  state: 'idle' | 'pulling_image' | 'starting_container' | 'downloading_model' | 'initializing_weights' | 'ready' | 'error' | 'stopped';
+  state: 'idle' | 'pulling_image' | 'starting_container' | 'loading' | 'ready' | 'error' | 'stopped';
   message: string;
-  progress_percent?: number | null;
-  download_speed?: string | null;
-  eta?: string | null;
   logs_tail: string[];
   port: number;
   endpoint: string;

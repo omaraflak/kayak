@@ -128,16 +128,8 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
 
   const handleConfirmSelection = () => {
     if (!candidateModel.trim()) return;
-
-    if (candidateHfMode === 'vllm' && candidateHfModel) {
-      // Open deployment modal for vLLM container orchestration
-      setVllmDeployTarget(candidateHfModel.id);
-      setIsVLLMDeployModalOpen(true);
-    } else {
-      // Apply the selected model directly
-      onSelectModel(candidateModel.trim());
-      onClose();
-    }
+    onSelectModel(candidateModel.trim());
+    onClose();
   };
 
   return (
@@ -223,7 +215,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
               <div className="flex items-center space-x-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                 <span className="font-medium text-emerald-900">
-                  Local vLLM Container Active: <code className="font-mono font-bold">{vllmStatus.model_id}</code> (Port 8000)
+                  Local vLLM Container Active: <code className="font-mono font-bold">{vllmStatus.model_id}</code> (Port {vllmStatus.port || 8001})
                 </span>
               </div>
 
@@ -489,17 +481,8 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                 disabled={!candidateModel.trim()}
                 className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
               >
-                {candidateHfMode === 'vllm' ? (
-                  <>
-                    <Rocket className="w-3.5 h-3.5" />
-                    <span>Deploy & Select Model</span>
-                  </>
-                ) : (
-                  <>
-                    <Check className="w-3.5 h-3.5 stroke-[3]" />
-                    <span>Confirm Selection</span>
-                  </>
-                )}
+                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                <span>Confirm Selection</span>
               </button>
             </div>
           </div>

@@ -128,12 +128,10 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
 
   const isReady = status?.state === 'ready';
   const isError = status?.state === 'error';
-  const isDownloading = status?.state === 'downloading_model';
-  const isInitializing = status?.state === 'initializing_weights';
+  const isLoading = status?.state === 'loading';
   const isPulling = status?.state === 'pulling_image';
-  const isBusy = isDownloading || isInitializing || isPulling || isDeploying;
-
-  const progressPercent = status?.progress_percent ?? (isReady ? 100 : isInitializing ? 90 : 25);
+  const isStarting = status?.state === 'starting_container';
+  const isBusy = isLoading || isPulling || isStarting || isDeploying;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/60 backdrop-blur-xs animate-fade-in font-sans">
@@ -210,29 +208,13 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
             )}
           </div>
 
-          {/* Progress Bar & Status Text */}
+          {/* Status Message */}
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs">
               <span className="font-medium text-zinc-800 flex items-center gap-1.5">
                 {isBusy && <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />}
-                {status?.message || 'Ready'}
+                {status?.message || (isBusy ? 'Starting vLLM container...' : isReady ? 'Live & Serving' : 'vLLM server is idle')}
               </span>
-              <span className="font-mono text-zinc-500 font-bold">
-                {progressPercent.toFixed(0)}%
-              </span>
-            </div>
-
-            <div className="w-full h-2.5 bg-zinc-100 rounded-full overflow-hidden border border-zinc-200">
-              <div
-                className={`h-full transition-all duration-300 ${
-                  isError
-                    ? 'bg-rose-500'
-                    : isReady
-                    ? 'bg-emerald-500'
-                    : 'bg-indigo-600'
-                }`}
-                style={{ width: `${Math.max(5, Math.min(100, progressPercent))}%` }}
-              />
             </div>
 
             {status?.error && (

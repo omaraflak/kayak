@@ -8,8 +8,7 @@ class VLLMServerState(str, Enum):
     IDLE = "idle"
     PULLING_IMAGE = "pulling_image"
     STARTING_CONTAINER = "starting_container"
-    DOWNLOADING_MODEL = "downloading_model"
-    INITIALIZING_WEIGHTS = "initializing_weights"
+    LOADING = "loading"
     READY = "ready"
     ERROR = "error"
     STOPPED = "stopped"
@@ -30,11 +29,8 @@ class VLLMDeploymentProgress(BaseModel):
     model_id: Optional[str] = None
     state: VLLMServerState = VLLMServerState.IDLE
     message: str = "vLLM server is not running."
-    progress_percent: Optional[float] = None
-    download_speed: Optional[str] = None
-    eta: Optional[str] = None
     logs_tail: List[str] = []
-    port: int = 8000
-    endpoint: str = "http://localhost:8000/v1"
+    port: int = 8001
+    endpoint: str = "http://localhost:8001/v1"
     container_id: Optional[str] = None
     error: Optional[str] = None

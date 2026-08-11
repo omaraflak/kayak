@@ -43,8 +43,9 @@ class Settings:
         self.OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
         self.GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
         self.ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+        self.VLLM_PORT: int = int(os.getenv("KAYAK_VLLM_PORT", "8001"))
         self.VLLM_API_BASE: str = os.getenv(
-            "VLLM_API_BASE", "http://localhost:8000/v1"
+            "VLLM_API_BASE", f"http://localhost:{self.VLLM_PORT}/v1"
         )
         self.HUGGINGFACE_API_KEY: str = os.getenv("HUGGINGFACE_API_KEY", "")
 

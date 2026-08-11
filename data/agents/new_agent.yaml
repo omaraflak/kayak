@@ -1,7 +1,7 @@
 id: new_agent
 name: New Custom Agent
 description: Description for this agent profile.
-model: vllm/Qwen/Qwen2.5-Coder-1.5B-Instruct
+model: vllm/Qwen/Qwen3-0.6B
 temperature: 0.7
 system_prompt: You are a helpful AI assistant.
 allowed_tools:

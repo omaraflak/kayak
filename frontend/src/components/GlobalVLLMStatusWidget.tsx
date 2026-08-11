@@ -38,7 +38,7 @@ export const GlobalVLLMStatusWidget: React.FC = () => {
         if (payload.data) {
           setStatus(payload.data);
           // If a new deployment starts, ensure it is not dismissed
-          if (['pulling_image', 'downloading_model', 'initializing_weights', 'starting_container'].includes(payload.data.state)) {
+          if (['pulling_image', 'starting_container', 'loading'].includes(payload.data.state)) {
             setIsDismissed(false);
           }
         }
@@ -70,11 +70,10 @@ export const GlobalVLLMStatusWidget: React.FC = () => {
     />
   );
 
-  const isDownloading = status.state === 'downloading_model';
-  const isInitializing = status.state === 'initializing_weights';
+  const isLoading = status.state === 'loading';
   const isPulling = status.state === 'pulling_image';
   const isStarting = status.state === 'starting_container';
-  const isBusy = isDownloading || isInitializing || isPulling || isStarting;
+  const isBusy = isLoading || isPulling || isStarting;
   const isReady = status.state === 'ready';
   const isError = status.state === 'error';
 
@@ -93,7 +92,6 @@ export const GlobalVLLMStatusWidget: React.FC = () => {
   }
 
   const modelShortName = status.model_id ? (status.model_id.split('/').pop() || status.model_id) : 'vLLM Server';
-  const progressPercent = status.progress_percent ?? (isReady ? 100 : isInitializing ? 90 : 25);
 
   return (
     <>
@@ -127,35 +125,21 @@ export const GlobalVLLMStatusWidget: React.FC = () => {
             )}
           </div>
 
-          {/* Progress & Status Message */}
+          {/* Status Message */}
           <div 
             role="button"
             tabIndex={0}
             onClick={() => setIsModalOpen(true)}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setIsModalOpen(true); }}
-            className="flex-1 min-w-0 cursor-pointer space-y-1"
+            className="flex-1 min-w-0 cursor-pointer space-y-0.5"
           >
             <div className="flex items-center justify-between text-xs">
               <span className="font-bold text-zinc-100 truncate pr-2">
                 {isBusy ? `Deploying ${modelShortName}` : isReady ? `vLLM: ${modelShortName}` : 'vLLM Error'}
               </span>
               <span className="font-mono text-[11px] text-zinc-400 font-semibold shrink-0">
-                {isReady ? 'Port 8000' : `${progressPercent.toFixed(0)}%`}
+                {isReady ? `Port ${status.port}` : ''}
               </span>
-            </div>
-
-            {/* Mini Progress Bar */}
-            <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-              <div
-                className={`h-full transition-all duration-300 ${
-                  isError
-                    ? 'bg-rose-500'
-                    : isReady
-                    ? 'bg-emerald-500'
-                    : 'bg-indigo-500'
-                }`}
-                style={{ width: `${Math.max(5, Math.min(100, progressPercent))}%` }}
-              />
             </div>
 
             <p className="text-[10.5px] text-zinc-400 truncate">
