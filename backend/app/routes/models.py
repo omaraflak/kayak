@@ -41,7 +41,6 @@ class HuggingFaceModelSearchResult(BaseModel):
     pipeline_tag: Optional[str] = None
     model_string_hf: str
     model_string_vllm: str
-    model_string_ollama: str
 
 
 def _get_context_window(model_id: str, default: str) -> str:
@@ -170,73 +169,6 @@ async def list_available_models() -> List[ProviderModels]:
         )
     )
 
-    # =========================================================================
-    # 4. Local Ollama Server Probe
-    # =========================================================================
-    ollama_models: List[ModelItem] = []
-    ollama_connected = False
-    ollama_status = f"Unreachable at {settings.OLLAMA_API_BASE}"
-
-    try:
-        async with httpx.AsyncClient(timeout=1.0) as client:
-            response = await client.get(f"{settings.OLLAMA_API_BASE.rstrip('/')}/api/tags")
-            if response.status_code == 200:
-                data = response.json()
-                models_list = data.get("models", [])
-                ollama_connected = True
-                ollama_status = f"Connected ({len(models_list)} local models installed)"
-                for model_entry in models_list:
-                    model_name = model_entry.get("name", "")
-                    if model_name:
-                        param_size = model_entry.get("details", {}).get("parameter_size", "")
-                        desc = f"Locally installed Ollama model ({param_size})." if param_size else "Locally installed Ollama model."
-                        ollama_models.append(
-                            ModelItem(
-                                id=f"ollama/{model_name}",
-                                name=f"Ollama: {model_name}",
-                                provider="ollama",
-                                description=desc,
-                                context_window="Local context",
-                                is_available=True,
-                                is_running_locally=True,
-                            )
-                        )
-    except Exception:
-        pass
-
-    if not ollama_models:
-        ollama_catalog = [
-            ("ollama/qwen2.5-coder:7b", "Qwen 2.5 Coder 7B", "Popular open-source coding model running locally via Ollama."),
-            ("ollama/qwen2.5-coder:14b", "Qwen 2.5 Coder 14B", "High-capacity code intelligence model for local execution."),
-            ("ollama/llama3.2:3b", "Llama 3.2 3B", "Ultra-compact fast model from Meta running locally on CPU/GPU."),
-            ("ollama/llama3.1:8b", "Llama 3.1 8B", "Balanced general-purpose open model from Meta."),
-            ("ollama/mistral:7b", "Mistral 7B Instruct", "Fast, high-quality open-source instruction-tuned model."),
-            ("ollama/deepseek-r1:8b", "DeepSeek R1 Distill 8B", "Local reasoning model distilled from DeepSeek-R1."),
-        ]
-        for mid, name, desc in ollama_catalog:
-            ollama_models.append(
-                ModelItem(
-                    id=mid,
-                    name=name,
-                    provider="ollama",
-                    description=desc,
-                    context_window="Local context",
-                    is_available=ollama_connected,
-                    is_running_locally=ollama_connected,
-                )
-            )
-
-    providers.append(
-        ProviderModels(
-            provider_id="ollama",
-            provider_name="Local Ollama",
-            icon="🦙",
-            is_configured=ollama_connected,
-            status_message=ollama_status,
-            models=ollama_models,
-        )
-    )
-
     return providers
 
 
@@ -267,7 +199,6 @@ async def search_huggingface_models(
                 for item in models_data:
                     model_id = item.get("id", "")
                     if model_id:
-                        short_name = model_id.split("/")[-1]
                         results.append(
                             HuggingFaceModelSearchResult(
                                 id=model_id,
@@ -277,7 +208,6 @@ async def search_huggingface_models(
                                 pipeline_tag=item.get("pipeline_tag"),
                                 model_string_hf=f"huggingface/{model_id}",
                                 model_string_vllm=f"vllm/{model_id}",
-                                model_string_ollama=f"ollama/{short_name}",
                             )
                         )
     except Exception as error:
