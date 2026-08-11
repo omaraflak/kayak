@@ -35,7 +35,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const dialog = useDialog();
 
   return (
-    <div className="w-72 bg-white border-r border-zinc-200 flex flex-col h-screen select-none">
+    <div className="w-72 bg-white border-r border-zinc-200 flex flex-col h-full shrink-0 select-none">
       {/* Brand Header */}
       <div className="p-4 border-b border-zinc-200 flex items-center justify-between">
         <div className="flex items-center space-x-2.5">
@@ -110,6 +110,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           <Activity className={`w-4 h-4 ${currentTab === 'tasks' ? 'text-indigo-600' : 'text-zinc-500'}`} />
           <span>Background Tasks</span>
+        </button>
+
+        <button
+          onClick={() => onSelectTab('models')}
+          className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+            currentTab === 'models'
+              ? 'bg-indigo-50 text-indigo-700 font-semibold shadow-xs'
+              : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-50'
+          }`}
+        >
+          <Cpu className={`w-4 h-4 ${currentTab === 'models' ? 'text-indigo-600' : 'text-zinc-500'}`} />
+          <span>Local Models</span>
         </button>
 
         <button

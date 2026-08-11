@@ -83,7 +83,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex h-screen bg-zinc-50 overflow-hidden">
+    <div className="flex-1 flex h-full min-h-0 bg-zinc-50 overflow-hidden">
       {/* Tools List Sidebar */}
       <div className="w-80 border-r border-zinc-200 bg-white flex flex-col shrink-0">
         <div className="p-4 border-b border-zinc-200 flex items-center justify-between">
@@ -161,7 +161,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
 
       {/* Main Workspace Pane: Creation Studio vs Inspector */}
       {isCreating ? (
-        <div className="flex-1 flex flex-col h-screen overflow-hidden">
+        <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden">
           <ToolBuilder
             onToolActivated={() => {
               loadTools();
@@ -171,7 +171,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
           />
         </div>
       ) : (
-        <div className="flex-1 flex flex-col h-screen overflow-hidden">
+        <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden">
           {/* Top Header rigidly docked at top */}
           <div className="h-16 border-b border-zinc-200 px-8 flex items-center justify-between bg-white shrink-0">
             <div>

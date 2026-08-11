@@ -8,6 +8,7 @@ import { SkillsView } from './components/SkillsView';
 import { ToolsView } from './components/ToolsView';
 import { TasksMonitor } from './components/TasksMonitor';
 import { SettingsView } from './components/SettingsView';
+import { ModelsView } from './components/ModelsView';
 import { GlobalVLLMStatusWidget } from './components/GlobalVLLMStatusWidget';
 import { parseCurrentUrl, navigateTo } from './utils/router';
 
@@ -125,7 +126,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-zinc-50 text-zinc-900 font-['Plus_Jakarta_Sans',sans-serif]">
+    <div className="flex h-full w-full overflow-hidden bg-zinc-50 text-zinc-900 font-['Plus_Jakarta_Sans',sans-serif]">
       {/* Navigation Sidebar */}
       <Sidebar
         conversations={conversations}
@@ -175,6 +176,10 @@ export const App: React.FC = () => {
 
         {currentTab === 'tasks' && (
           <TasksMonitor />
+        )}
+
+        {currentTab === 'models' && (
+          <ModelsView />
         )}
 
         {currentTab === 'settings' && (

@@ -123,7 +123,7 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-screen bg-zinc-50 overflow-hidden">
+    <div className="flex-1 flex flex-col h-full min-h-0 bg-zinc-50 overflow-hidden">
       {/* Studio Header Bar */}
       <div className="h-16 border-b border-zinc-200 px-8 flex items-center justify-between bg-white shrink-0">
         <div className="flex items-center space-x-3">

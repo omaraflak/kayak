@@ -202,4 +202,16 @@ export const api = {
     });
     return res.json();
   },
+
+  getVLLMServedModels: async (): Promise<any[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/vllm/models`);
+      if (res.ok) {
+        return res.json();
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  },
 };

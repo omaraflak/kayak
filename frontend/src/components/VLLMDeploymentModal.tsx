@@ -20,6 +20,7 @@ interface VLLMDeploymentModalProps {
   onClose: () => void;
   targetModelId?: string | null;
   onModelReady?: (modelString: string) => void;
+  autoDeploy?: boolean;
 }
 
 export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
@@ -27,6 +28,7 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
   onClose,
   targetModelId,
   onModelReady,
+  autoDeploy = false,
 }) => {
   const [status, setStatus] = useState<VLLMDeploymentProgress | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
@@ -92,12 +94,12 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
     }
   }, [logs, showLogs]);
 
-  // Auto-deploy if targetModelId is provided and not already deploying that model
+  // Auto-deploy only when explicitly requested (e.g. initiating new model deployment)
   useEffect(() => {
-    if (isOpen && targetModelId) {
+    if (isOpen && autoDeploy && targetModelId) {
       handleDeploy(targetModelId);
     }
-  }, [isOpen, targetModelId]);
+  }, [isOpen, autoDeploy, targetModelId]);
 
   const handleDeploy = async (modelId: string) => {
     setIsDeploying(true);
@@ -212,21 +214,6 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
                 <span>Endpoint: <code className="font-mono text-zinc-700">{status?.endpoint || 'http://localhost:8000/v1'}</code></span>
               </div>
             </div>
-
-            {isReady && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (status?.model_id) {
-                    onModelReady?.(`vllm/${status.model_id}`);
-                  }
-                  onClose();
-                }}
-                className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs transition-colors"
-              >
-                Use Model
-              </button>
-            )}
           </div>
 
           {/* Status Message */}
@@ -289,24 +276,36 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
           </div>
 
           <div className="flex items-center space-x-2">
-            {status?.state !== 'idle' && status?.state !== 'stopped' && (
+            {isBusy && (
               <button
                 type="button"
                 onClick={handleStop}
                 className="px-3.5 py-1.5 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50 text-xs font-semibold flex items-center gap-1.5 transition-colors"
               >
                 <Square className="w-3 h-3 fill-rose-700" />
-                <span>Stop Server</span>
+                <span>Cancel</span>
               </button>
             )}
 
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-1.5 rounded-lg bg-zinc-200 hover:bg-zinc-300 text-zinc-800 text-xs font-semibold transition-colors"
-            >
-              Close
-            </button>
+            {isReady ? (
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs transition-colors"
+              >
+                Done
+              </button>
+            ) : (
+              !isBusy && (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-1.5 rounded-lg bg-zinc-200 hover:bg-zinc-300 text-zinc-800 text-xs font-semibold transition-colors"
+                >
+                  Close
+                </button>
+              )
+            )}
           </div>
         </div>
       </div>

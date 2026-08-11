@@ -197,7 +197,7 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex h-screen bg-zinc-50 overflow-hidden">
+    <div className="flex-1 flex h-full min-h-0 bg-zinc-50 overflow-hidden">
       {/* Skills List Sidebar with + New Button */}
       <div className="w-80 border-r border-zinc-200 bg-white flex flex-col shrink-0">
         <div className="p-4 border-b border-zinc-200 flex items-center justify-between">
@@ -260,7 +260,7 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
       </div>
 
       {/* Main Workspace Pane: Top Header + Split (Chat 50% | Editor 50%) */}
-      <div className="flex-1 flex flex-col h-screen overflow-hidden">
+      <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden">
         {/* Top Header Rigidly Docked */}
         <div className="h-16 border-b border-zinc-200 px-8 flex items-center justify-between bg-white shrink-0">
           <div className="flex items-center space-x-3">

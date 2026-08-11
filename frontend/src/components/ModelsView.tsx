@@ -1,0 +1,307 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { 
+  Server, 
+  Cpu, 
+  Square, 
+  Terminal, 
+  CheckCircle2, 
+  AlertCircle, 
+  Loader2, 
+  RefreshCw, 
+  Layers,
+  ChevronDown,
+  ChevronUp
+} from 'lucide-react';
+import { api } from '../api/client';
+import { VLLMDeploymentProgress } from '../types';
+import { useDialog } from '../context/DialogContext';
+import { HuggingFaceCatalog } from './HuggingFaceCatalog';
+
+export const ModelsView: React.FC = () => {
+  const dialog = useDialog();
+  const [status, setStatus] = useState<VLLMDeploymentProgress | null>(null);
+  const [isStopping, setIsStopping] = useState(false);
+  const [isDeploying, setIsDeploying] = useState(false);
+  const [showFullLogs, setShowFullLogs] = useState(false);
+  const logsEndRef = useRef<HTMLDivElement>(null);
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const st = await api.getVLLMStatus();
+      setStatus(st);
+    } catch (err) {
+      console.error('Failed to load vLLM status:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStatus();
+
+    // SSE connection for live status and log updates directly in the card
+    const eventSource = new EventSource('/api/vllm/events');
+
+    eventSource.addEventListener('status', (e: MessageEvent) => {
+      try {
+        const payload = JSON.parse(e.data);
+        if (payload.data) {
+          setStatus(payload.data);
+        }
+      } catch {}
+    });
+
+    eventSource.addEventListener('update', (e: MessageEvent) => {
+      try {
+        const payload = JSON.parse(e.data);
+        if (payload.data) {
+          setStatus(payload.data);
+        }
+      } catch {}
+    });
+
+    eventSource.addEventListener('log', (e: MessageEvent) => {
+      try {
+        const payload = JSON.parse(e.data);
+        if (payload.line) {
+          setStatus((prev) => {
+            if (!prev) return prev;
+            const updatedLogs = [...(prev.logs_tail || []), payload.line];
+            return {
+              ...prev,
+              logs_tail: updatedLogs.slice(-50),
+            };
+          });
+        }
+      } catch {}
+    });
+
+    return () => {
+      eventSource.close();
+    };
+  }, [fetchStatus]);
+
+  useEffect(() => {
+    if (showFullLogs) {
+      logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [status?.logs_tail, showFullLogs]);
+
+  const handleStartModel = async (modelId: string) => {
+    setIsDeploying(true);
+    try {
+      const st = await api.deployVLLMModel({ model_id: modelId });
+      setStatus(st);
+      await fetchStatus();
+    } catch (err) {
+      console.error('Failed to deploy model:', err);
+      dialog.alert({
+        title: 'Deployment Failed',
+        message: `Could not initiate deployment for ${modelId}: ${err}`,
+        variant: 'danger',
+      });
+    } finally {
+      setIsDeploying(false);
+    }
+  };
+
+  const handleStopServer = async () => {
+    const confirmed = await dialog.confirm({
+      title: 'Stop vLLM Container?',
+      message: 'Stopping the server will terminate the local container and unload models from memory. Active conversations using this local model will be interrupted.',
+      confirmText: 'Stop Server',
+      cancelText: 'Keep Running',
+      variant: 'danger',
+    });
+
+    if (confirmed) {
+      setIsStopping(true);
+      try {
+        await api.stopVLLMServer();
+        await fetchStatus();
+      } catch (err) {
+        console.error('Failed to stop vLLM server:', err);
+      } finally {
+        setIsStopping(false);
+      }
+    }
+  };
+
+  const isReady = status?.state === 'ready';
+  const isLoading = ['pulling_image', 'starting_container', 'loading'].includes(status?.state || '') || isDeploying;
+  const isError = status?.state === 'error';
+  const logs = status?.logs_tail || [];
+
+  return (
+    <div className="flex-1 flex flex-col h-full min-h-0 bg-zinc-50 overflow-hidden font-sans">
+      {/* Top Header */}
+      <div className="h-16 border-b border-zinc-200 px-8 flex items-center justify-between bg-white shrink-0">
+        <div className="flex items-center space-x-3">
+          <div className="w-8 h-8 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600 shadow-2xs">
+            <Cpu className="w-4 h-4" />
+          </div>
+          <div>
+            <h2 className="font-bold text-sm text-zinc-900">Local Models & vLLM Orchestration</h2>
+            <p className="text-xs text-zinc-500">
+              Manage locally running inference containers, endpoints, and Hugging Face weights
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center space-x-2">
+          <button
+            type="button"
+            onClick={fetchStatus}
+            className="p-2 rounded-xl border border-zinc-200 text-zinc-600 hover:text-zinc-900 hover:bg-zinc-50 transition-colors shadow-2xs cursor-pointer"
+            title="Refresh status"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 overflow-y-auto px-8 py-6 space-y-6">
+        {/* Active Container Status Card with Inline Logs & Telemetry */}
+        <div className="bg-white border border-zinc-200 rounded-2xl p-6 shadow-xs space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <div className={`w-10 h-10 rounded-2xl flex items-center justify-center border shadow-xs ${
+                isReady 
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-600'
+                  : isLoading
+                  ? 'bg-amber-50 border-amber-200 text-amber-600'
+                  : isError
+                  ? 'bg-rose-50 border-rose-200 text-rose-600'
+                  : 'bg-zinc-100 border-zinc-200 text-zinc-500'
+              }`}>
+                {isLoading ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : isReady ? (
+                  <CheckCircle2 className="w-5 h-5" />
+                ) : isError ? (
+                  <AlertCircle className="w-5 h-5" />
+                ) : (
+                  <Server className="w-5 h-5" />
+                )}
+              </div>
+
+              <div>
+                <div className="flex items-center space-x-2">
+                  <h3 className="font-bold text-sm text-zinc-900">
+                    {isReady
+                      ? `Serving: ${status?.model_id}`
+                      : isLoading
+                      ? `Provisioning: ${status?.model_id || 'vLLM Container'}`
+                      : isError
+                      ? 'vLLM Service Error'
+                      : 'Local vLLM Server Offline'}
+                  </h3>
+                  <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                    isReady
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : isLoading
+                      ? 'bg-amber-50 text-amber-700 border-amber-200'
+                      : isError
+                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                      : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                  }`}>
+                    {isReady ? 'ONLINE' : isLoading ? 'STARTING' : isError ? 'ERROR' : 'STOPPED'}
+                  </span>
+                </div>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  {status?.message || 'No container running. Select a model below to launch.'}
+                </p>
+              </div>
+            </div>
+
+            {/* Actions for Active Server */}
+            <div className="flex items-center space-x-2">
+              {(isReady || isLoading) && (
+                <button
+                  type="button"
+                  onClick={handleStopServer}
+                  disabled={isStopping}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                >
+                  {isStopping ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3.5 h-3.5 fill-white" />}
+                  <span>Stop Server</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Details Bar */}
+          {isReady && (
+            <div className="pt-3 border-t border-zinc-100 grid grid-cols-3 gap-4 text-xs font-mono">
+              <div className="bg-zinc-50 p-2.5 rounded-xl border border-zinc-200/80">
+                <span className="text-[10px] text-zinc-400 uppercase font-sans font-bold block">OpenAI Endpoint</span>
+                <span className="text-zinc-800 font-semibold">{status?.endpoint || 'http://localhost:8001/v1'}</span>
+              </div>
+              <div className="bg-zinc-50 p-2.5 rounded-xl border border-zinc-200/80">
+                <span className="text-[10px] text-zinc-400 uppercase font-sans font-bold block">Host Port</span>
+                <span className="text-zinc-800 font-semibold">{status?.port || 8001}</span>
+              </div>
+              <div className="bg-zinc-50 p-2.5 rounded-xl border border-zinc-200/80">
+                <span className="text-[10px] text-zinc-400 uppercase font-sans font-bold block">Model Tag</span>
+                <span className="text-zinc-800 truncate block font-semibold">{status?.model_id}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Embedded Live Server Logs Box inside the Card */}
+          {(isReady || isLoading || logs.length > 0) && (
+            <div className="pt-2 border-t border-zinc-100 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-zinc-700 flex items-center gap-1.5 font-sans">
+                  <Terminal className="w-3.5 h-3.5 text-zinc-500" />
+                  <span>Container Logs ({logs.length} lines)</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowFullLogs(!showFullLogs)}
+                  className="text-[11px] text-indigo-600 hover:text-indigo-700 font-semibold flex items-center gap-1 cursor-pointer"
+                >
+                  <span>{showFullLogs ? 'Compact View' : 'Expand Logs'}</span>
+                  {showFullLogs ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                </button>
+              </div>
+
+              <div className={`p-3 bg-zinc-950 text-zinc-200 font-mono text-[11px] rounded-xl overflow-y-auto space-y-0.5 leading-relaxed selection:bg-indigo-600 transition-all ${
+                showFullLogs ? 'h-56' : 'h-24'
+              }`}>
+                {logs.length === 0 ? (
+                  <div className="text-zinc-500 italic">Waiting for container log output...</div>
+                ) : (
+                  logs.map((line, idx) => (
+                    <div key={idx} className="break-all whitespace-pre-wrap">
+                      {line}
+                    </div>
+                  ))
+                )}
+                <div ref={logsEndRef} />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Hugging Face Hub Catalog Browser Section */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-700 flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5 text-indigo-600" /> Hugging Face Hub Model Catalog
+            </h4>
+            <span className="text-[11px] text-zinc-400 font-mono">
+              Search and launch open-weights models into local vLLM container
+            </span>
+          </div>
+
+          <HuggingFaceCatalog
+            mode="deploy"
+            onDeployVLLM={handleStartModel}
+            activeVllmModelId={status?.model_id}
+            isVllmLoading={isLoading}
+          />
+        </div>
+      </div>
+    </div>
+  );
+};

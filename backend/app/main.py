@@ -33,6 +33,10 @@ async def lifespan(app: FastAPI):
     import backend.app.tools  # noqa: F401
 
     tool_registry.load_custom_tools()
+
+    from backend.app.vllm.manager import vllm_manager
+    import asyncio
+    asyncio.create_task(vllm_manager.check_and_sync_status())
     yield
     # Shutdown
 

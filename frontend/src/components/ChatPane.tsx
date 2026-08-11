@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Conversation, Message } from '../types';
+import { Conversation, Message, VLLMDeploymentProgress } from '../types';
 import { api } from '../api/client';
 import { useSSE } from '../hooks/useSSE';
 import { ToolCallCard } from './ToolCallCard';
@@ -15,7 +15,10 @@ import {
   Bot, 
   Loader2, 
   Sparkles,
-  Square
+  Square,
+  Play,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 import { useDialog } from '../context/DialogContext';
 
@@ -230,10 +233,63 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     Record<string, { name: string; args: string; output?: string; isError?: boolean }>
   >({});
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const isVllmAgent = Boolean(agentModel?.startsWith('vllm/'));
+  const vllmModelId = isVllmAgent && agentModel ? agentModel.slice('vllm/'.length) : null;
+  const [vllmStatus, setVllmStatus] = useState<VLLMDeploymentProgress | null>(null);
+  const [isStartingVllm, setIsStartingVllm] = useState(false);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  useEffect(() => {
+    if (!isVllmAgent) return;
+    api.getVLLMStatus()
+      .then(setVllmStatus)
+      .catch(() => {});
+
+    const es = new EventSource('/api/vllm/events');
+    const handleStatus = (e: MessageEvent) => {
+      try {
+        const payload = JSON.parse(e.data);
+        if (payload.data) setVllmStatus(payload.data);
+      } catch {}
+    };
+    es.addEventListener('status', handleStatus);
+    es.addEventListener('update', handleStatus);
+    return () => {
+      es.close();
+    };
+  }, [isVllmAgent, agentModel]);
+
+  const loadingStates = ['pulling_image', 'starting_container', 'loading'];
+  const isVllmModelReady = !isVllmAgent || (vllmStatus?.state === 'ready' && vllmStatus?.model_id === vllmModelId);
+  const isVllmModelLoading = isVllmAgent && (isStartingVllm || (vllmStatus !== null && loadingStates.includes(vllmStatus.state) && (vllmStatus.model_id === vllmModelId || !vllmStatus.model_id)));
+  const isVllmModelOffline = isVllmAgent && !isVllmModelReady && !isVllmModelLoading;
+
+  const handleStartVllmModel = async () => {
+    if (!vllmModelId) return;
+    setIsStartingVllm(true);
+    try {
+      const st = await api.deployVLLMModel({ model_id: vllmModelId });
+      setVllmStatus(st);
+    } catch (err) {
+      console.error('Failed to start vLLM model:', err);
+      dialog.alert({
+        title: 'Model Startup Failed',
+        message: `Could not launch ${vllmModelId}: ${err}`,
+        variant: 'danger',
+      });
+    } finally {
+      setIsStartingVllm(false);
+    }
+  };
+
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = (smooth = true) => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({
+        top: messagesContainerRef.current.scrollHeight,
+        behavior: smooth ? 'smooth' : 'auto',
+      });
+    }
   };
 
   const parseToolArguments = (name: string, argsStr: string, output?: string, isError?: boolean) => {
@@ -266,11 +322,22 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   const loadConversationData = async () => {
     if (!conversationId) {
       setMessages([]);
+      setIsSending(false);
       return;
     }
     try {
       const data = await api.getConversation(conversationId);
-      setMessages(data.messages);
+      setMessages((prev) => {
+        const dbMsgs = data.messages || [];
+        const pendingOptimistic = prev.filter(
+          (pm) => pm.id?.startsWith('optimistic_') && !dbMsgs.some((dm) => dm.role === 'user' && dm.content === pm.content)
+        );
+        return [...dbMsgs, ...pendingOptimistic];
+      });
+
+      if (data.conversation?.status === 'running') {
+        setIsSending(true);
+      }
 
       // Scan existing messages for tool calls and text drafts
       for (const msg of data.messages) {
@@ -304,7 +371,6 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     setStreamingTokenText('');
     setStreamingThinkingText('');
     setActiveToolExecutions({});
-    setIsSending(false);
   }, [conversationId]);
 
   useEffect(() => {
@@ -313,9 +379,11 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
   useSSE(conversationId, {
     onThinking: (chunk) => {
+      setIsSending(true);
       setStreamingThinkingText((prev) => prev + chunk);
     },
     onToken: (token) => {
+      setIsSending(true);
       setStreamingTokenText((prev) => {
         const next = prev + token;
         if (onToolDraftDetected) {
@@ -334,6 +402,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       });
     },
     onToolCallDelta: (delta) => {
+      setIsSending(true);
       setActiveToolExecutions((prev) => {
         const existing = prev[delta.id] || { name: delta.name || '', args: '' };
         const combinedArgs = existing.args + (delta.arguments || '');
@@ -352,6 +421,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       });
     },
     onToolCallExecuting: (data) => {
+      setIsSending(true);
       parseToolArguments(data.name, data.arguments);
       setActiveToolExecutions((prev) => ({
         ...prev,
@@ -394,7 +464,18 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       onRefreshConversations?.();
     },
     onUserMessage: (msg) => {
-      setMessages((prev) => [...prev, msg]);
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === msg.id)) return prev;
+        const optIndex = prev.findIndex(
+          (m) => m.id?.startsWith('optimistic_') && m.content === msg.content
+        );
+        if (optIndex !== -1) {
+          const next = [...prev];
+          next[optIndex] = msg;
+          return next;
+        }
+        return [...prev, msg];
+      });
     },
     onError: (err) => {
       setIsSending(false);
@@ -408,7 +489,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!inputContent.trim() || isSending) return;
+    if (!inputContent.trim() || isSending || (isVllmAgent && !isVllmModelReady)) return;
 
     const text = inputContent.trim();
     setInputContent('');
@@ -577,7 +658,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   const groupedTurns = groupMessagesIntoTurns(messages);
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-zinc-50 overflow-hidden">
+    <div className="flex-1 flex flex-col h-full min-h-0 bg-zinc-50 overflow-hidden">
       {/* Optional Sub-Header */}
       {showHeader && (
         <div className="p-3 border-b border-zinc-200 bg-white flex items-center justify-between text-xs font-bold uppercase tracking-wider text-zinc-700 shrink-0">
@@ -592,7 +673,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       )}
 
       {/* Messages Scroll Area - Constrained to max-w-3xl for optimal line length and reading ergonomics */}
-      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
+      <div ref={messagesContainerRef} className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-6">
         <div className="max-w-3xl mx-auto w-full space-y-6">
           {groupedTurns.length === 0 && !streamingTokenText && !streamingThinkingText && Object.keys(activeToolExecutions).length === 0 && (
             <div className="text-center py-20 space-y-3">
@@ -672,7 +753,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                   <div className="w-7 h-7 rounded-xl bg-indigo-50 border border-indigo-200/80 flex items-center justify-center text-indigo-600 shrink-0">
                     <Loader2 className="w-4 h-4 animate-spin" />
                   </div>
-                  <span className="text-xs font-medium text-zinc-500">{agentName} is thinking...</span>
+                  <span className="text-xs font-medium text-zinc-500">Reaching model...</span>
                 </div>
               )}
 
@@ -715,13 +796,41 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
               )}
             </div>
           )}
-
-          <div ref={messagesEndRef} />
         </div>
       </div>
 
       {/* Input Composer - Constrained to match max-w-3xl */}
       <div className="p-4 border-t border-zinc-200 bg-white shrink-0">
+        {/* Model Status Banner for local vLLM agents */}
+        {isVllmModelOffline && (
+          <div className="max-w-3xl mx-auto mb-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center justify-between shadow-2xs">
+            <div className="flex items-center space-x-2">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                Local model <code className="font-mono font-bold text-amber-950">{vllmModelId}</code> is offline.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleStartVllmModel}
+              disabled={isStartingVllm}
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold transition-colors shadow-xs cursor-pointer"
+            >
+              {isStartingVllm ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-white" />}
+              <span>Start Model</span>
+            </button>
+          </div>
+        )}
+
+        {isVllmModelLoading && (
+          <div className="max-w-3xl mx-auto mb-3 p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs flex items-center space-x-2.5 shadow-2xs">
+            <Loader2 className="w-4 h-4 animate-spin text-indigo-600 shrink-0" />
+            <span className="truncate">
+              Local model <code className="font-mono font-bold text-indigo-950">{vllmModelId}</code> is starting up ({vllmStatus?.message || 'Provisioning container...'})
+            </span>
+          </div>
+        )}
+
         <form
           onSubmit={handleSend}
           className="max-w-3xl mx-auto relative bg-zinc-50 border border-zinc-300 rounded-xl overflow-hidden focus-within:bg-white focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-600 shadow-xs transition-all"
@@ -731,8 +840,15 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
             onChange={(e) => setInputContent(e.target.value)}
             onKeyDown={handleKeyDown}
             rows={2}
-            placeholder={placeholder || `Message ${agentName}... (Enter to send, Shift+Enter for new line)`}
-            className="w-full bg-transparent px-3.5 py-2.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none resize-none leading-relaxed"
+            disabled={isVllmModelOffline || isVllmModelLoading}
+            placeholder={
+              isVllmModelOffline
+                ? `Local model ${vllmModelId} is offline. Click 'Start Model' above to begin...`
+                : isVllmModelLoading
+                ? `Local model ${vllmModelId} is initializing...`
+                : placeholder || `Message ${agentName}... (Enter to send, Shift+Enter for new line)`
+            }
+            className="w-full bg-transparent px-3.5 py-2.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none resize-none leading-relaxed disabled:opacity-50 disabled:cursor-not-allowed"
           />
 
           <div className="flex items-center justify-between px-3.5 py-2 bg-zinc-100/50 border-t border-zinc-200">
@@ -744,6 +860,21 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                   ({agentModel.split('/')[1] || agentModel})
                 </span>
               )}
+              {isVllmAgent && (
+                isVllmModelReady ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                    <CheckCircle2 className="w-2.5 h-2.5" /> Serving
+                  </span>
+                ) : isVllmModelLoading ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                    <Loader2 className="w-2.5 h-2.5 animate-spin" /> Loading
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-zinc-600 bg-zinc-200 border border-zinc-300 px-2 py-0.5 rounded-full">
+                    Offline
+                  </span>
+                )
+              )}
             </div>
 
             <div className="flex items-center space-x-2">
@@ -751,19 +882,29 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                 <button
                   type="button"
                   onClick={handleCancelGeneration}
-                  className="inline-flex items-center space-x-1 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition-colors shadow-xs"
+                  className="inline-flex items-center space-x-1 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition-colors shadow-xs cursor-pointer"
                 >
                   <Square className="w-3 h-3 fill-white" />
                   <span>Stop</span>
                 </button>
+              ) : isVllmModelOffline ? (
+                <button
+                  type="button"
+                  onClick={handleStartVllmModel}
+                  disabled={isStartingVllm}
+                  className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white transition-colors shadow-xs cursor-pointer"
+                >
+                  {isStartingVllm ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-white" />}
+                  <span>Start Model</span>
+                </button>
               ) : (
                 <button
                   type="submit"
-                  disabled={!inputContent.trim()}
-                  className="inline-flex items-center space-x-1 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white transition-colors shadow-xs"
+                  disabled={!inputContent.trim() || isVllmModelLoading}
+                  className="inline-flex items-center space-x-1 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white transition-colors shadow-xs cursor-pointer"
                 >
-                  <span>Send</span>
-                  <Send className="w-3 h-3" />
+                  <span>{isVllmModelLoading ? 'Model Loading...' : 'Send'}</span>
+                  {isVllmModelLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
                 </button>
               )}
             </div>

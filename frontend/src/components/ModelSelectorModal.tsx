@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ProviderModels, ModelItem, HuggingFaceModelSearchResult, VLLMDeploymentProgress } from '../types';
 import { api } from '../api/client';
 import { VLLMDeploymentModal } from './VLLMDeploymentModal';
+import { HuggingFaceCatalog } from './HuggingFaceCatalog';
 import { 
   X, 
   Search, 
@@ -316,139 +317,24 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
               </div>
             ) : (
               /* Tab 5: Hugging Face Live Hub Search & Loader */
-              <div className="space-y-4">
-                {/* Hugging Face Search Bar */}
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    handleSearchHuggingFace(hfSearchQuery);
-                  }}
-                  className="flex gap-2"
-                >
-                  <div className="relative flex-1">
-                    <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400" />
-                    <input
-                      type="text"
-                      value={hfSearchQuery}
-                      onChange={(e) => setHfSearchQuery(e.target.value)}
-                      placeholder="Search Hugging Face Hub (e.g. qwen2.5-coder, mistral, llama-3, deepseek)..."
-                      className="w-full bg-white border border-zinc-200 rounded-xl pl-9 pr-4 py-2.5 text-xs text-zinc-900 focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 shadow-xs"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={isSearchingHf || !hfSearchQuery.trim()}
-                    className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs"
-                  >
-                    {isSearchingHf ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <Search className="w-3.5 h-3.5" />
-                    )}
-                    <span>Search Hub</span>
-                  </button>
-                </form>
-
-                {/* Hugging Face Hub Results */}
-                {isSearchingHf ? (
-                  <div className="py-16 text-center text-zinc-500 text-xs flex flex-col items-center justify-center space-y-2">
-                    <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
-                    <span>Querying Hugging Face text-generation models...</span>
-                  </div>
-                ) : hfResults.length === 0 ? (
-                  <div className="py-16 text-center text-zinc-400 text-xs">
-                    No Hugging Face models loaded. Type a keyword above and click Search Hub.
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {hfResults.map((hfModel) => {
-                      const isHfInferenceStaged = candidateModel === hfModel.model_string_hf && candidateHfMode === 'hf';
-                      const isVllmStaged = candidateModel === hfModel.model_string_vllm && candidateHfMode === 'vllm';
-                      const isCardStaged = isHfInferenceStaged || isVllmStaged;
-
-                      return (
-                        <div
-                          key={hfModel.id}
-                          className={`p-4 rounded-xl border transition-all flex flex-col justify-between bg-white shadow-xs ${
-                            isCardStaged
-                              ? 'border-indigo-600 ring-2 ring-indigo-500/20 bg-indigo-50/20'
-                              : 'border-zinc-200 hover:border-zinc-300'
-                          }`}
-                        >
-                          <div>
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="font-bold text-xs text-zinc-900 truncate max-w-[240px]">
-                                {hfModel.name}
-                              </span>
-                              <div className="flex items-center space-x-2 text-[10px] text-zinc-500 font-mono">
-                                <span className="flex items-center gap-0.5">
-                                  <Download className="w-3 h-3 text-zinc-400" />
-                                  {hfModel.downloads > 1000 ? `${(hfModel.downloads / 1000).toFixed(0)}k` : hfModel.downloads}
-                                </span>
-                                <span className="flex items-center gap-0.5">
-                                  <Heart className="w-3 h-3 text-rose-400 fill-rose-400" />
-                                  {hfModel.likes}
-                                </span>
-                              </div>
-                            </div>
-
-                            <p className="text-[10px] text-zinc-500 font-mono mb-2">
-                              {hfModel.pipeline_tag || 'text-generation'}
-                            </p>
-                          </div>
-
-                          {/* Deployment Options for this Hugging Face Model */}
-                          <div className="pt-2 border-t border-zinc-100 space-y-1.5">
-                            <div className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
-                              Choose Execution Mode:
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setCandidateModel(hfModel.model_string_hf);
-                                  setCandidateHfModel(hfModel);
-                                  setCandidateHfMode('hf');
-                                }}
-                                className={`px-2.5 py-2 rounded-lg text-[11px] font-medium border text-left flex items-center justify-between transition-colors ${
-                                  isHfInferenceStaged
-                                    ? 'bg-indigo-600 text-white border-indigo-600 font-bold shadow-xs'
-                                    : 'bg-zinc-50 hover:bg-zinc-100 border-zinc-200 text-zinc-700'
-                                }`}
-                                title="Stage for Hugging Face Serverless Inference API"
-                              >
-                                <span>🤗 HF Inference</span>
-                                {isHfInferenceStaged && <Check className="w-3 h-3" />}
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setCandidateModel(hfModel.model_string_vllm);
-                                  setCandidateHfModel(hfModel);
-                                  setCandidateHfMode('vllm');
-                                }}
-                                className={`px-2.5 py-2 rounded-lg text-[11px] font-medium border text-left flex items-center justify-between transition-colors ${
-                                  isVllmStaged
-                                    ? 'bg-indigo-600 text-white border-indigo-600 font-bold shadow-xs'
-                                    : 'bg-indigo-50/70 hover:bg-indigo-100/70 border-indigo-200 text-indigo-800'
-                                }`}
-                                title="Stage for local vLLM Docker container download & serving"
-                              >
-                                <span className="flex items-center gap-1 font-semibold">
-                                  <Rocket className="w-3 h-3" /> Run with local vLLM
-                                </span>
-                                {isVllmStaged && <Check className="w-3 h-3" />}
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+              <HuggingFaceCatalog
+                mode="select"
+                selectedModelString={candidateModel}
+                selectedHfMode={candidateHfMode}
+                onSelectModel={(hfModel, execMode) => {
+                  if (execMode === 'hf') {
+                    setCandidateModel(hfModel.model_string_hf);
+                    setCandidateHfModel(hfModel);
+                    setCandidateHfMode('hf');
+                  } else {
+                    setCandidateModel(hfModel.model_string_vllm);
+                    setCandidateHfModel(hfModel);
+                    setCandidateHfMode('vllm');
+                  }
+                }}
+                activeVllmModelId={vllmStatus?.model_id}
+                isVllmLoading={['pulling_image', 'starting_container', 'loading'].includes(vllmStatus?.state || '')}
+              />
             )}
           </div>
 

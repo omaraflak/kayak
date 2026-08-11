@@ -19,7 +19,7 @@ async def get_vllm_status() -> VLLMDeploymentProgress:
     Returns:
         VLLMDeploymentProgress telemetry object.
     """
-    return vllm_manager.get_status()
+    return await vllm_manager.check_and_sync_status()
 
 
 @router.post("/deploy", response_model=VLLMDeploymentProgress)
@@ -47,6 +47,12 @@ async def stop_vllm_server() -> Dict[str, str]:
     """
     await vllm_manager.stop_server()
     return {"status": "stopped", "message": "vLLM server container stopped."}
+
+
+@router.get("/models")
+async def get_vllm_served_models():
+    """Returns the list of active models served by the running vLLM server."""
+    return await vllm_manager.list_served_models()
 
 
 @router.get("/events")

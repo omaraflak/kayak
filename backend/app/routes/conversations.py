@@ -37,6 +37,9 @@ _conversation_event_queues: Dict[str, List[asyncio.Queue[Dict[str, Any]]]] = {}
 # Active running agent tasks per conversation for cancellation
 _running_agent_tasks: Dict[str, asyncio.Task[Any]] = {}
 
+# In-progress turn buffers to replay full thoughts/tokens upon client reconnect
+_active_turn_buffers: Dict[str, Dict[str, Any]] = {}
+
 
 def broadcast_event(conversation_id: str, event: Dict[str, Any]) -> None:
     """Pushes a real-time event to all listening SSE client queues for a conversation.
@@ -195,6 +198,7 @@ async def _run_agent_turn(conversation_id: str, agent_id: str) -> None:
             return
 
         workspace_directory = settings.WORKSPACES_DIR / conversation_id
+        _active_turn_buffers[conversation_id] = {"thinking": "", "tokens": ""}
 
         async for event in agent_engine.run(
             conversation_id=conversation_id,
@@ -202,6 +206,12 @@ async def _run_agent_turn(conversation_id: str, agent_id: str) -> None:
             workspace_dir=workspace_directory,
             container_id=conversation.container_id,
         ):
+            if conversation_id in _active_turn_buffers:
+                if event.get("type") == "thinking":
+                    _active_turn_buffers[conversation_id]["thinking"] += event.get("content", "")
+                elif event.get("type") == "token":
+                    _active_turn_buffers[conversation_id]["tokens"] += event.get("content", "")
+
             broadcast_event(conversation_id, event)
     except asyncio.CancelledError:
         await update_conversation(
@@ -214,6 +224,7 @@ async def _run_agent_turn(conversation_id: str, agent_id: str) -> None:
         )
         broadcast_event(conversation_id, {"type": "error", "error": str(error)})
     finally:
+        _active_turn_buffers.pop(conversation_id, None)
         _running_agent_tasks.pop(conversation_id, None)
 
 
@@ -319,6 +330,14 @@ async def stream_conversation_events(conversation_id: str, request: Request) -> 
         try:
             # Send initial connection confirmation event
             yield f"data: {json.dumps({'type': 'connected', 'status': conversation.status.value})}\n\n"
+
+            # Replay any in-progress turn thoughts or tokens for reconnecting/refreshed clients
+            active_buffer = _active_turn_buffers.get(conversation_id)
+            if active_buffer:
+                if active_buffer.get("thinking"):
+                    yield f"data: {json.dumps({'type': 'thinking', 'content': active_buffer['thinking']})}\n\n"
+                if active_buffer.get("tokens"):
+                    yield f"data: {json.dumps({'type': 'token', 'content': active_buffer['tokens']})}\n\n"
 
             while True:
                 if await request.is_disconnected():

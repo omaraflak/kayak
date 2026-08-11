@@ -8,7 +8,7 @@ export type TaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
 export type ToolPermission = 'auto_approve' | 'ask_user' | 'denied';
 
-export type NavigationTab = 'chat' | 'agents' | 'skills' | 'tools' | 'tasks' | 'settings';
+export type NavigationTab = 'chat' | 'agents' | 'skills' | 'tools' | 'tasks' | 'models' | 'settings';
 
 export type JSONSchemaType = 'string' | 'integer' | 'number' | 'boolean' | 'array' | 'object';
 

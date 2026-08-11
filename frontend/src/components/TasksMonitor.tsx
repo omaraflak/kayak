@@ -64,7 +64,7 @@ export const TasksMonitor: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex h-screen bg-zinc-50 overflow-hidden">
+    <div className="flex-1 flex h-full min-h-0 bg-zinc-50 overflow-hidden">
       {/* Task List Sidebar */}
       <div className="w-80 border-r border-zinc-200 bg-white flex flex-col shrink-0">
         <div className="p-4 border-b border-zinc-200 flex items-center justify-between">
@@ -130,7 +130,7 @@ export const TasksMonitor: React.FC = () => {
       </div>
 
       {/* Task Log Inspector */}
-      <div className="flex-1 flex flex-col h-screen overflow-hidden">
+      <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden">
         {selectedTask ? (
           <>
             {/* Header */}

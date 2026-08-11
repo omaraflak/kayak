@@ -225,7 +225,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex h-screen bg-zinc-50 overflow-hidden">
+    <div className="flex-1 flex h-full min-h-0 bg-zinc-50 overflow-hidden">
       {/* Model Selection Modal */}
       <ModelSelectorModal
         isOpen={isModelModalOpen}
@@ -293,7 +293,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
       </div>
 
       {/* Right Column: Rigid Docked Top Header + Scrollable Form */}
-      <div className="flex-1 flex flex-col h-screen overflow-hidden">
+      <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden">
         {/* Top Header rigidly docked with 0 space above */}
         <div className="h-16 border-b border-zinc-200 px-8 flex items-center justify-between bg-white shrink-0">
           <div>
