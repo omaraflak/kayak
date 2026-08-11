@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 
 export interface SSECallbacks {
   onToken?: (token: string) => void;
+  onThinking?: (token: string) => void;
   onToolCallDelta?: (delta: { id: string; name?: string; arguments?: string }) => void;
   onToolCallExecuting?: (data: { id: string; name: string; arguments: string }) => void;
   onToolCallResult?: (data: { id: string; name: string; output: string; is_error: boolean }) => void;
@@ -26,6 +27,9 @@ export function useSSE(conversationId: string | null, callbacks: SSECallbacks) {
         const data = JSON.parse(event.data);
 
         switch (data.type) {
+          case 'thinking':
+            callbacksRef.current.onThinking?.(data.content);
+            break;
           case 'token':
             callbacksRef.current.onToken?.(data.content);
             break;

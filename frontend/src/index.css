@@ -10,7 +10,7 @@
 
 @layer base {
   body {
-    @apply bg-zinc-50 text-zinc-900 selection:bg-teal-100 selection:text-teal-900;
+    @apply bg-zinc-50 text-zinc-900 selection:bg-indigo-100 selection:text-indigo-900;
   }
 }
 

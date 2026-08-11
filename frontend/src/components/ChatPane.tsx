@@ -8,6 +8,7 @@ import { api } from '../api/client';
 import { useSSE } from '../hooks/useSSE';
 import { ToolCallCard } from './ToolCallCard';
 import { ToolCallsAccordion } from './ToolCallsAccordion';
+import { ThinkingAccordion } from './ThinkingAccordion';
 import { CodeBlock } from './CodeBlock';
 import { 
   Send, 
@@ -120,6 +121,7 @@ interface GroupedTurn {
   id: string;
   role: 'user' | 'assistant';
   content?: string;
+  thinking?: string;
   toolCalls: {
     id: string;
     name: string;
@@ -164,6 +166,7 @@ export function groupMessagesIntoTurns(messages: Message[]): GroupedTurn[] {
           id: msg.id || `assistant_${index}`,
           role: 'assistant',
           content: msg.content || '',
+          thinking: msg.thinking || undefined,
           toolCalls: [],
         };
       } else {
@@ -171,6 +174,11 @@ export function groupMessagesIntoTurns(messages: Message[]): GroupedTurn[] {
           currentAssistantTurn.content = currentAssistantTurn.content 
             ? `${currentAssistantTurn.content}\n\n${msg.content}`
             : msg.content;
+        }
+        if (msg.thinking) {
+          currentAssistantTurn.thinking = currentAssistantTurn.thinking
+            ? `${currentAssistantTurn.thinking}\n\n${msg.thinking}`
+            : msg.thinking;
         }
       }
 
@@ -217,6 +225,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   const [inputContent, setInputContent] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [streamingTokenText, setStreamingTokenText] = useState('');
+  const [streamingThinkingText, setStreamingThinkingText] = useState('');
   const [activeToolExecutions, setActiveToolExecutions] = useState<
     Record<string, { name: string; args: string; output?: string; isError?: boolean }>
   >({});
@@ -293,15 +302,19 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   useEffect(() => {
     loadConversationData();
     setStreamingTokenText('');
+    setStreamingThinkingText('');
     setActiveToolExecutions({});
     setIsSending(false);
   }, [conversationId]);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, streamingTokenText, activeToolExecutions]);
+  }, [messages, streamingTokenText, streamingThinkingText, activeToolExecutions]);
 
   useSSE(conversationId, {
+    onThinking: (chunk) => {
+      setStreamingThinkingText((prev) => prev + chunk);
+    },
     onToken: (token) => {
       setStreamingTokenText((prev) => {
         const next = prev + token;
@@ -367,6 +380,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     onDone: () => {
       setIsSending(false);
       setStreamingTokenText('');
+      setStreamingThinkingText('');
       setActiveToolExecutions({});
       loadConversationData();
       onRefreshConversations?.();
@@ -374,6 +388,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     onCancelled: () => {
       setIsSending(false);
       setStreamingTokenText('');
+      setStreamingThinkingText('');
       setActiveToolExecutions({});
       loadConversationData();
       onRefreshConversations?.();
@@ -398,6 +413,16 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     const text = inputContent.trim();
     setInputContent('');
     setIsSending(true);
+
+    // Optimistically insert user message immediately for instant UI feedback
+    const tempUserMsg: Message = {
+      id: `optimistic_${Date.now()}`,
+      conversation_id: conversationId || '',
+      role: 'user',
+      content: text,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, tempUserMsg]);
 
     try {
       if (!conversationId) {
@@ -431,6 +456,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       await api.cancelConversation(conversationId);
       setIsSending(false);
       setStreamingTokenText('');
+      setStreamingThinkingText('');
       setActiveToolExecutions({});
       loadConversationData();
       onRefreshConversations?.();
@@ -449,29 +475,29 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   // Markdown renderer for Assistant messages (on light background)
   const assistantMarkdownComponents = {
     h1({ children, ...props }: any) {
-      return <h1 className="text-lg font-bold text-zinc-950 mt-6 mb-3 tracking-tight" {...props}>{children}</h1>;
+      return <h1 className="text-xl font-bold text-zinc-950 mt-6 mb-3 tracking-tight" {...props}>{children}</h1>;
     },
     h2({ children, ...props }: any) {
-      return <h2 className="text-base font-bold text-zinc-900 mt-5 mb-2 tracking-tight" {...props}>{children}</h2>;
+      return <h2 className="text-lg font-bold text-zinc-900 mt-5 mb-2 tracking-tight" {...props}>{children}</h2>;
     },
     h3({ children, ...props }: any) {
-      return <h3 className="text-sm font-bold text-zinc-900 mt-4 mb-1.5" {...props}>{children}</h3>;
+      return <h3 className="text-base font-semibold text-zinc-900 mt-4 mb-1.5" {...props}>{children}</h3>;
     },
     p({ children, ...props }: any) {
-      return <p className="mb-3.5 text-zinc-800 text-[14px] leading-7 font-normal" {...props}>{children}</p>;
+      return <p className="mb-3.5 text-zinc-850 text-[15px] leading-relaxed font-normal" {...props}>{children}</p>;
     },
     ul({ children, ...props }: any) {
-      return <ul className="list-disc pl-5 my-3 space-y-1.5 text-zinc-800 text-[14px] leading-7" {...props}>{children}</ul>;
+      return <ul className="list-disc pl-5 my-3 space-y-1.5 text-zinc-850 text-[15px] leading-relaxed" {...props}>{children}</ul>;
     },
     ol({ children, ...props }: any) {
-      return <ol className="list-decimal pl-5 my-3 space-y-1.5 text-zinc-800 text-[14px] leading-7" {...props}>{children}</ol>;
+      return <ol className="list-decimal pl-5 my-3 space-y-1.5 text-zinc-850 text-[15px] leading-relaxed" {...props}>{children}</ol>;
     },
     li({ children, ...props }: any) {
-      return <li className="leading-relaxed" {...props}>{children}</li>;
+      return <li className="leading-relaxed text-[15px]" {...props}>{children}</li>;
     },
     blockquote({ children, ...props }: any) {
       return (
-        <blockquote className="border-l-3 border-indigo-500 pl-4 py-1.5 my-3.5 text-zinc-700 bg-indigo-50/40 rounded-r-xl italic text-[13.5px] leading-relaxed" {...props}>
+        <blockquote className="border-l-3 border-indigo-500 pl-4 py-1.5 my-3.5 text-zinc-700 bg-indigo-50/40 rounded-r-xl italic text-[14px] leading-relaxed" {...props}>
           {children}
         </blockquote>
       );
@@ -505,7 +531,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
         );
       }
       return (
-        <code className="px-1.5 py-0.5 rounded-md bg-zinc-200/70 border border-zinc-300/60 text-zinc-900 font-mono text-[12px]" {...props}>
+        <code className="px-1.5 py-0.5 rounded-md bg-zinc-200/70 border border-zinc-300/60 text-zinc-900 font-mono text-[13px]" {...props}>
           {children}
         </code>
       );
@@ -515,25 +541,25 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   // Markdown renderer for User message bubble (pure white text on dark background)
   const userMarkdownComponents = {
     h1({ children, ...props }: any) {
-      return <h1 className="text-base font-bold text-white my-2" {...props}>{children}</h1>;
+      return <h1 className="text-lg font-bold text-white my-2" {...props}>{children}</h1>;
     },
     h2({ children, ...props }: any) {
-      return <h2 className="text-sm font-bold text-white my-1.5" {...props}>{children}</h2>;
+      return <h2 className="text-base font-bold text-white my-1.5" {...props}>{children}</h2>;
     },
     h3({ children, ...props }: any) {
-      return <h3 className="text-xs font-bold text-white my-1" {...props}>{children}</h3>;
+      return <h3 className="text-sm font-bold text-white my-1" {...props}>{children}</h3>;
     },
     p({ children, ...props }: any) {
-      return <p className="text-white text-[14px] leading-relaxed mb-2 last:mb-0 font-normal" {...props}>{children}</p>;
+      return <p className="text-white text-[15px] leading-relaxed mb-2 last:mb-0 font-normal" {...props}>{children}</p>;
     },
     ul({ children, ...props }: any) {
-      return <ul className="list-disc pl-5 my-2 text-white text-[14px] space-y-1" {...props}>{children}</ul>;
+      return <ul className="list-disc pl-5 my-2 text-white text-[15px] space-y-1" {...props}>{children}</ul>;
     },
     ol({ children, ...props }: any) {
-      return <ol className="list-decimal pl-5 my-2 text-white text-[14px] space-y-1" {...props}>{children}</ol>;
+      return <ol className="list-decimal pl-5 my-2 text-white text-[15px] space-y-1" {...props}>{children}</ol>;
     },
     li({ children, ...props }: any) {
-      return <li className="text-white leading-relaxed" {...props}>{children}</li>;
+      return <li className="text-white leading-relaxed text-[15px]" {...props}>{children}</li>;
     },
     strong({ children, ...props }: any) {
       return <strong className="font-bold text-white" {...props}>{children}</strong>;
@@ -541,7 +567,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     code({ node, inline, className, children, ...props }: any) {
       const codeStr = String(children).replace(/\n$/, '');
       return (
-        <code className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-100 font-mono text-[12px]" {...props}>
+        <code className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-100 font-mono text-[13px]" {...props}>
           {codeStr}
         </code>
       );
@@ -565,114 +591,140 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
         </div>
       )}
 
-      {/* Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
-        {groupedTurns.length === 0 && !streamingTokenText && Object.keys(activeToolExecutions).length === 0 && (
-          <div className="text-center py-20 space-y-3">
-            <div className="w-12 h-12 rounded-2xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600 mx-auto shadow-xs">
-              <Sparkles className="w-6 h-6" />
-            </div>
-            <h3 className="text-sm font-bold text-zinc-900">{headerTitle || `Chat with ${agentName}`}</h3>
-            <p className="text-xs text-zinc-500 max-w-sm mx-auto leading-relaxed">
-              {headerSubtitle || 'Type your instructions below to begin interactive agent synthesis and refinement.'}
-            </p>
-          </div>
-        )}
-
-        {groupedTurns.map((turn) => {
-          if (turn.role === 'user') {
-            return (
-              <div key={turn.id} className="flex justify-end pt-2">
-                <div className="max-w-2xl bg-zinc-900 text-white rounded-2xl rounded-tr-xs px-5 py-3 text-[14px] shadow-xs leading-relaxed">
-                  <ReactMarkdown 
-                    remarkPlugins={[remarkGfm, remarkMath]} 
-                    rehypePlugins={[rehypeKatex]}
-                    components={userMarkdownComponents}
-                  >
-                    {turn.content || ''}
-                  </ReactMarkdown>
-                </div>
+      {/* Messages Scroll Area - Constrained to max-w-3xl for optimal line length and reading ergonomics */}
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
+        <div className="max-w-3xl mx-auto w-full space-y-6">
+          {groupedTurns.length === 0 && !streamingTokenText && !streamingThinkingText && Object.keys(activeToolExecutions).length === 0 && (
+            <div className="text-center py-20 space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600 mx-auto shadow-xs">
+                <Sparkles className="w-6 h-6" />
               </div>
-            );
-          }
+              <h3 className="text-sm font-bold text-zinc-900">{headerTitle || `Chat with ${agentName}`}</h3>
+              <p className="text-xs text-zinc-500 max-w-sm mx-auto leading-relaxed">
+                {headerSubtitle || 'Type your instructions below to begin interactive agent synthesis and refinement.'}
+              </p>
+            </div>
+          )}
 
-          if (turn.role === 'assistant') {
-            return (
-              <div key={turn.id} className="w-full space-y-2 pt-2">
-                {/* Direct Response Text on Background without enclosing white card or icons */}
-                {turn.content && (
-                  <div className="text-zinc-800 text-[14px] leading-7">
+          {groupedTurns.map((turn) => {
+            if (turn.role === 'user') {
+              return (
+                <div key={turn.id} className="flex justify-end pt-2">
+                  <div className="max-w-2xl bg-zinc-900 text-white rounded-2xl rounded-tr-xs px-5 py-3 text-[15px] shadow-xs leading-relaxed">
                     <ReactMarkdown 
                       remarkPlugins={[remarkGfm, remarkMath]} 
                       rehypePlugins={[rehypeKatex]}
-                      components={assistantMarkdownComponents}
+                      components={userMarkdownComponents}
                     >
-                      {turn.content}
+                      {turn.content || ''}
                     </ReactMarkdown>
                   </div>
-                )}
+                </div>
+              );
+            }
 
-                {/* Collapsible Dropdown Button for Tool Calls */}
-                {turn.toolCalls && turn.toolCalls.length > 0 && (
-                  <ToolCallsAccordion
-                    toolCalls={turn.toolCalls.map((tc) => ({
-                      id: tc.id,
-                      name: tc.name,
-                      argumentsStr: tc.argumentsStr,
-                      output: tc.output,
-                      isError: tc.isError,
-                    }))}
-                  />
-                )}
-              </div>
-            );
-          }
+            if (turn.role === 'assistant') {
+              return (
+                <div key={turn.id} className="w-full space-y-2 pt-2">
+                  {/* Collapsible Accordion for Thinking / Reasoning Tokens */}
+                  {turn.thinking && (
+                    <ThinkingAccordion content={turn.thinking} />
+                  )}
 
-          return null;
-        })}
+                  {/* Direct Response Text on Background without enclosing white card or icons */}
+                  {turn.content && (
+                    <div className="text-zinc-800 text-[15px] leading-relaxed">
+                      <ReactMarkdown 
+                        remarkPlugins={[remarkGfm, remarkMath]} 
+                        rehypePlugins={[rehypeKatex]}
+                        components={assistantMarkdownComponents}
+                      >
+                        {turn.content}
+                      </ReactMarkdown>
+                    </div>
+                  )}
 
-        {/* Live Streaming Active Turn */}
-        {(streamingTokenText || Object.keys(activeToolExecutions).length > 0) && (
-          <div className="w-full space-y-2 pt-2 animate-fade-in">
-            {/* Streaming token text directly on background */}
-            {streamingTokenText && (
-              <div className="text-zinc-800 text-[14px] leading-7">
-                <ReactMarkdown 
-                  remarkPlugins={[remarkGfm, remarkMath]} 
-                  rehypePlugins={[rehypeKatex]}
-                  components={assistantMarkdownComponents}
-                >
-                  {streamingTokenText}
-                </ReactMarkdown>
-              </div>
-            )}
+                  {/* Collapsible Dropdown Button for Tool Calls */}
+                  {turn.toolCalls && turn.toolCalls.length > 0 && (
+                    <ToolCallsAccordion
+                      toolCalls={turn.toolCalls.map((tc) => ({
+                        id: tc.id,
+                        name: tc.name,
+                        argumentsStr: tc.argumentsStr,
+                        output: tc.output,
+                        isError: tc.isError,
+                      }))}
+                    />
+                  )}
+                </div>
+              );
+            }
 
-            {/* Active Executing Tool Calls Live */}
-            {Object.keys(activeToolExecutions).length > 0 && (
-              <div className="space-y-2 pt-1">
-                {Object.entries(activeToolExecutions).map(([id, t]) => (
-                  <ToolCallCard
-                    key={id}
-                    name={t.name}
-                    argumentsStr={t.args}
-                    output={t.output}
-                    isExecuting={!t.output}
-                    isError={t.isError}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+            return null;
+          })}
 
-        <div ref={messagesEndRef} />
+          {/* Live Streaming Active Turn */}
+          {(isSending || streamingTokenText || streamingThinkingText || Object.keys(activeToolExecutions).length > 0) && (
+            <div className="w-full space-y-2 pt-2 animate-fade-in">
+              {/* Agent Preparing / Thinking Loader before first token arrives */}
+              {isSending && !streamingTokenText && !streamingThinkingText && Object.keys(activeToolExecutions).length === 0 && (
+                <div className="flex items-center space-x-2.5 py-3 text-zinc-500 animate-pulse">
+                  <div className="w-7 h-7 rounded-xl bg-indigo-50 border border-indigo-200/80 flex items-center justify-center text-indigo-600 shrink-0">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  </div>
+                  <span className="text-xs font-medium text-zinc-500">{agentName} is thinking...</span>
+                </div>
+              )}
+
+              {/* Live Streaming Thinking Process */}
+              {streamingThinkingText && (
+                <ThinkingAccordion
+                  content={streamingThinkingText}
+                  isThinking={!streamingTokenText}
+                  defaultExpanded={true}
+                />
+              )}
+
+              {/* Streaming token text directly on background */}
+              {streamingTokenText && (
+                <div className="text-zinc-800 text-[15px] leading-relaxed">
+                  <ReactMarkdown 
+                    remarkPlugins={[remarkGfm, remarkMath]} 
+                    rehypePlugins={[rehypeKatex]}
+                    components={assistantMarkdownComponents}
+                  >
+                    {streamingTokenText}
+                  </ReactMarkdown>
+                </div>
+              )}
+
+              {/* Active Executing Tool Calls Live */}
+              {Object.keys(activeToolExecutions).length > 0 && (
+                <div className="space-y-2 pt-1">
+                  {Object.entries(activeToolExecutions).map(([id, t]) => (
+                    <ToolCallCard
+                      key={id}
+                      name={t.name}
+                      argumentsStr={t.args}
+                      output={t.output}
+                      isExecuting={!t.output}
+                      isError={t.isError}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
       </div>
 
-      {/* Input Composer */}
+      {/* Input Composer - Constrained to match max-w-3xl */}
       <div className="p-4 border-t border-zinc-200 bg-white shrink-0">
         <form
           onSubmit={handleSend}
-          className="relative bg-zinc-50 border border-zinc-300 rounded-xl overflow-hidden focus-within:bg-white focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-600 shadow-xs transition-all"
+          className="max-w-3xl mx-auto relative bg-zinc-50 border border-zinc-300 rounded-xl overflow-hidden focus-within:bg-white focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-600 shadow-xs transition-all"
         >
           <textarea
             value={inputContent}

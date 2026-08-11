@@ -71,6 +71,7 @@ class Message(BaseModel):
     conversation_id: str
     role: MessageRole
     content: Optional[str] = None
+    thinking: Optional[str] = None
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_call_id: Optional[str] = None
     name: Optional[str] = None

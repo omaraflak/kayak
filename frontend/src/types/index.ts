@@ -39,6 +39,7 @@ export interface Message {
   conversation_id: string;
   role: MessageRole;
   content?: string | null;
+  thinking?: string | null;
   tool_calls?: ToolCallItem[] | null;
   tool_call_id?: string | null;
   name?: string | null;

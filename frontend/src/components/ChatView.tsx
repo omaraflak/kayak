@@ -33,6 +33,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [draftAgentId, setDraftAgentId] = useState<string>(agents[0]?.id || 'general');
   const [draftUseContainer, setDraftUseContainer] = useState<boolean>(false);
   const [draftInput, setDraftInput] = useState<string>('');
+  const [isCreating, setIsCreating] = useState<boolean>(false);
   const [vllmStatus, setVllmStatus] = useState<VLLMDeploymentProgress | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -149,17 +150,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
   );
 
 
-  const handleDraftSend = (event?: React.FormEvent) => {
+  const handleDraftSend = async (event?: React.FormEvent) => {
     if (event) event.preventDefault();
     const text = draftInput.trim();
-    if (!text || !isVllmModelReady) return;
+    if (!text || !isVllmModelReady || isCreating) return;
 
-    setDraftInput('');
-    onCreateConversation({
-      agent_id: draftAgentId,
-      isolated_container: draftUseContainer,
-      initial_message: text,
-    });
+    setIsCreating(true);
+    try {
+      await onCreateConversation({
+        agent_id: draftAgentId,
+        isolated_container: draftUseContainer,
+        initial_message: text,
+      });
+      setDraftInput('');
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   return (
@@ -389,11 +395,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 ) : (
                   <button
                     type="submit"
-                    disabled={!draftInput.trim() || !isVllmModelReady}
+                    disabled={!draftInput.trim() || !isVllmModelReady || isCreating}
                     className="inline-flex items-center space-x-1 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white transition-colors shadow-xs"
                   >
-                    <span>{isVllmModelLoading ? 'Model Loading...' : 'Send'}</span>
-                    {isVllmModelLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                    <span>{isCreating ? 'Starting...' : isVllmModelLoading ? 'Model Loading...' : 'Send'}</span>
+                    {isCreating || isVllmModelLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
                   </button>
                 )}
               </div>

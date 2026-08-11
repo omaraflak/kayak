@@ -126,6 +126,7 @@ class AgentEngine:
                 llm_messages.append(m)
 
             assistant_content = ""
+            assistant_thinking = ""
             active_tool_calls: Dict[int, Dict[str, Any]] = {}
 
             # Stream LLM response
@@ -137,7 +138,12 @@ class AgentEngine:
             ):
                 chunk_type = chunk.get("type")
 
-                if chunk_type == "token":
+                if chunk_type == "thinking":
+                    content = chunk.get("content", "")
+                    assistant_thinking += content
+                    yield {"type": "thinking", "content": content}
+
+                elif chunk_type == "token":
                     content = chunk.get("content", "")
                     assistant_content += content
                     yield {"type": "token", "content": content}
@@ -194,6 +200,7 @@ class AgentEngine:
                 conversation_id=conversation_id,
                 role=MessageRole.ASSISTANT,
                 content=assistant_content if assistant_content else None,
+                thinking=assistant_thinking.strip() if assistant_thinking.strip() else None,
                 tool_calls=final_tool_calls if final_tool_calls else None,
             )
 

@@ -50,9 +50,20 @@ def broadcast_event(conversation_id: str, event: Dict[str, Any]) -> None:
             event_queue.put_nowait(event)
 
 
+async def _async_generate_and_update_title(conversation_id: str, prompt: str, model_name: str) -> None:
+    """Asynchronously generates an LLM title in the background without delaying conversation creation."""
+    try:
+        generated = await generate_title(prompt, model=model_name)
+        if generated:
+            await update_conversation(conversation_id, title=generated)
+            broadcast_event(conversation_id, {"type": "title_updated", "title": generated})
+    except Exception:
+        pass
+
+
 @router.post("", response_model=Conversation)
 async def create_new_conversation(request: CreateConversationRequest) -> Conversation:
-    """Creates a new conversation record with auto-generated LLM title and optionally initializes an isolated Docker sandbox.
+    """Creates a new conversation record immediately and optionally initializes an isolated Docker sandbox.
 
     Args:
         request: Conversation creation request containing agent ID, optional title, and isolated container flag.
@@ -62,15 +73,20 @@ async def create_new_conversation(request: CreateConversationRequest) -> Convers
     """
     title = request.title
     if not title and request.initial_message:
-        agent_config = agent_manager.get_agent(request.agent_id)
-        model_name = agent_config.model if agent_config else settings.DEFAULT_MODEL
-        title = await generate_title(request.initial_message, model=model_name)
+        clean = " ".join(request.initial_message.strip().split())
+        title = clean[:36].rsplit(" ", 1)[0] + "..." if len(clean) > 36 else clean
 
     conversation = await create_conversation(
         title=title or "New Conversation",
         agent_id=request.agent_id,
         isolated_container=request.isolated_container,
     )
+
+    # Launch background LLM title generation without blocking UI response
+    if not request.title and request.initial_message:
+        agent_config = agent_manager.get_agent(request.agent_id)
+        model_name = agent_config.model if agent_config else settings.DEFAULT_MODEL
+        asyncio.create_task(_async_generate_and_update_title(conversation.id, request.initial_message, model_name))
 
     workspace_directory = settings.WORKSPACES_DIR / conversation.id
 
