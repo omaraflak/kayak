@@ -21,7 +21,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # Local models (vLLM / Ollama)
-      - VLLM_API_BASE=${VLLM_API_BASE:-http://host.docker.internal:8000/v1}
+      - VLLM_API_BASE=${VLLM_API_BASE:-http://host.docker.internal:8001/v1}
       - OLLAMA_API_BASE=${OLLAMA_API_BASE:-http://host.docker.internal:11434}
       - KAYAK_SANDBOX_IMAGE=kayak-sandbox:latest
     extra_hosts:

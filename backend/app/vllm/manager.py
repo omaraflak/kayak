@@ -341,8 +341,13 @@ class VLLMManager:
 
         This is the sole mechanism for transitioning to READY state.
         """
-        url = f"http://localhost:{settings.VLLM_PORT}/v1/models"
-        async with httpx.AsyncClient(timeout=2.0) as client:
+        urls_to_try = [
+            f"{settings.VLLM_API_BASE.rstrip('/')}/models",
+            f"http://host.docker.internal:{settings.VLLM_PORT}/v1/models",
+            f"http://localhost:{settings.VLLM_PORT}/v1/models",
+            f"http://127.0.0.1:{settings.VLLM_PORT}/v1/models",
+        ]
+        async with httpx.AsyncClient(timeout=1.5) as client:
             for attempt in range(max_attempts):
                 await asyncio.sleep(2.0)
 
@@ -354,16 +359,17 @@ class VLLMManager:
                 ):
                     return
 
-                try:
-                    res = await client.get(url)
-                    if res.status_code == 200:
-                        self._update_status(
-                            state=VLLMServerState.READY,
-                            message=f"vLLM is serving {model_id} on port {settings.VLLM_PORT}",
-                        )
-                        return
-                except Exception:
-                    pass
+                for url in urls_to_try:
+                    try:
+                        res = await client.get(url)
+                        if res.status_code == 200:
+                            self._update_status(
+                                state=VLLMServerState.READY,
+                                message=f"vLLM is serving {model_id} on port {settings.VLLM_PORT}",
+                            )
+                            return
+                    except Exception:
+                        pass
 
                 # Update message periodically so the UI shows something alive
                 elapsed = (attempt + 1) * 2

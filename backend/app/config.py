@@ -45,7 +45,7 @@ class Settings:
         self.ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
         self.VLLM_PORT: int = int(os.getenv("KAYAK_VLLM_PORT", "8001"))
         self.VLLM_API_BASE: str = os.getenv(
-            "VLLM_API_BASE", f"http://localhost:{self.VLLM_PORT}/v1"
+            "VLLM_API_BASE", f"http://host.docker.internal:{self.VLLM_PORT}/v1"
         )
         self.HUGGINGFACE_API_KEY: str = os.getenv("HUGGINGFACE_API_KEY", "")
 
