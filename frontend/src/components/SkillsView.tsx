@@ -189,7 +189,7 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
         );
       }
       return (
-        <code className="px-1.5 py-0.5 rounded bg-zinc-100 border border-zinc-200 text-zinc-800 font-mono text-[11px]" {...props}>
+        <code className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 font-mono text-[11px]" {...props}>
           {children}
         </code>
       );
@@ -197,13 +197,13 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex h-full min-h-0 bg-zinc-50 overflow-hidden">
+    <div className="flex-1 flex h-full min-h-0 bg-zinc-50 dark:bg-zinc-950 overflow-hidden transition-colors">
       {/* Skills List Sidebar with + New Button */}
-      <div className="w-80 border-r border-zinc-200 bg-white flex flex-col shrink-0">
-        <div className="p-4 border-b border-zinc-200 flex items-center justify-between">
+      <div className="w-80 border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex flex-col shrink-0 transition-colors">
+        <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <Sparkles className="w-4 h-4 text-indigo-600" />
-            <h2 className="font-bold text-xs text-zinc-900 uppercase tracking-wider">
+            <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            <h2 className="font-bold text-xs text-zinc-900 dark:text-zinc-100 uppercase tracking-wider">
               Skills Directory
             </h2>
           </div>
@@ -221,7 +221,7 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
           {skills.length === 0 ? (
-            <div className="text-center py-10 px-4 text-zinc-400 text-xs">
+            <div className="text-center py-10 px-4 text-zinc-400 dark:text-zinc-500 text-xs">
               No skills found in <code className="font-mono">data/skills</code>.<br />Click + New to create one.
             </div>
           ) : (
@@ -237,19 +237,19 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
                   }}
                   className={`p-3.5 rounded-xl cursor-pointer transition-all border ${
                     isSelected
-                      ? 'bg-indigo-50/80 border border-indigo-600 text-zinc-950 font-medium shadow-xs ring-1 ring-indigo-500/20'
-                      : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 shadow-xs'
+                      ? 'bg-indigo-50/90 dark:bg-indigo-950/80 border-indigo-600 dark:border-indigo-400 text-zinc-950 dark:text-zinc-100 font-medium shadow-xs ring-1 ring-indigo-500/20'
+                      : 'bg-white dark:bg-zinc-800/80 border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100/70 dark:hover:bg-zinc-750 hover:border-zinc-300 dark:hover:border-zinc-600 shadow-xs'
                   }`}
                 >
                   <div className="flex items-center justify-between mb-1">
-                    <span className="font-semibold text-xs text-zinc-900">{skill.name}</span>
+                    <span className="font-semibold text-xs text-zinc-900 dark:text-zinc-100">{skill.name}</span>
                     {skill.helper_files.length > 0 && (
-                      <span className="text-[10px] text-zinc-500 font-mono">
+                      <span className="text-[10px] text-zinc-500 dark:text-zinc-400 font-mono">
                         {skill.helper_files.length} helper{skill.helper_files.length > 1 ? 's' : ''}
                       </span>
                     )}
                   </div>
-                  <p className="text-[11px] text-zinc-500 line-clamp-2 leading-relaxed">
+                  <p className="text-[11px] text-zinc-600 dark:text-zinc-300 line-clamp-2 leading-relaxed">
                     {skill.description}
                   </p>
                 </div>
@@ -262,21 +262,21 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
       {/* Main Workspace Pane: Top Header + Split (Chat 50% | Editor 50%) */}
       <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden">
         {/* Top Header Rigidly Docked */}
-        <div className="h-16 border-b border-zinc-200 px-8 flex items-center justify-between bg-white shrink-0">
+        <div className="h-16 border-b border-zinc-200 dark:border-zinc-800 px-8 flex items-center justify-between bg-white dark:bg-zinc-900 shrink-0 transition-colors">
           <div className="flex items-center space-x-3">
-            <Sparkles className="w-5 h-5 text-indigo-600" />
+            <Sparkles className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
             <div>
-              <h1 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
+              <h1 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
                 <span>{isCreating ? 'Create New Skill' : `Skill: ${name || 'Untitled'}`}</span>
                 {isDirty && !isCreating && (
-                  <span className="text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <span className="text-[10px] font-medium text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/80 border border-amber-200 dark:border-amber-800/80 px-2 py-0.5 rounded-full flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
                     Unsaved changes
                   </span>
                 )}
               </h1>
-              <p className="text-[11px] text-zinc-500">
-                Directory: <code className="font-mono text-zinc-700">data/skills/{name || '...'}/SKILL.md</code>
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">
+                Directory: <code className="font-mono text-zinc-800 dark:text-zinc-200 bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded border border-zinc-200 dark:border-zinc-700">data/skills/{name || '...'}/SKILL.md</code>
               </p>
             </div>
           </div>
@@ -286,7 +286,7 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
               <button
                 type="button"
                 onClick={handleReset}
-                className="px-3.5 py-2 rounded-xl text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 flex items-center gap-1.5 transition-colors border border-zinc-200"
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-zinc-700 dark:text-zinc-200 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-1.5 transition-colors border border-zinc-300 dark:border-zinc-700 cursor-pointer"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>Discard</span>
@@ -296,7 +296,7 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
             {!isCreating && selectedSkill && (
               <button
                 onClick={() => handleDelete(selectedSkill.name)}
-                className="p-2 rounded-xl text-rose-600 hover:bg-rose-50 border border-rose-200 transition-colors"
+                className="p-2 rounded-xl text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200 dark:border-rose-800/80 transition-colors cursor-pointer"
                 title="Delete Skill"
               >
                 <Trash2 className="w-4 h-4" />
@@ -306,7 +306,7 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
             <button
               onClick={() => handleSave()}
               disabled={!isDirty || !name.trim() || isSaving}
-              className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:hover:bg-indigo-600 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm transition-all focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1"
+              className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-indigo-600 dark:bg-indigo-500 hover:bg-indigo-700 dark:hover:bg-indigo-600 disabled:opacity-40 disabled:hover:bg-indigo-600 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm transition-all focus:ring-2 focus:ring-indigo-500 cursor-pointer"
             >
               <Save className="w-4 h-4" />
               <span>{isSaving ? 'Saving...' : 'Save Skill'}</span>
@@ -316,8 +316,8 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
 
         {/* Split View (50% AI Architect Chat | 50% Manual Editor & Preview) */}
         <div className="flex-1 flex overflow-hidden">
-          {/* Left Column: Skill Architect Chat Assistant (Full ChatPane component!) */}
-          <div className="w-1/2 border-r border-zinc-200 bg-zinc-50 flex flex-col overflow-hidden">
+          {/* Left Column: Skill Architect Chat Assistant */}
+          <div className="w-1/2 border-r border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 flex flex-col overflow-hidden transition-colors">
             <ChatPane
               conversationId={conversationId}
               agentId="skill_architect"
@@ -335,12 +335,12 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
           </div>
 
           {/* Right Column: Skill Metadata & Instructions Editor / Preview (50%) */}
-          <div className="w-1/2 flex flex-col bg-white overflow-hidden">
+          <div className="w-1/2 flex flex-col bg-white dark:bg-zinc-900 overflow-hidden transition-colors">
             {/* Metadata Bar */}
-            <div className="p-4 border-b border-zinc-200 bg-zinc-50/50 space-y-3 shrink-0">
+            <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/80 space-y-3 shrink-0">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
+                  <label className="block text-[11px] font-semibold text-zinc-800 dark:text-zinc-200 mb-1">
                     Skill Directory Name
                   </label>
                   <input
@@ -348,12 +348,12 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
                     value={name}
                     onChange={(event) => setName(event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '_'))}
                     placeholder="e.g. data_analyzer"
-                    className="w-full bg-white border border-zinc-300 rounded-xl px-3 py-1.5 text-xs text-zinc-900 font-mono focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
+                    className="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 rounded-xl px-3 py-1.5 text-xs text-zinc-900 dark:text-zinc-100 font-mono focus:outline-none focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-1 focus:ring-indigo-500 transition-colors"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-semibold text-zinc-700 mb-1">
+                  <label className="block text-[11px] font-semibold text-zinc-800 dark:text-zinc-200 mb-1">
                     Description / Purpose
                   </label>
                   <input
@@ -361,24 +361,24 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
                     value={description}
                     onChange={(event) => setDescription(event.target.value)}
                     placeholder="Brief description of when this skill triggers..."
-                    className="w-full bg-white border border-zinc-300 rounded-xl px-3 py-1.5 text-xs text-zinc-900 focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
+                    className="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 rounded-xl px-3 py-1.5 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-1 focus:ring-indigo-500 transition-colors"
                   />
                 </div>
               </div>
 
               {/* Tab Selector */}
               <div className="flex items-center justify-between pt-1">
-                <span className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider flex items-center gap-1.5">
-                  <FileText className="w-3.5 h-3.5 text-zinc-600" /> SKILL.md Content
+                <span className="text-[11px] font-bold text-zinc-600 dark:text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5 text-zinc-600 dark:text-zinc-400" /> SKILL.md Content
                 </span>
 
-                <div className="flex bg-zinc-100 border border-zinc-200 rounded-lg p-0.5 text-xs">
+                <div className="flex bg-zinc-200/80 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg p-0.5 text-xs">
                   <button
                     onClick={() => setActiveEditorTab('editor')}
-                    className={`px-3 py-1 rounded-md font-medium text-xs transition-colors flex items-center gap-1.5 ${
+                    className={`px-3 py-1 rounded-md font-medium text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
                       activeEditorTab === 'editor' 
-                        ? 'bg-white text-zinc-900 font-semibold shadow-xs' 
-                        : 'text-zinc-600 hover:text-zinc-900'
+                        ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 font-semibold shadow-xs' 
+                        : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
                     }`}
                   >
                     <FileCode className="w-3.5 h-3.5" />
@@ -386,10 +386,10 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
                   </button>
                   <button
                     onClick={() => setActiveEditorTab('preview')}
-                    className={`px-3 py-1 rounded-md font-medium text-xs transition-colors flex items-center gap-1.5 ${
+                    className={`px-3 py-1 rounded-md font-medium text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
                       activeEditorTab === 'preview' 
-                        ? 'bg-white text-zinc-900 font-semibold shadow-xs' 
-                        : 'text-zinc-600 hover:text-zinc-900'
+                        ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 font-semibold shadow-xs' 
+                        : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
                     }`}
                   >
                     <Eye className="w-3.5 h-3.5" />
@@ -400,17 +400,17 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
             </div>
 
             {/* Content Area */}
-            <div className="flex-1 overflow-y-auto p-4 bg-white">
+            <div className="flex-1 overflow-y-auto p-4 bg-white dark:bg-zinc-900 transition-colors">
               {activeEditorTab === 'editor' ? (
                 <textarea
                   value={instructions}
                   onChange={(event) => setInstructions(event.target.value)}
                   placeholder="# Skill Instructions&#10;&#10;Detailed workflows, parameters, and constraints will sync here from the agent or you can type directly..."
                   spellCheck={false}
-                  className="w-full h-full min-h-[450px] bg-zinc-50 border border-zinc-200 rounded-xl p-4 font-mono text-[12px] text-zinc-800 focus:bg-white focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 resize-none leading-relaxed"
+                  className="w-full h-full min-h-[450px] bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-xl p-4 font-mono text-[12px] text-zinc-900 dark:text-zinc-100 focus:bg-white dark:focus:bg-zinc-950 focus:outline-none focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-1 focus:ring-indigo-500 resize-none leading-relaxed transition-colors"
                 />
               ) : (
-                <div className="prose prose-zinc max-w-none text-xs leading-relaxed bg-zinc-50/50 p-6 rounded-xl border border-zinc-200">
+                <div className="prose prose-zinc dark:prose-invert max-w-none text-xs leading-relaxed bg-zinc-50/50 dark:bg-zinc-950 p-6 rounded-xl border border-zinc-200 dark:border-zinc-700">
                   <ReactMarkdown 
                     remarkPlugins={[remarkGfm, remarkMath]} 
                     rehypePlugins={[rehypeKatex]}

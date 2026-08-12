@@ -126,7 +126,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-full w-full overflow-hidden bg-zinc-50 text-zinc-900 font-['Plus_Jakarta_Sans',sans-serif]">
+    <div className="flex h-full w-full overflow-hidden bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-['Plus_Jakarta_Sans',sans-serif]">
       {/* Navigation Sidebar */}
       <Sidebar
         conversations={conversations}

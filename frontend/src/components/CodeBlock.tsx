@@ -43,22 +43,22 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
   };
 
   return (
-    <div className={`my-3 rounded-xl border border-zinc-200 bg-white overflow-hidden shadow-xs ${className}`}>
+    <div className={`my-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden shadow-xs ${className}`}>
       {showHeader && (
-        <div className="flex items-center justify-between px-3.5 py-1.5 bg-zinc-50 border-b border-zinc-200 select-none">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 font-mono">
+        <div className="flex items-center justify-between px-3.5 py-1.5 bg-zinc-50 dark:bg-zinc-850 border-b border-zinc-200 dark:border-zinc-800 select-none">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 font-mono">
             {rawLang || 'code'}
           </span>
           <button
             type="button"
             onClick={handleCopy}
-            className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-900 transition-colors p-1 rounded hover:bg-zinc-200/50"
+            className="flex items-center gap-1 text-[11px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors p-1 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-800"
             title="Copy code to clipboard"
           >
             {copied ? (
               <>
-                <Check className="w-3 h-3 text-emerald-600" />
-                <span className="text-[10px] text-emerald-600 font-medium">Copied</span>
+                <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">Copied</span>
               </>
             ) : (
               <>
@@ -69,8 +69,8 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
           </button>
         </div>
       )}
-      <div className="p-3.5 overflow-x-auto bg-zinc-50/50">
-        <pre className="font-mono text-[11.5px] leading-relaxed text-zinc-800 m-0">
+      <div className="p-3.5 overflow-x-auto bg-zinc-50/50 dark:bg-zinc-950/80">
+        <pre className="font-mono text-[11.5px] leading-relaxed text-zinc-800 dark:text-zinc-200 m-0">
           <code
             className={`language-${rawLang}`}
             dangerouslySetInnerHTML={{ __html: highlightedHtml }}

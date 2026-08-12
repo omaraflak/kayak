@@ -135,17 +135,17 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/60 backdrop-blur-xs animate-fade-in font-sans">
-        <div className="bg-white rounded-2xl border border-zinc-200 shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/60 dark:bg-zinc-950/80 backdrop-blur-xs animate-fade-in font-sans">
+        <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-700 shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh] transition-colors">
           {/* Modal Header */}
-          <div className="px-6 py-4 border-b border-zinc-200 flex items-center justify-between bg-zinc-50/70 shrink-0">
+          <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 flex items-center justify-between bg-zinc-50 dark:bg-zinc-800/90 shrink-0 transition-colors">
             <div className="flex items-center space-x-2.5">
-              <div className="w-8 h-8 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600 shadow-2xs">
+              <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-950/80 border border-indigo-200 dark:border-indigo-800/80 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shadow-2xs">
                 <Cpu className="w-4 h-4" />
               </div>
               <div>
-                <h2 className="text-sm font-bold text-zinc-900">Select Language Model</h2>
-                <p className="text-[11px] text-zinc-500">
+                <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">Select Language Model</h2>
+                <p className="text-[11px] text-zinc-600 dark:text-zinc-300">
                   Select a model candidate below, then click Confirm Selection to apply.
                 </p>
               </div>
@@ -153,14 +153,14 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
 
             <button
               onClick={onClose}
-              className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-200/60 transition-colors"
+              className="p-1.5 rounded-lg text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-200/60 dark:hover:bg-zinc-700 transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
           {/* Provider Tabs Bar */}
-          <div className="px-6 pt-3 border-b border-zinc-200 bg-white flex space-x-2 overflow-x-auto shrink-0">
+          <div className="px-6 pt-3 border-b border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 flex space-x-2 overflow-x-auto shrink-0 transition-colors">
             {providerTabs.map((tab) => {
               const isActive = activeTab === tab.id;
               const providerData = providers.find((p) => p.provider_id === tab.id);
@@ -175,8 +175,8 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                   }}
                   className={`pb-3 px-3.5 text-xs font-semibold flex items-center space-x-2 border-b-2 transition-all cursor-pointer whitespace-nowrap ${
                     isActive
-                      ? 'border-indigo-600 text-indigo-600'
-                      : 'border-transparent text-zinc-500 hover:text-zinc-800'
+                      ? 'border-indigo-600 dark:border-indigo-400 text-indigo-600 dark:text-indigo-400'
+                      : 'border-transparent text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100/60 dark:hover:bg-zinc-800 rounded-t-lg'
                   }`}
                 >
                   <span className="text-sm">{tab.icon}</span>
@@ -184,7 +184,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                   {tab.id !== 'huggingface' && (
                     <span
                       className={`w-2 h-2 rounded-full ${
-                        isConfigured ? 'bg-emerald-500' : 'bg-zinc-300'
+                        isConfigured ? 'bg-emerald-500' : 'bg-zinc-300 dark:bg-zinc-600'
                       }`}
                       title={isConfigured ? 'Provider configured' : 'Provider missing API key or server offline'}
                     />
@@ -196,14 +196,14 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
 
           {/* Provider Status / Warning Banner */}
           {activeTab !== 'huggingface' && currentProvider && (
-            <div className="px-6 py-2.5 bg-zinc-50 border-b border-zinc-200 flex items-center justify-between text-xs shrink-0">
+            <div className="px-6 py-2.5 bg-zinc-50 dark:bg-zinc-800/80 border-b border-zinc-200 dark:border-zinc-700 flex items-center justify-between text-xs shrink-0 transition-colors">
               <div className="flex items-center space-x-2">
                 {currentProvider.is_configured ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                 ) : (
-                  <AlertCircle className="w-4 h-4 text-amber-500" />
+                  <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                 )}
-                <span className="font-medium text-zinc-700">
+                <span className="font-medium text-zinc-800 dark:text-zinc-200">
                   {currentProvider.status_message}
                 </span>
               </div>
@@ -212,10 +212,10 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
 
           {/* Hugging Face Tab Active vLLM Container Banner */}
           {activeTab === 'huggingface' && vllmStatus?.state === 'ready' && (
-            <div className="px-6 py-2.5 bg-emerald-50/70 border-b border-emerald-200 flex items-center justify-between text-xs shrink-0">
+            <div className="px-6 py-2.5 bg-emerald-50/90 dark:bg-emerald-950/60 border-b border-emerald-200 dark:border-emerald-800/80 flex items-center justify-between text-xs shrink-0 transition-colors">
               <div className="flex items-center space-x-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                <span className="font-medium text-emerald-900">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span className="font-medium text-emerald-900 dark:text-emerald-200">
                   Local vLLM Container Active: <code className="font-mono font-bold">{vllmStatus.model_id}</code> (Port {vllmStatus.port || 8001})
                 </span>
               </div>
@@ -226,7 +226,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                   setVllmDeployTarget(vllmStatus.model_id || null);
                   setIsVLLMDeployModalOpen(true);
                 }}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-100/80 border border-emerald-300 text-emerald-800 hover:bg-emerald-200 transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-100 dark:bg-emerald-900/80 border border-emerald-300 dark:border-emerald-700 text-emerald-900 dark:text-emerald-100 hover:bg-emerald-200 dark:hover:bg-emerald-800 transition-colors cursor-pointer"
               >
                 <Rocket className="w-3.5 h-3.5" />
                 <span>Manage Server & Logs</span>
@@ -235,10 +235,10 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
           )}
 
           {/* Modal Main Body */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-zinc-50/30 dark:bg-zinc-950">
             {isLoading ? (
-              <div className="py-20 text-center text-zinc-400 text-xs flex flex-col items-center justify-center space-y-2">
-                <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
+              <div className="py-20 text-center text-zinc-500 dark:text-zinc-400 text-xs flex flex-col items-center justify-center space-y-2">
+                <Loader2 className="w-6 h-6 animate-spin text-indigo-600 dark:text-indigo-400" />
                 <span>Probing available models and local servers...</span>
               </div>
             ) : activeTab !== 'huggingface' ? (
@@ -246,13 +246,13 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
               <div className="space-y-4">
                 {/* Search Bar for provider models */}
                 <div className="relative">
-                  <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400" />
+                  <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" />
                   <input
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder={`Filter ${currentProvider?.provider_name || ''} models...`}
-                    className="w-full bg-zinc-50 border border-zinc-200 rounded-xl pl-9 pr-4 py-2 text-xs text-zinc-900 focus:bg-white focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
+                    className="w-full bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-600 rounded-xl pl-9 pr-4 py-2 text-xs text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:bg-white dark:focus:bg-zinc-800 focus:outline-none focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-1 focus:ring-indigo-500 transition-colors"
                   />
                 </div>
 
@@ -270,42 +270,42 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                         }}
                         className={`p-4 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
                           isCandidate
-                            ? 'bg-indigo-50/80 border-indigo-600 ring-2 ring-indigo-500/30 text-zinc-950 shadow-xs'
-                            : 'bg-white border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50/80 shadow-xs'
+                            ? 'bg-indigo-50/90 dark:bg-indigo-950/80 border-2 border-indigo-600 dark:border-indigo-400 ring-2 ring-indigo-500/20 text-zinc-950 dark:text-zinc-100 shadow-sm'
+                            : 'bg-white dark:bg-zinc-800/80 border-zinc-200 dark:border-zinc-700 hover:border-indigo-300 dark:hover:border-indigo-600 hover:bg-zinc-50 dark:hover:bg-zinc-750 text-zinc-900 dark:text-zinc-100 shadow-xs'
                         }`}
                       >
                         <div>
                           <div className="flex items-center justify-between mb-1.5">
-                            <span className="font-bold text-xs text-zinc-900">{model.name}</span>
+                            <span className="font-bold text-xs text-zinc-900 dark:text-zinc-100">{model.name}</span>
                             {model.is_running_locally ? (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 font-semibold">
+                              <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-800/80 font-semibold">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                                 Local
                               </span>
                             ) : (
-                              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-100 text-zinc-600 border border-zinc-200">
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700">
                                 {model.context_window || 'Cloud'}
                               </span>
                             )}
                           </div>
 
-                          <p className="text-[11px] text-zinc-500 line-clamp-2 leading-relaxed">
+                          <p className="text-[11px] text-zinc-600 dark:text-zinc-300 line-clamp-2 leading-relaxed">
                             {model.description}
                           </p>
                         </div>
 
-                        <div className="mt-3 pt-2.5 border-t border-zinc-100 flex items-center justify-between text-[11px]">
-                          <code className="text-[10px] text-zinc-500 font-mono">{model.id}</code>
+                        <div className="mt-3 pt-2.5 border-t border-zinc-200 dark:border-zinc-700 flex items-center justify-between text-[11px]">
+                          <code className="text-[10px] text-zinc-500 dark:text-zinc-400 font-mono">{model.id}</code>
                           {isCandidate ? (
-                            <span className="inline-flex items-center gap-1 text-indigo-700 font-bold text-xs">
+                            <span className="inline-flex items-center gap-1 text-indigo-700 dark:text-indigo-300 font-bold text-xs">
                               <Check className="w-3.5 h-3.5 stroke-[3]" /> Staged
                             </span>
                           ) : isCurrentActive ? (
-                            <span className="text-zinc-500 text-xs font-medium">
+                            <span className="text-zinc-600 dark:text-zinc-400 text-xs font-semibold">
                               (Current)
                             </span>
                           ) : (
-                            <span className="text-zinc-400 group-hover:text-indigo-600 text-xs font-semibold">
+                            <span className="text-zinc-500 dark:text-zinc-400 hover:text-indigo-600 dark:hover:text-indigo-400 text-xs font-semibold">
                               Select
                             </span>
                           )}
@@ -339,14 +339,14 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
           </div>
 
           {/* Modal Footer: Confirmation Action Bar */}
-          <div className="p-4 border-t border-zinc-200 bg-zinc-50 flex items-center justify-between shrink-0">
+          <div className="p-4 border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/90 flex items-center justify-between shrink-0 transition-colors">
             <div className="flex items-center space-x-2">
-              <span className="text-xs text-zinc-500 font-semibold">Selected Model:</span>
-              <code className="text-xs font-mono bg-white border border-zinc-300 px-3 py-1.5 rounded-xl text-indigo-700 font-bold shadow-2xs">
+              <span className="text-xs text-zinc-600 dark:text-zinc-300 font-semibold">Selected Model:</span>
+              <code className="text-xs font-mono bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 px-3 py-1.5 rounded-xl text-indigo-700 dark:text-indigo-300 font-bold shadow-2xs">
                 {candidateModel}
               </code>
               {candidateHfMode === 'vllm' && (
-                <span className="text-[11px] font-semibold text-indigo-700 bg-indigo-100/70 px-2 py-0.5 rounded-lg">
+                <span className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-100/80 dark:bg-indigo-950/80 px-2 py-0.5 rounded-lg border border-indigo-200 dark:border-indigo-800/80">
                   (vLLM Container Deployment)
                 </span>
               )}
@@ -356,7 +356,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 rounded-xl border border-zinc-300 text-xs font-semibold text-zinc-700 bg-white hover:bg-zinc-100 transition-colors shadow-2xs"
+                className="px-4 py-2 rounded-xl border border-zinc-300 dark:border-zinc-600 text-xs font-semibold text-zinc-800 dark:text-zinc-200 bg-white dark:bg-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors shadow-2xs cursor-pointer"
               >
                 Cancel
               </button>
@@ -365,7 +365,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                 type="button"
                 onClick={handleConfirmSelection}
                 disabled={!candidateModel.trim()}
-                className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
+                className="px-5 py-2 rounded-xl bg-indigo-600 dark:bg-indigo-500 hover:bg-indigo-700 dark:hover:bg-indigo-600 disabled:opacity-40 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
               >
                 <Check className="w-3.5 h-3.5 stroke-[3]" />
                 <span>Confirm Selection</span>

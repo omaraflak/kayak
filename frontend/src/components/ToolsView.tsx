@@ -83,13 +83,13 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex h-full min-h-0 bg-zinc-50 overflow-hidden">
+    <div className="flex-1 flex h-full min-h-0 bg-zinc-50 dark:bg-zinc-950 overflow-hidden transition-colors">
       {/* Tools List Sidebar */}
-      <div className="w-80 border-r border-zinc-200 bg-white flex flex-col shrink-0">
-        <div className="p-4 border-b border-zinc-200 flex items-center justify-between">
+      <div className="w-80 border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex flex-col shrink-0 transition-colors">
+        <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <Wrench className="w-4 h-4 text-zinc-700" />
-            <h2 className="font-bold text-xs text-zinc-900 uppercase tracking-wider">
+            <Wrench className="w-4 h-4 text-zinc-700 dark:text-zinc-300" />
+            <h2 className="font-bold text-xs text-zinc-900 dark:text-zinc-100 uppercase tracking-wider">
               Tools ({tools.length})
             </h2>
           </div>
@@ -98,7 +98,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
             <button
               onClick={handleReload}
               disabled={isReloading}
-              className="p-1.5 rounded-lg text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 transition-colors"
+              className="p-1.5 rounded-lg text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
               title="Reload tools from disk"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isReloading ? 'animate-spin' : ''}`} />
@@ -119,7 +119,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
           {tools.length === 0 ? (
-            <div className="text-center py-10 px-4 text-zinc-400 text-xs">
+            <div className="text-center py-10 px-4 text-zinc-400 dark:text-zinc-500 text-xs">
               No registered tools found.<br />Click + New to build a tool.
             </div>
           ) : (
@@ -135,21 +135,21 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
                   }}
                   className={`p-3.5 rounded-xl cursor-pointer transition-all border ${
                     isSelected
-                      ? 'bg-indigo-50/80 border border-indigo-600 text-zinc-950 font-medium shadow-xs ring-1 ring-indigo-500/20'
-                      : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 shadow-xs'
+                      ? 'bg-indigo-50/90 dark:bg-indigo-950/80 border-indigo-600 dark:border-indigo-400 text-zinc-950 dark:text-zinc-100 font-medium shadow-xs ring-1 ring-indigo-500/20'
+                      : 'bg-white dark:bg-zinc-800/80 border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100/70 dark:hover:bg-zinc-750 hover:border-zinc-300 dark:hover:border-zinc-600 shadow-xs'
                   }`}
                 >
                   <div className="flex items-center justify-between mb-1">
-                    <span className="font-semibold text-xs font-mono text-zinc-900">{tool.name}</span>
+                    <span className="font-semibold text-xs font-mono text-zinc-900 dark:text-zinc-100">{tool.name}</span>
                     <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
                       tool.is_builtin
-                        ? 'bg-zinc-100 text-zinc-600 border-zinc-200'
-                        : 'bg-indigo-100 text-indigo-700 border-indigo-200 font-medium'
+                        ? 'bg-zinc-100 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700'
+                        : 'bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-700 font-medium'
                     }`}>
                       {tool.is_builtin ? 'builtin' : 'custom'}
                     </span>
                   </div>
-                  <p className="text-[11px] text-zinc-500 line-clamp-2 leading-relaxed">
+                  <p className="text-[11px] text-zinc-600 dark:text-zinc-300 line-clamp-2 leading-relaxed">
                     {tool.description}
                   </p>
                 </div>
@@ -173,23 +173,23 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
       ) : (
         <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden">
           {/* Top Header rigidly docked at top */}
-          <div className="h-16 border-b border-zinc-200 px-8 flex items-center justify-between bg-white shrink-0">
+          <div className="h-16 border-b border-zinc-200 dark:border-zinc-800 px-8 flex items-center justify-between bg-white dark:bg-zinc-900 shrink-0 transition-colors">
             <div>
               <div className="flex items-center space-x-2.5">
-                <h1 className="text-base font-bold font-mono text-zinc-900">
+                <h1 className="text-base font-bold font-mono text-zinc-900 dark:text-zinc-100">
                   {selectedTool ? selectedTool.name : 'Select Tool'}
                 </h1>
                 {selectedTool && (
                   <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium border ${
                     selectedTool.is_builtin
-                      ? 'bg-zinc-100 text-zinc-600 border-zinc-200'
-                      : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                      ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700'
+                      : 'bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800/80'
                   }`}>
                     {selectedTool.is_builtin ? 'Built-in Tool' : 'Custom Tool'}
                   </span>
                 )}
               </div>
-              <p className="text-xs text-zinc-500 mt-0.5">
+              <p className="text-xs text-zinc-600 dark:text-zinc-300 mt-0.5">
                 {selectedTool?.description || 'Select a tool to inspect its parameters and source code.'}
               </p>
             </div>
@@ -197,7 +197,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
             {selectedTool && !selectedTool.is_builtin && (
               <button
                 onClick={() => handleDelete(selectedTool.name)}
-                className="px-3.5 py-2 rounded-xl text-xs font-medium text-rose-600 hover:bg-rose-50 border border-rose-200 transition-colors flex items-center gap-1.5"
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200 dark:border-rose-800/80 transition-colors flex items-center gap-1.5 cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Delete Tool</span>
@@ -206,12 +206,12 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
           </div>
 
           {/* Scrollable Tool Details */}
-          <div className="flex-1 overflow-y-auto p-8 w-full space-y-6">
+          <div className="flex-1 overflow-y-auto p-8 w-full space-y-6 bg-zinc-50/50 dark:bg-zinc-950">
             {selectedTool ? (
               <div className="max-w-5xl mx-auto space-y-6 pb-12">
                 {/* Parameters Schema */}
                 <div className="space-y-2">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-700">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-800 dark:text-zinc-200">
                     Input Parameters Schema
                   </h3>
                   <CodeBlock
@@ -223,8 +223,8 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
                 {/* Source Code if Custom Tool */}
                 {selectedTool.source_code && (
                   <div className="space-y-2">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-700 flex items-center gap-1.5">
-                      <FileCode className="w-4 h-4 text-indigo-600" /> Python Source Code (tool.py)
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">
+                      <FileCode className="w-4 h-4 text-indigo-600 dark:text-indigo-400" /> Python Source Code (tool.py)
                     </h3>
                     <CodeBlock
                       code={selectedTool.source_code}
@@ -236,8 +236,8 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
                 {/* Verification Test Code */}
                 {selectedTool.verify_code && (
                   <div className="space-y-2">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-700 flex items-center gap-1.5">
-                      <ShieldCheck className="w-4 h-4 text-emerald-600" /> Verification Test Suite (verify.py)
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" /> Verification Test Suite (verify.py)
                     </h3>
                     <CodeBlock
                       code={selectedTool.verify_code}
@@ -247,7 +247,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
                 )}
               </div>
             ) : (
-              <div className="text-center py-24 text-zinc-400 text-xs">
+              <div className="text-center py-24 text-zinc-400 dark:text-zinc-600 text-xs">
                 Select a tool to inspect its specification and parameters.
               </div>
             )}

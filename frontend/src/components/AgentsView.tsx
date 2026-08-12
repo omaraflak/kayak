@@ -225,7 +225,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex h-full min-h-0 bg-zinc-50 overflow-hidden">
+    <div className="flex-1 flex h-full min-h-0 bg-zinc-50 dark:bg-zinc-950 overflow-hidden transition-colors">
       {/* Model Selection Modal */}
       <ModelSelectorModal
         isOpen={isModelModalOpen}
@@ -235,11 +235,11 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
       />
 
       {/* Agents List Sidebar */}
-      <div className="w-80 border-r border-zinc-200 bg-white flex flex-col shrink-0">
-        <div className="p-4 border-b border-zinc-200 flex items-center justify-between">
+      <div className="w-80 border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex flex-col shrink-0 transition-colors">
+        <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <Bot className="w-4 h-4 text-zinc-700" />
-            <h2 className="font-bold text-xs text-zinc-900 uppercase tracking-wider">Agent Profiles</h2>
+            <Bot className="w-4 h-4 text-zinc-700 dark:text-zinc-300" />
+            <h2 className="font-bold text-xs text-zinc-900 dark:text-zinc-100 uppercase tracking-wider">Agent Profiles</h2>
           </div>
           <button
             onClick={() => {
@@ -266,24 +266,24 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                 }}
                 className={`p-3.5 rounded-xl cursor-pointer transition-all border ${
                   isSelected
-                    ? 'bg-indigo-50/80 border border-indigo-600 text-zinc-950 font-medium shadow-xs ring-1 ring-indigo-500/20'
-                    : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 shadow-xs'
+                    ? 'bg-indigo-50/90 dark:bg-indigo-950/80 border-indigo-600 dark:border-indigo-400 text-zinc-950 dark:text-zinc-100 font-medium shadow-xs ring-1 ring-indigo-500/20'
+                    : 'bg-white dark:bg-zinc-800/80 border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100/70 dark:hover:bg-zinc-750 hover:border-zinc-300 dark:hover:border-zinc-600 shadow-xs'
                 }`}
               >
                 <div className="flex items-center justify-between mb-1">
-                  <span className="font-semibold text-xs text-zinc-900">{agent.name}</span>
+                  <span className="font-semibold text-xs text-zinc-900 dark:text-zinc-100">{agent.name}</span>
                   <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
                     isSelected
-                      ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
-                      : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                      ? 'bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200 border-indigo-200 dark:border-indigo-700'
+                      : 'bg-zinc-100 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700'
                   }`}>
                     {agent.id}
                   </span>
                 </div>
-                <p className="text-[11px] text-zinc-500 line-clamp-2 mb-2 leading-relaxed">
+                <p className="text-[11px] text-zinc-600 dark:text-zinc-300 line-clamp-2 mb-2 leading-relaxed">
                   {agent.description}
                 </p>
-                <div className="text-[10px] text-zinc-500 font-mono flex items-center gap-1">
+                <div className="text-[10px] text-zinc-500 dark:text-zinc-400 font-mono flex items-center gap-1">
                   <span>{getProviderIcon(agent.model)} {agent.model}</span>
                 </div>
               </div>
@@ -295,19 +295,19 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
       {/* Right Column: Rigid Docked Top Header + Scrollable Form */}
       <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden">
         {/* Top Header rigidly docked with 0 space above */}
-        <div className="h-16 border-b border-zinc-200 px-8 flex items-center justify-between bg-white shrink-0">
+        <div className="h-16 border-b border-zinc-200 dark:border-zinc-800 px-8 flex items-center justify-between bg-white dark:bg-zinc-900 shrink-0 transition-colors">
           <div>
-            <h1 className="text-base font-bold text-zinc-900 flex items-center gap-2">
-              <Bot className="w-5 h-5 text-indigo-600" />
+            <h1 className="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+              <Bot className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
               {isCreating ? 'Create Agent Profile' : `Agent: ${name}`}
               {isDirty && !isCreating && (
-                <span className="text-[11px] font-medium text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                <span className="text-[11px] font-medium text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/80 border border-amber-200 dark:border-amber-800/80 px-2 py-0.5 rounded-full flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
                   Unsaved changes
                 </span>
               )}
             </h1>
-            <p className="text-xs text-zinc-500 mt-0.5">
+            <p className="text-xs text-zinc-600 dark:text-zinc-300 mt-0.5">
               Configure model strings, temperature sampling, system instructions, tool access, and preloaded skills.
             </p>
           </div>
@@ -317,7 +317,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
               <button
                 type="button"
                 onClick={handleReset}
-                className="px-3.5 py-2 rounded-xl text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 flex items-center gap-1.5 transition-colors border border-zinc-200"
+                className="px-3.5 py-2 rounded-xl text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-1.5 transition-colors border border-zinc-200 dark:border-zinc-700"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>Discard</span>
@@ -328,7 +328,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
               <button
                 type="button"
                 onClick={() => handleDelete(selectedAgent.id)}
-                className="px-3 py-2 rounded-xl text-xs font-medium text-rose-600 hover:bg-rose-50 border border-rose-200 transition-colors flex items-center gap-1"
+                className="px-3 py-2 rounded-xl text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 border border-rose-200 dark:border-rose-800/60 transition-colors flex items-center gap-1"
                 title="Delete Profile"
               >
                 <Trash2 className="w-4 h-4" />
@@ -352,7 +352,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
             {/* Core Info */}
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">
                   Agent Identifier (ID)
                 </label>
                 <input
@@ -361,13 +361,13 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                   disabled={!isCreating}
                   onChange={(event) => setId(event.target.value)}
                   placeholder="e.g. autonomous_coder"
-                  className="w-full bg-white border border-zinc-300 rounded-xl px-3.5 py-2.5 text-xs text-zinc-900 font-mono focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 disabled:bg-zinc-100 disabled:text-zinc-500"
+                  className="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs text-zinc-900 dark:text-zinc-100 font-mono focus:outline-none focus:border-indigo-600 dark:focus:border-indigo-500 focus:ring-1 focus:ring-indigo-600 disabled:bg-zinc-100 dark:disabled:bg-zinc-800 disabled:text-zinc-500 dark:disabled:text-zinc-500 transition-colors"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">
                   Display Name
                 </label>
                 <input
@@ -375,14 +375,14 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   placeholder="e.g. Autonomous Coder"
-                  className="w-full bg-white border border-zinc-300 rounded-xl px-3.5 py-2.5 text-xs text-zinc-900 focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
+                  className="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-indigo-600 dark:focus:border-indigo-500 focus:ring-1 focus:ring-indigo-600 transition-colors"
                   required
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
+              <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">
                 Description
               </label>
               <input
@@ -390,42 +390,42 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
                 placeholder="Short description of this agent's purpose and expertise."
-                className="w-full bg-white border border-zinc-300 rounded-xl px-3.5 py-2.5 text-xs text-zinc-900 focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
+                className="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-1 focus:ring-indigo-500 transition-colors"
               />
             </div>
 
             {/* Visual Interactive Model Selector Card & Sampling Temperature */}
-            <div className="p-5 bg-white border border-zinc-200 rounded-2xl shadow-xs space-y-4">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-700 flex items-center gap-1.5">
-                <Sliders className="w-3.5 h-3.5 text-indigo-600" /> LLM Model & Sampling Configuration
+            <div className="p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xs space-y-4 transition-colors">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
+                <Sliders className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" /> LLM Model & Sampling Configuration
               </h3>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
                 {/* Model Selector Card */}
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
+                  <label className="block text-xs font-semibold text-zinc-800 dark:text-zinc-200 mb-1.5">
                     Selected LLM Model
                   </label>
-                  <div className="p-4 bg-zinc-50/80 border border-zinc-300 rounded-xl flex items-center justify-between shadow-xs">
+                  <div className="p-4 bg-zinc-50 dark:bg-zinc-800/80 border border-zinc-300 dark:border-zinc-700 rounded-xl flex items-center justify-between shadow-xs transition-colors">
                     <div className="flex items-center space-x-3 overflow-hidden mr-2">
-                      <div className="w-10 h-10 rounded-xl bg-white border border-zinc-200 flex items-center justify-center text-xl shrink-0 shadow-2xs">
+                      <div className="w-10 h-10 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center text-xl shrink-0 shadow-2xs">
                         {getProviderIcon(model)}
                       </div>
                       <div className="truncate min-w-0">
-                        <div className="text-xs font-bold text-zinc-900 font-mono truncate">
+                        <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100 font-mono truncate">
                           {model}
                         </div>
-                        <div className="text-[11px] text-zinc-500 mt-0.5 flex items-center gap-1.5">
+                        <div className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 flex items-center gap-1.5">
                           {model.startsWith('vllm/') || model.startsWith('ollama/') ? (
-                            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 font-semibold">
+                            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-800/80 font-semibold">
                               Local Server
                             </span>
                           ) : model.startsWith('huggingface/') || model.startsWith('hf/') ? (
-                            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 border border-amber-200 font-semibold">
+                            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800/80 font-semibold">
                               Hugging Face
                             </span>
                           ) : (
-                            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-zinc-100 text-zinc-600 border border-zinc-200">
+                            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-zinc-100 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700">
                               Cloud Provider
                             </span>
                           )}
@@ -437,7 +437,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                     <button
                       type="button"
                       onClick={() => setIsModelModalOpen(true)}
-                      className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 shrink-0"
+                      className="px-3.5 py-2 rounded-xl bg-indigo-600 dark:bg-indigo-500 hover:bg-indigo-700 dark:hover:bg-indigo-600 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 shrink-0 cursor-pointer"
                     >
                       <Cpu className="w-3.5 h-3.5" />
                       <span>Change</span>
@@ -448,10 +448,10 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                 {/* Sampling Temperature */}
                 <div>
                   <div className="flex justify-between items-center mb-1.5">
-                    <label className="text-xs font-semibold text-zinc-700">
+                    <label className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
                       Temperature Sampling
                     </label>
-                    <span className="font-mono text-xs text-indigo-600 font-bold">{temperature}</span>
+                    <span className="font-mono text-xs text-indigo-600 dark:text-indigo-400 font-bold">{temperature}</span>
                   </div>
                   <input
                     type="range"
@@ -460,9 +460,9 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                     step="0.05"
                     value={temperature}
                     onChange={(event) => setTemperature(parseFloat(event.target.value))}
-                    className="w-full h-2 bg-zinc-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 mt-2"
+                    className="w-full h-2 bg-zinc-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600 mt-2"
                   />
-                  <div className="flex justify-between text-[10px] text-zinc-500 mt-1.5">
+                  <div className="flex justify-between text-[10px] text-zinc-500 dark:text-zinc-400 mt-1.5">
                     <span>0.0 (Deterministic / Analytical)</span>
                     <span>1.0 (Creative / Exploratory)</span>
                   </div>
@@ -472,7 +472,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
 
             {/* System Prompt */}
             <div>
-              <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
+              <label className="block text-xs font-semibold text-zinc-800 dark:text-zinc-200 mb-1.5">
                 System Prompt Instructions
               </label>
               <textarea
@@ -480,14 +480,14 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                 value={systemPrompt}
                 onChange={(event) => setSystemPrompt(event.target.value)}
                 placeholder="Define agent personality, behavior, constraints, and instructions..."
-                className="w-full bg-white border border-zinc-300 rounded-xl p-3.5 text-xs text-zinc-900 font-mono focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 leading-relaxed"
+                className="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-xl p-3.5 text-xs text-zinc-900 dark:text-zinc-100 font-mono focus:outline-none focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-1 focus:ring-indigo-500 leading-relaxed transition-colors"
               />
             </div>
 
             {/* Allowed Tools - Rendered as a clean vertical list */}
             <div className="space-y-2">
-              <label className="block text-xs font-bold uppercase tracking-wider text-zinc-700 flex items-center gap-1.5">
-                <Wrench className="w-3.5 h-3.5 text-indigo-600" /> Permitted Tools ({allowedTools.length} enabled)
+              <label className="block text-xs font-bold uppercase tracking-wider text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
+                <Wrench className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" /> Permitted Tools ({allowedTools.length} enabled)
               </label>
               <div className="space-y-2">
                 {tools.map((tool) => {
@@ -498,27 +498,27 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                       onClick={() => toggleTool(tool.name)}
                       className={`p-3.5 rounded-xl border cursor-pointer flex items-center justify-between transition-all ${
                         isChecked
-                          ? 'bg-indigo-50/70 border border-indigo-600 text-zinc-950 shadow-xs ring-1 ring-indigo-500/20'
-                          : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300 hover:bg-zinc-50/70 shadow-xs'
+                          ? 'bg-indigo-50/90 dark:bg-indigo-950/80 border-indigo-600 dark:border-indigo-400 text-zinc-950 dark:text-zinc-100 shadow-xs ring-1 ring-indigo-500/20'
+                          : 'bg-white dark:bg-zinc-800/80 border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 hover:border-zinc-300 dark:hover:border-zinc-600 hover:bg-zinc-100/70 dark:hover:bg-zinc-750 shadow-xs'
                       }`}
                     >
                       <div className="pr-4">
                         <div className="flex items-center space-x-2">
-                          <span className="font-semibold text-xs font-mono text-zinc-900">{tool.name}</span>
+                          <span className="font-semibold text-xs font-mono text-zinc-900 dark:text-zinc-100">{tool.name}</span>
                           {tool.is_builtin ? (
-                            <span className="text-[9px] font-semibold uppercase px-1.5 py-0.2 rounded bg-zinc-100 text-zinc-600 border border-zinc-200">
+                            <span className="text-[9px] font-semibold uppercase px-1.5 py-0.2 rounded bg-zinc-100 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700">
                               Builtin
                             </span>
                           ) : (
-                            <span className="text-[9px] font-semibold uppercase px-1.5 py-0.2 rounded bg-indigo-100 text-indigo-700 border border-indigo-200 font-medium">
+                            <span className="text-[9px] font-semibold uppercase px-1.5 py-0.2 rounded bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-700 font-medium">
                               Custom
                             </span>
                           )}
                         </div>
-                        <div className="text-[11px] text-zinc-500 mt-0.5 leading-normal">{tool.description}</div>
+                        <div className="text-[11px] text-zinc-600 dark:text-zinc-300 mt-0.5 leading-normal">{tool.description}</div>
                       </div>
                       <div className={`w-5 h-5 rounded-md flex items-center justify-center border shrink-0 transition-colors ${
-                        isChecked ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-zinc-300 bg-white'
+                        isChecked ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800'
                       }`}>
                         {isChecked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                       </div>
@@ -530,10 +530,10 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
 
             {/* Preloaded Skills - Rendered as a clean vertical list */}
             <div className="space-y-2">
-              <label className="block text-xs font-bold uppercase tracking-wider text-zinc-700 flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-indigo-600" /> Preloaded Skills ({preloadedSkills.length} active)
+              <label className="block text-xs font-bold uppercase tracking-wider text-zinc-800 dark:text-zinc-200 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" /> Preloaded Skills ({preloadedSkills.length} active)
               </label>
-              <p className="text-[11px] text-zinc-500">
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
                 Preloaded skills inject full instructions into context at startup. Other skills are loaded on demand via load_skill.
               </p>
               <div className="space-y-2">
@@ -545,16 +545,16 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                       onClick={() => togglePreloadedSkill(skill.name)}
                       className={`p-3.5 rounded-xl border cursor-pointer flex items-center justify-between transition-all ${
                         isChecked
-                          ? 'bg-indigo-50/70 border border-indigo-600 text-zinc-950 shadow-xs ring-1 ring-indigo-500/20'
-                          : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300 hover:bg-zinc-50/70 shadow-xs'
+                          ? 'bg-indigo-50/90 dark:bg-indigo-950/80 border-indigo-600 dark:border-indigo-400 text-zinc-950 dark:text-zinc-100 shadow-xs ring-1 ring-indigo-500/20'
+                          : 'bg-white dark:bg-zinc-800/80 border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 hover:border-zinc-300 dark:hover:border-zinc-600 hover:bg-zinc-100/70 dark:hover:bg-zinc-750 shadow-xs'
                       }`}
                     >
                       <div className="pr-4">
-                        <div className="font-semibold text-xs text-zinc-900">{skill.name}</div>
-                        <div className="text-[11px] text-zinc-500 mt-0.5 leading-normal">{skill.description}</div>
+                        <div className="font-semibold text-xs text-zinc-900 dark:text-zinc-100">{skill.name}</div>
+                        <div className="text-[11px] text-zinc-600 dark:text-zinc-300 mt-0.5 leading-normal">{skill.description}</div>
                       </div>
                       <div className={`w-5 h-5 rounded-md flex items-center justify-center border shrink-0 transition-colors ${
-                        isChecked ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-zinc-300 bg-white'
+                        isChecked ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800'
                       }`}>
                         {isChecked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                       </div>

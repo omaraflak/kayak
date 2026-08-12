@@ -2,12 +2,15 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { App } from './App';
 import { DialogProvider } from './context/DialogContext';
+import { ThemeProvider } from './context/ThemeContext';
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <DialogProvider>
-      <App />
-    </DialogProvider>
+    <ThemeProvider>
+      <DialogProvider>
+        <App />
+      </DialogProvider>
+    </ThemeProvider>
   </React.StrictMode>
 );

@@ -8,6 +8,103 @@
   100% { transform: translateX(-100%); }
 }
 
+/* Material Design 3 Semantic Color System & Design Tokens */
+:root {
+  /* Primary Tonal Palette (Indigo 500/600 based) */
+  --md-sys-color-primary: #4f46e5;
+  --md-sys-color-on-primary: #ffffff;
+  --md-sys-color-primary-container: #e0e7ff;
+  --md-sys-color-on-primary-container: #1e1b4b;
+  --md-sys-color-primary-hover: #4338ca;
+
+  /* Secondary Tonal Palette (Teal/Slate) */
+  --md-sys-color-secondary: #0d9488;
+  --md-sys-color-on-secondary: #ffffff;
+  --md-sys-color-secondary-container: #ccfbf1;
+  --md-sys-color-on-secondary-container: #134e4a;
+
+  /* Surface & Background Tonal Scale */
+  --md-sys-color-background: #f8fafc;
+  --md-sys-color-on-background: #0f172a;
+  --md-sys-color-surface: #ffffff;
+  --md-sys-color-surface-dim: #f1f5f9;
+  --md-sys-color-surface-container-lowest: #ffffff;
+  --md-sys-color-surface-container-low: #f8fafc;
+  --md-sys-color-surface-container: #f1f5f9;
+  --md-sys-color-surface-container-high: #e2e8f0;
+  --md-sys-color-surface-container-highest: #cbd5e1;
+
+  /* On-Surface Typography & Icons */
+  --md-sys-color-on-surface: #0f172a;
+  --md-sys-color-on-surface-variant: #475569;
+  --md-sys-color-outline: #94a3b8;
+  --md-sys-color-outline-variant: #e2e8f0;
+
+  /* Semantic Alerts */
+  --md-sys-color-error: #dc2626;
+  --md-sys-color-on-error: #ffffff;
+  --md-sys-color-error-container: #fee2e2;
+  --md-sys-color-on-error-container: #7f1d1d;
+
+  --md-sys-color-success: #059669;
+  --md-sys-color-on-success: #ffffff;
+  --md-sys-color-success-container: #d1fae5;
+  --md-sys-color-on-success-container: #064e3b;
+
+  --md-sys-color-warning: #d97706;
+  --md-sys-color-on-warning: #ffffff;
+  --md-sys-color-warning-container: #fef3c7;
+  --md-sys-color-on-warning-container: #78350f;
+}
+
+.dark {
+  /* Primary Tonal Palette - Bright high-contrast lavender/indigo for dark surfaces */
+  --md-sys-color-primary: #a5b4fc;
+  --md-sys-color-on-primary: #1e1b4b;
+  --md-sys-color-primary-container: #312e81;
+  --md-sys-color-on-primary-container: #e0e7ff;
+  --md-sys-color-primary-hover: #c7d2fe;
+
+  /* Secondary Tonal Palette */
+  --md-sys-color-secondary: #5eead4;
+  --md-sys-color-on-secondary: #042f2e;
+  --md-sys-color-secondary-container: #115e59;
+  --md-sys-color-on-secondary-container: #ccfbf1;
+
+  /* Surface & Background Tonal Scale */
+  --md-sys-color-background: #090a0f;
+  --md-sys-color-on-background: #f1f5f9;
+  --md-sys-color-surface: #12131a;
+  --md-sys-color-surface-dim: #090a0f;
+  --md-sys-color-surface-container-lowest: #0c0e14;
+  --md-sys-color-surface-container-low: #161822;
+  --md-sys-color-surface-container: #1c1e28;
+  --md-sys-color-surface-container-high: #262835;
+  --md-sys-color-surface-container-highest: #313442;
+
+  /* On-Surface Typography & Icons */
+  --md-sys-color-on-surface: #f8fafc;
+  --md-sys-color-on-surface-variant: #cbd5e1;
+  --md-sys-color-outline: #64748b;
+  --md-sys-color-outline-variant: #2e3240;
+
+  /* Semantic Alerts */
+  --md-sys-color-error: #f87171;
+  --md-sys-color-on-error: #450a0a;
+  --md-sys-color-error-container: #7f1d1d;
+  --md-sys-color-on-error-container: #fee2e2;
+
+  --md-sys-color-success: #34d399;
+  --md-sys-color-on-success: #022c22;
+  --md-sys-color-success-container: #064e3b;
+  --md-sys-color-on-success-container: #d1fae5;
+
+  --md-sys-color-warning: #fbbf24;
+  --md-sys-color-on-warning: #451a03;
+  --md-sys-color-warning-container: #78350f;
+  --md-sys-color-on-warning-container: #fef3c7;
+}
+
 html,
 body,
 #root {
@@ -24,11 +121,11 @@ body,
 
 @layer base {
   body {
-    @apply bg-zinc-50 text-zinc-900 selection:bg-indigo-100 selection:text-indigo-900;
+    @apply bg-zinc-50 text-zinc-900 selection:bg-indigo-100 selection:text-indigo-900 dark:bg-zinc-950 dark:text-zinc-100 dark:selection:bg-indigo-900 dark:selection:text-indigo-200 transition-colors duration-150;
   }
 }
 
-/* Elegant light scrollbars */
+/* Elegant scrollbars for Light and Dark Modes */
 ::-webkit-scrollbar {
   width: 5px;
   height: 5px;
@@ -41,19 +138,26 @@ body,
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.22);
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
 }
 
 pre, code {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
-/* Prism.js Elegant Light Syntax Highlighting Theme */
+/* Prism.js Syntax Highlighting - Light Theme */
 code[class*="language-"],
 pre[class*="language-"] {
   color: #1f2937;
   text-shadow: none;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
   direction: ltr;
   text-align: left;
   white-space: pre;
@@ -68,12 +172,12 @@ pre[class*="language-"] {
 .token.prolog,
 .token.doctype,
 .token.cdata {
-  color: #9ca3af;
+  color: #94a3b8;
   font-style: italic;
 }
 
 .token.punctuation {
-  color: #4b5563;
+  color: #64748b;
 }
 
 .token.namespace {
@@ -104,7 +208,7 @@ pre[class*="language-"] {
 .token.url,
 .language-css .token.string,
 .style .token.string {
-  color: #4b5563;
+  color: #475569;
 }
 
 .token.atrule,
@@ -137,4 +241,67 @@ pre[class*="language-"] {
 
 .token.entity {
   cursor: help;
+}
+
+/* Prism.js Syntax Highlighting - Dark Theme */
+.dark code[class*="language-"],
+.dark pre[class*="language-"] {
+  color: #f1f5f9;
+}
+
+.dark .token.comment,
+.dark .token.prolog,
+.dark .token.doctype,
+.dark .token.cdata {
+  color: #64748b;
+}
+
+.dark .token.punctuation {
+  color: #94a3b8;
+}
+
+.dark .token.property,
+.dark .token.tag,
+.dark .token.boolean,
+.dark .token.number,
+.dark .token.constant,
+.dark .token.symbol,
+.dark .token.deleted {
+  color: #fbbf24; /* amber-400 */
+}
+
+.dark .token.selector,
+.dark .token.attr-name,
+.dark .token.string,
+.dark .token.char,
+.dark .token.builtin,
+.dark .token.inserted {
+  color: #34d399; /* emerald-400 */
+}
+
+.dark .token.operator,
+.dark .token.entity,
+.dark .token.url,
+.dark .language-css .token.string,
+.dark .style .token.string {
+  color: #94a3b8;
+}
+
+.dark .token.atrule,
+.dark .token.attr-value,
+.dark .token.keyword {
+  color: #c084fc; /* purple-400 */
+  font-weight: 600;
+}
+
+.dark .token.function,
+.dark .token.class-name {
+  color: #60a5fa; /* blue-400 */
+  font-weight: 500;
+}
+
+.dark .token.regex,
+.dark .token.important,
+.dark .token.variable {
+  color: #fb923c; /* orange-400 */
 }

@@ -123,17 +123,17 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full min-h-0 bg-zinc-50 overflow-hidden">
+    <div className="flex-1 flex flex-col h-full min-h-0 bg-zinc-50 dark:bg-zinc-950 overflow-hidden transition-colors">
       {/* Studio Header Bar */}
-      <div className="h-16 border-b border-zinc-200 px-8 flex items-center justify-between bg-white shrink-0">
+      <div className="h-16 border-b border-zinc-200 dark:border-zinc-800 px-8 flex items-center justify-between bg-white dark:bg-zinc-900 shrink-0 transition-colors">
         <div className="flex items-center space-x-3">
-          <Sparkles className="w-5 h-5 text-indigo-600" />
+          <Sparkles className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
           <div>
-            <h2 className="font-bold text-sm text-zinc-900">
+            <h2 className="font-bold text-sm text-zinc-900 dark:text-zinc-100">
               Tool Studio & Live Verification Runner
             </h2>
-            <p className="text-[11px] text-zinc-500">
-              Powered by the <span className="text-zinc-800 font-mono font-semibold">tool_architect</span> agent. Chat on the left to synthesize code, edit on the right, and verify tests.
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+              Powered by the <span className="text-zinc-800 dark:text-zinc-200 font-mono font-semibold">tool_architect</span> agent. Chat on the left to synthesize code, edit on the right, and verify tests.
             </p>
           </div>
         </div>
@@ -171,8 +171,8 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
 
       {/* Main Workspace Split (50% Chat | 50% Code & Test Runner) */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Column: Tool Architect Chat (Full ChatView component!) */}
-        <div className="w-1/2 border-r border-zinc-200 bg-zinc-50 flex flex-col overflow-hidden">
+        {/* Left Column: Tool Architect Chat */}
+        <div className="w-1/2 border-r border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 flex flex-col overflow-hidden transition-colors">
           <ChatPane
             conversationId={conversationId}
             agentId="tool_architect"
@@ -190,25 +190,25 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
         </div>
 
         {/* Right Column: Code Editor & Execution Runner */}
-        <div className="w-1/2 flex flex-col bg-white overflow-hidden">
+        <div className="w-1/2 flex flex-col bg-white dark:bg-zinc-900 overflow-hidden transition-colors">
           {/* File Tab Selector */}
-          <div className="p-3 border-b border-zinc-200 flex items-center justify-between bg-zinc-50/50 shrink-0">
+          <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between bg-zinc-50 dark:bg-zinc-800/80 shrink-0">
             <div className="flex items-center space-x-3">
-              <label className="text-xs font-semibold text-zinc-700">Tool Name:</label>
+              <label className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">Tool Name:</label>
               <input
                 type="text"
                 value={toolName}
                 placeholder="e.g. generate_uuidv4"
                 onChange={(e) => setToolName(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '_'))}
-                className="bg-white border border-zinc-300 rounded-lg px-2.5 py-1 font-mono text-xs text-zinc-900 focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
+                className="bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 rounded-lg px-2.5 py-1 font-mono text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-1 focus:ring-indigo-500 transition-colors"
               />
             </div>
 
-            <div className="flex bg-zinc-100 border border-zinc-200 rounded-lg p-0.5 text-xs">
+            <div className="flex bg-zinc-200/80 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg p-0.5 text-xs">
               <button
                 onClick={() => setActiveCodeTab('tool')}
-                className={`px-3 py-1 rounded-md font-mono text-xs transition-colors flex items-center gap-1.5 ${
-                  activeCodeTab === 'tool' ? 'bg-white text-zinc-900 font-semibold shadow-xs' : 'text-zinc-600 hover:text-zinc-900'
+                className={`px-3 py-1 rounded-md font-mono text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
+                  activeCodeTab === 'tool' ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 font-semibold shadow-xs' : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
                 }`}
               >
                 <FileCode className="w-3.5 h-3.5" />
@@ -216,8 +216,8 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
               </button>
               <button
                 onClick={() => setActiveCodeTab('verify')}
-                className={`px-3 py-1 rounded-md font-mono text-xs transition-colors flex items-center gap-1.5 ${
-                  activeCodeTab === 'verify' ? 'bg-white text-zinc-900 font-semibold shadow-xs' : 'text-zinc-600 hover:text-zinc-900'
+                className={`px-3 py-1 rounded-md font-mono text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
+                  activeCodeTab === 'verify' ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 font-semibold shadow-xs' : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
                 }`}
               >
                 <ShieldCheck className="w-3.5 h-3.5" />
@@ -227,7 +227,7 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
           </div>
 
           {/* Textarea Code Area */}
-          <div className="h-64 p-3 bg-white border-b border-zinc-200 flex flex-col shrink-0">
+          <div className="h-64 p-3 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 flex flex-col shrink-0 transition-colors">
             <textarea
               value={activeCodeTab === 'tool' ? toolCode : verifyCode}
               onChange={(e) => {
@@ -240,19 +240,19 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
                   : "# verify.py test suite will sync here from the agent or you can type directly...\ndef test_happy_path():\n    assert ..."
               }
               spellCheck={false}
-              className="flex-1 w-full bg-zinc-50 border border-zinc-200 rounded-xl p-3 font-mono text-[11px] text-zinc-800 focus:bg-white focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 resize-none leading-relaxed"
+              className="flex-1 w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-xl p-3 font-mono text-[11px] text-zinc-900 dark:text-zinc-100 focus:bg-white dark:focus:bg-zinc-950 focus:outline-none focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-1 focus:ring-indigo-500 resize-none leading-relaxed transition-colors"
             />
           </div>
 
           {/* Verification Results Panel */}
-          <div className="flex-1 p-4 bg-zinc-50 overflow-y-auto space-y-3">
-            <div className="flex items-center justify-between text-xs font-bold text-zinc-700 uppercase tracking-wider">
+          <div className="flex-1 p-4 bg-zinc-50/50 dark:bg-zinc-950/80 overflow-y-auto space-y-3 transition-colors">
+            <div className="flex items-center justify-between text-xs font-bold text-zinc-800 dark:text-zinc-200 uppercase tracking-wider">
               <span>Verification Output</span>
               {verifyResult && (
                 <span className={`inline-flex items-center gap-1 text-[10px] px-2.5 py-0.5 rounded-full font-bold ${
                   verifyResult.success
-                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                    : 'bg-rose-100 text-rose-800 border border-rose-300'
+                    ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800/80'
+                    : 'bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-800/80'
                 }`}>
                   {verifyResult.success ? '✓ TESTS PASSED' : '✗ TESTS FAILED'}
                 </span>
@@ -269,7 +269,7 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
 
                 {verifyResult.parsed_schema && (
                   <div>
-                    <div className="text-[10px] font-bold text-zinc-700 uppercase tracking-wider mb-1">
+                    <div className="text-[10px] font-bold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1">
                       Auto-extracted JSON Schema
                     </div>
                     <CodeBlock
@@ -280,7 +280,7 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
                 )}
               </>
             ) : (
-              <div className="text-center py-10 text-zinc-400 text-xs">
+              <div className="text-center py-10 text-zinc-400 dark:text-zinc-600 text-xs">
                 {toolCode.trim() 
                   ? "Click Run Verification (verify.py) to test the implementation."
                   : "Ask the Tool Architect to generate a tool, or enter code above."}

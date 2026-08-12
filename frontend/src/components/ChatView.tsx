@@ -169,29 +169,29 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full min-h-0 bg-zinc-50 overflow-hidden">
+    <div className="flex-1 flex flex-col h-full min-h-0 bg-zinc-50 dark:bg-zinc-950 overflow-hidden transition-colors">
       {/* Top Header Bar */}
-      <div className="h-16 border-b border-zinc-200 px-8 flex items-center justify-between bg-white shrink-0">
+      <div className="h-16 border-b border-zinc-200 dark:border-zinc-800 px-8 flex items-center justify-between bg-white dark:bg-zinc-900 shrink-0 transition-colors">
         <div className="flex items-center space-x-3 truncate">
-          <h2 className="font-bold text-sm text-zinc-900 truncate max-w-md">
+          <h2 className="font-bold text-sm text-zinc-900 dark:text-zinc-100 truncate max-w-md">
             {conversationId ? (conversation?.title || 'Conversation') : 'New Conversation'}
           </h2>
 
           {conversationId ? (
             conversation?.isolated_container ? (
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 shrink-0">
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800/60 shrink-0">
                 <span>🐳</span> Docker Sandbox
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-zinc-100 text-zinc-600 border border-zinc-200 shrink-0">
-                <Cpu className="w-3.5 h-3.5 text-zinc-500" /> Host Workspace
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 shrink-0">
+                <Cpu className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" /> Host Workspace
               </span>
             )
           ) : null}
 
           {activeAgent && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-zinc-100 text-zinc-800 border border-zinc-200 font-mono shrink-0">
-              <Bot className="w-3.5 h-3.5 text-zinc-500" /> {activeAgent.name} ({activeAgent.model})
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 font-mono shrink-0">
+              <Bot className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" /> {activeAgent.name} ({activeAgent.model})
             </span>
           )}
         </div>
@@ -205,21 +205,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <div className="w-full max-w-2xl flex flex-col space-y-4 max-h-full">
               {/* Header Title */}
               <div className="text-center space-y-1.5 shrink-0">
-                <div className="w-12 h-12 rounded-2xl bg-white border border-zinc-200 flex items-center justify-center text-2xl mx-auto shadow-xs">
+                <div className="w-12 h-12 rounded-2xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center text-2xl mx-auto shadow-xs">
                   🛶
                 </div>
-                <h3 className="text-base font-bold text-zinc-900 tracking-tight">
+                <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">
                   How can Kayak help you today?
                 </h3>
-                <p className="text-xs text-zinc-500 leading-relaxed">
+                <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
                   Select an agent profile and execution environment below. Type your initial prompt to begin.
                 </p>
               </div>
 
               {/* Agent Profile Selection Widget Container */}
-              <div className="bg-white border border-zinc-200 rounded-2xl p-5 shadow-xs flex flex-col space-y-3 overflow-hidden">
-                <label className="block text-xs font-bold uppercase tracking-wider text-zinc-700 flex items-center gap-1.5 shrink-0">
-                  <Bot className="w-4 h-4 text-indigo-600" /> Choose Agent Profile
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-xs flex flex-col space-y-3 overflow-hidden transition-colors">
+                <label className="block text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5 shrink-0">
+                  <Bot className="w-4 h-4 text-indigo-600 dark:text-indigo-400" /> Choose Agent Profile
                 </label>
 
                 {/* Inner Cards Grid: Scrollable with Clean Scrollbar */}
@@ -233,28 +233,28 @@ export const ChatView: React.FC<ChatViewProps> = ({
                           onClick={() => setDraftAgentId(agent.id)}
                           className={`p-3 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
                             isSelected
-                              ? 'bg-indigo-50/80 border border-indigo-600 text-zinc-950 shadow-xs ring-1 ring-indigo-500/20'
-                              : 'bg-white border-zinc-200 text-zinc-700 hover:border-zinc-300 hover:bg-zinc-50/70 shadow-xs'
+                              ? 'bg-indigo-50/80 dark:bg-indigo-950/60 border-indigo-600 dark:border-indigo-500 text-zinc-950 dark:text-zinc-100 shadow-xs ring-1 ring-indigo-500/20'
+                              : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-50/70 dark:hover:bg-zinc-800/50 shadow-xs'
                           }`}
                         >
                           <div>
                             <div className="flex items-center justify-between mb-1">
-                              <span className="font-semibold text-xs text-zinc-900">{agent.name}</span>
+                              <span className="font-semibold text-xs text-zinc-900 dark:text-zinc-100">{agent.name}</span>
                               <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
                                 isSelected 
-                                  ? 'bg-indigo-100 text-indigo-800 border-indigo-200' 
-                                  : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                                  ? 'bg-indigo-100 dark:bg-indigo-900/80 text-indigo-800 dark:text-indigo-200 border-indigo-200 dark:border-indigo-700' 
+                                  : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700'
                               }`}>
                                 {agent.model.split('/')[1] || agent.model}
                               </span>
                             </div>
-                            <p className="text-[11px] text-zinc-500 line-clamp-2 leading-relaxed">
+                            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 line-clamp-2 leading-relaxed">
                               {agent.description}
                             </p>
                           </div>
 
-                          <div className="mt-2.5 pt-2 border-t border-zinc-100 flex items-center justify-between text-[10px]">
-                            <span className="text-zinc-400 font-mono">
+                          <div className="mt-2.5 pt-2 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between text-[10px]">
+                            <span className="text-zinc-400 dark:text-zinc-500 font-mono">
                               {agent.allowed_tools?.length || 0} tools · {agent.preloaded_skills?.length || 0} skills
                             </span>
                             <div className="flex items-center gap-2">
@@ -262,9 +262,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                 const badge = getVllmBadge(agent);
                                 if (!badge) return null;
                                 const colorClasses = {
-                                  green: 'text-emerald-600 bg-emerald-50 border-emerald-200',
-                                  yellow: 'text-amber-600 bg-amber-50 border-amber-200',
-                                  red: 'text-zinc-500 bg-zinc-50 border-zinc-200',
+                                  green: 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800/60',
+                                  yellow: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800/60',
+                                  red: 'text-zinc-500 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700',
                                 };
                                 if (badge.canStart) {
                                   return (
@@ -275,7 +275,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                         const modelId = getVllmModelId(agent.model);
                                         if (modelId) handleStartModel(modelId);
                                       }}
-                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-400 transition-colors"
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors"
                                     >
                                       <Play className="w-3 h-3" />
                                       Start
@@ -294,7 +294,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                                 );
                               })()}
                               {isSelected && (
-                                <span className="inline-flex items-center gap-1 text-indigo-600 font-bold">
+                                <span className="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-400 font-bold">
                                   <Check className="w-3.5 h-3.5 stroke-[3]" /> Selected
                                 </span>
                               )}
@@ -307,12 +307,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 </div>
 
                 {/* Execution Sandbox Isolation Toggle */}
-                <div className="pt-3 border-t border-zinc-100 flex items-center justify-between shrink-0">
+                <div className="pt-3 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between shrink-0">
                   <div>
-                    <div className="text-xs font-semibold text-zinc-900 flex items-center gap-1.5">
+                    <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
                       <span>🐳 Docker Sandbox Isolation</span>
                     </div>
-                    <div className="text-[11px] text-zinc-500">
+                    <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
                       Run shell commands and code in an isolated container instead of host
                     </div>
                   </div>
@@ -320,7 +320,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     type="button"
                     onClick={() => setDraftUseContainer(!draftUseContainer)}
                     className={`w-11 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors duration-200 ease-in-out ${
-                      draftUseContainer ? 'bg-indigo-600' : 'bg-zinc-200'
+                      draftUseContainer ? 'bg-indigo-600' : 'bg-zinc-200 dark:bg-zinc-700'
                     }`}
                   >
                     <div
@@ -335,10 +335,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
 
           {/* Bottom Docked Message Composer */}
-          <div className="p-4 bg-white border-t border-zinc-200 shrink-0">
+          <div className="p-4 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 shrink-0 transition-colors">
             <form
               onSubmit={handleDraftSend}
-              className="max-w-4xl mx-auto relative bg-zinc-50 border border-zinc-300 rounded-xl overflow-hidden focus-within:bg-white focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-600 shadow-xs transition-all"
+              className="max-w-4xl mx-auto relative bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-2xl overflow-hidden focus-within:border-indigo-600 dark:focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-500/20 shadow-xs transition-all"
             >
               <textarea
                 value={draftInput}
@@ -356,13 +356,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     ? 'Waiting for vLLM model to be ready...'
                     : `Message ${activeAgent?.name || 'Kayak Agent'}... (Enter to send, Shift+Enter for new line)`
                 }
-                className={`w-full bg-transparent px-3.5 py-2.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none resize-none leading-relaxed ${
+                className={`w-full bg-transparent px-4 py-3 text-xs text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none resize-none leading-relaxed ${
                   !isVllmModelReady ? 'opacity-50 cursor-not-allowed' : ''
                 }`}
               />
 
-              <div className="flex items-center justify-between px-3.5 py-2 bg-zinc-100/50 border-t border-zinc-200">
-                <div className="flex items-center space-x-2 text-[11px] text-zinc-500">
+              <div className="flex items-center justify-between px-3.5 py-2 bg-zinc-50 dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-700">
+                <div className="flex items-center space-x-2 text-[11px] text-zinc-600 dark:text-zinc-300">
                   {!isVllmModelReady ? (
                     isVllmModelLoading ? (
                       <Loader2 className="w-3.5 h-3.5 text-amber-500 animate-spin" />
@@ -370,14 +370,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       <AlertCircle className="w-3.5 h-3.5 text-zinc-400" />
                     )
                   ) : (
-                    <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
                   )}
-                  <span className="font-semibold text-zinc-700">{activeAgent?.name}</span>
+                  <span className="font-semibold text-zinc-800 dark:text-zinc-200">{activeAgent?.name}</span>
                   {activeAgent?.model && (
-                    <span className="font-mono text-[10px] text-zinc-400">({activeAgent.model})</span>
+                    <span className="font-mono text-[10px] text-zinc-500 dark:text-zinc-400">({activeAgent.model})</span>
                   )}
                   {!isVllmModelReady && isVllmModelLoading && vllmStatus && (
-                    <span className="font-mono text-[10px] text-amber-600">
+                    <span className="font-mono text-[10px] text-amber-600 dark:text-amber-400">
                       — {vllmStatus.message || 'Model is loading...'}
                     </span>
                   )}
@@ -387,19 +387,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   <button
                     type="button"
                     onClick={() => handleStartModel(selectedAgentVllmModelId)}
-                    className="inline-flex items-center space-x-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors shadow-xs"
+                    className="inline-flex items-center space-x-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors shadow-xs cursor-pointer"
                   >
-                    <Play className="w-3.5 h-3.5" />
+                    <Play className="w-3.5 h-3.5 fill-white" />
                     <span>Start Model</span>
                   </button>
                 ) : (
                   <button
                     type="submit"
                     disabled={!draftInput.trim() || !isVllmModelReady || isCreating}
-                    className="inline-flex items-center space-x-1 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white transition-colors shadow-xs"
+                    className="inline-flex items-center space-x-1 px-4 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 dark:bg-indigo-500 hover:bg-indigo-700 dark:hover:bg-indigo-600 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white transition-colors shadow-xs cursor-pointer"
                   >
                     <span>{isCreating ? 'Starting...' : isVllmModelLoading ? 'Model Loading...' : 'Send'}</span>
-                    {isCreating || isVllmModelLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                    {isCreating || isVllmModelLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                   </button>
                 )}
               </div>
