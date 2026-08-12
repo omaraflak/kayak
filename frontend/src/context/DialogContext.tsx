@@ -167,32 +167,32 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     switch (variant) {
       case 'danger':
         return (
-          <div className="w-10 h-10 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+          <div className="w-10 h-10 rounded-xl bg-rose-100 dark:bg-rose-950/80 border border-rose-300 dark:border-rose-800/80 text-rose-800 dark:text-rose-200 flex items-center justify-center shrink-0">
             <AlertTriangle className="w-5 h-5" />
           </div>
         );
       case 'warning':
         return (
-          <div className="w-10 h-10 rounded-xl bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800/60 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+          <div className="w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-950/80 border border-amber-300 dark:border-amber-800/80 text-amber-800 dark:text-amber-200 flex items-center justify-center shrink-0">
             <AlertCircle className="w-5 h-5" />
           </div>
         );
       case 'success':
         return (
-          <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
-            <CheckCircle2 className="w-5 h-5" />
+          <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/80 border border-emerald-300 dark:border-emerald-800/80 text-emerald-800 dark:text-emerald-200 flex items-center justify-center shrink-0">
+            <CheckCircle2 className="w-5 h-5 stroke-[2.5]" />
           </div>
         );
       case 'question':
         return (
-          <div className="w-10 h-10 rounded-xl bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 flex items-center justify-center shrink-0">
+          <div className="w-10 h-10 rounded-xl bg-md-primary-container border border-md-outline-variant text-md-on-primary-container flex items-center justify-center shrink-0">
             <HelpCircle className="w-5 h-5" />
           </div>
         );
       case 'info':
       default:
         return (
-          <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800/60 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+          <div className="w-10 h-10 rounded-xl bg-md-primary-container border border-md-outline-variant text-md-on-primary-container flex items-center justify-center shrink-0">
             <Info className="w-5 h-5" />
           </div>
         );
@@ -201,12 +201,12 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const getConfirmButtonClass = (variant?: DialogVariant) => {
     if (variant === 'danger') {
-      return 'bg-rose-600 hover:bg-rose-700 text-white shadow-xs';
+      return 'bg-md-error hover:opacity-90 text-md-on-error shadow-xs';
     }
     if (variant === 'warning') {
       return 'bg-amber-600 hover:bg-amber-700 text-white shadow-xs';
     }
-    return 'bg-zinc-900 dark:bg-indigo-600 hover:bg-zinc-800 dark:hover:bg-indigo-700 text-white shadow-xs';
+    return 'bg-md-primary hover:opacity-90 text-md-on-primary shadow-xs';
   };
 
   return (
@@ -214,23 +214,23 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       {children}
 
       {isOpen && dialogConfig && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-900/60 dark:bg-zinc-950/80 backdrop-blur-xs animate-fade-in">
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl max-w-md w-full p-6 shadow-xl space-y-4 animate-scale-up transition-colors">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in font-sans">
+          <div className="bg-md-surface-container border border-md-outline-variant rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-scale-up transition-colors">
             <div className="flex items-start justify-between">
               <div className="flex items-start space-x-3.5">
                 {getIcon(dialogConfig.variant)}
                 <div className="space-y-1">
-                  <h3 className="font-bold text-sm text-zinc-900 dark:text-zinc-100 leading-tight">
+                  <h3 className="font-bold text-sm text-md-on-surface leading-tight">
                     {dialogConfig.title}
                   </h3>
-                  <div className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                  <div className="text-xs text-md-on-surface-variant leading-relaxed">
                     {dialogConfig.message}
                   </div>
                 </div>
               </div>
               <button
                 onClick={handleCancel}
-                className="text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors p-1 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                className="text-md-on-surface-variant hover:text-md-on-surface transition-colors p-1 rounded-lg hover:bg-md-surface-container-high cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -248,17 +248,17 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
                     if (e.key === 'Enter') handleConfirm();
                     if (e.key === 'Escape') handleCancel();
                   }}
-                  className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg px-3.5 py-2 text-xs text-zinc-900 dark:text-zinc-100 focus:bg-white dark:focus:bg-zinc-800 focus:outline-none focus:border-indigo-600 dark:focus:border-indigo-500 focus:ring-1 focus:ring-indigo-600 transition-colors"
+                  className="w-full bg-md-surface-container-lowest border border-md-outline-variant rounded-xl px-3.5 py-2 text-xs font-mono text-md-on-surface placeholder:text-md-on-surface-variant/70 focus:outline-none focus:border-md-primary focus:ring-1 focus:ring-md-primary transition-colors"
                 />
               </div>
             )}
 
-            <div className="flex justify-end space-x-2.5 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+            <div className="flex justify-end space-x-2.5 pt-3 border-t border-md-outline-variant">
               {dialogConfig.showCancel && (
                 <button
                   type="button"
                   onClick={handleCancel}
-                  className="px-4 py-2 rounded-lg text-xs font-semibold text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-md-on-surface hover:bg-md-surface-container-high transition-colors cursor-pointer border border-md-outline-variant"
                 >
                   {dialogConfig.cancelText || 'Cancel'}
                 </button>
@@ -267,7 +267,7 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
                 type="button"
                 onClick={handleConfirm}
                 autoFocus={!dialogConfig.isPrompt}
-                className={`px-4 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${getConfirmButtonClass(
+                className={`px-4 py-2 rounded-xl text-xs font-semibold transition-opacity cursor-pointer ${getConfirmButtonClass(
                   dialogConfig.variant
                 )}`}
               >

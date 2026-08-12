@@ -123,17 +123,17 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full min-h-0 bg-zinc-50 dark:bg-zinc-950 overflow-hidden transition-colors">
+    <div className="flex-1 flex flex-col h-full min-h-0 bg-md-surface overflow-hidden transition-colors">
       {/* Studio Header Bar */}
-      <div className="h-16 border-b border-zinc-200 dark:border-zinc-800 px-8 flex items-center justify-between bg-white dark:bg-zinc-900 shrink-0 transition-colors">
+      <div className="h-16 border-b border-md-outline-variant px-8 flex items-center justify-between bg-md-surface-container-low shrink-0 transition-colors">
         <div className="flex items-center space-x-3">
-          <Sparkles className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+          <Sparkles className="w-5 h-5 text-md-primary" />
           <div>
-            <h2 className="font-bold text-sm text-zinc-900 dark:text-zinc-100">
+            <h2 className="font-bold text-sm text-md-on-surface">
               Tool Studio & Live Verification Runner
             </h2>
-            <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-              Powered by the <span className="text-zinc-800 dark:text-zinc-200 font-mono font-semibold">tool_architect</span> agent. Chat on the left to synthesize code, edit on the right, and verify tests.
+            <p className="text-[11px] text-md-on-surface-variant">
+              Powered by the <span className="text-md-on-surface font-mono font-semibold">tool_architect</span> agent. Chat on the left to synthesize code, edit on the right, and verify tests.
             </p>
           </div>
         </div>
@@ -142,12 +142,12 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
           <button
             onClick={handleVerify}
             disabled={isVerifying || !toolCode.trim()}
-            className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 flex items-center gap-1.5 transition-colors shadow-sm focus:ring-2 focus:ring-indigo-500"
+            className="px-4 py-2 rounded-xl text-xs font-bold text-md-on-primary bg-md-primary hover:opacity-90 disabled:opacity-40 flex items-center gap-1.5 transition-opacity shadow-xs focus:ring-2 focus:ring-md-primary cursor-pointer"
           >
             {isVerifying ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
             ) : (
-              <Play className="w-3.5 h-3.5 fill-white stroke-white" />
+              <Play className="w-3.5 h-3.5 fill-current" />
             )}
             <span>{isVerifying ? 'Running Tests...' : 'Run Verification (verify.py)'}</span>
           </button>
@@ -155,12 +155,12 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
           <button
             onClick={handleActivate}
             disabled={!verifyResult?.success || isActivating || activatedSuccess || !toolName.trim()}
-            className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white flex items-center gap-1.5 shadow-sm transition-colors focus:ring-2 focus:ring-emerald-500"
+            className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 dark:bg-emerald-600 dark:hover:bg-emerald-500 disabled:opacity-40 text-white flex items-center gap-1.5 shadow-xs transition-colors focus:ring-2 focus:ring-emerald-500 cursor-pointer"
           >
             {isActivating ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
             ) : activatedSuccess ? (
-              <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+              <CheckCircle2 className="w-3.5 h-3.5 text-white stroke-[2.5]" />
             ) : (
               <Save className="w-3.5 h-3.5" />
             )}
@@ -172,7 +172,7 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
       {/* Main Workspace Split (50% Chat | 50% Code & Test Runner) */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Column: Tool Architect Chat */}
-        <div className="w-1/2 border-r border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 flex flex-col overflow-hidden transition-colors">
+        <div className="w-1/2 border-r border-md-outline-variant bg-md-surface flex flex-col overflow-hidden transition-colors">
           <ChatPane
             conversationId={conversationId}
             agentId="tool_architect"
@@ -190,25 +190,25 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
         </div>
 
         {/* Right Column: Code Editor & Execution Runner */}
-        <div className="w-1/2 flex flex-col bg-white dark:bg-zinc-900 overflow-hidden transition-colors">
+        <div className="w-1/2 flex flex-col bg-md-surface-container-low overflow-hidden transition-colors">
           {/* File Tab Selector */}
-          <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between bg-zinc-50 dark:bg-zinc-800/80 shrink-0">
+          <div className="p-3 border-b border-md-outline-variant flex items-center justify-between bg-md-surface-container-low shrink-0">
             <div className="flex items-center space-x-3">
-              <label className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">Tool Name:</label>
+              <label className="text-xs font-semibold text-md-on-surface">Tool Name:</label>
               <input
                 type="text"
                 value={toolName}
                 placeholder="e.g. generate_uuidv4"
                 onChange={(e) => setToolName(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '_'))}
-                className="bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 rounded-lg px-2.5 py-1 font-mono text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-1 focus:ring-indigo-500 transition-colors"
+                className="bg-md-surface-container-lowest border border-md-outline-variant rounded-lg px-2.5 py-1 font-mono text-xs text-md-on-surface focus:outline-none focus:border-md-primary focus:ring-1 focus:ring-md-primary transition-colors"
               />
             </div>
 
-            <div className="flex bg-zinc-200/80 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg p-0.5 text-xs">
+            <div className="flex bg-md-surface-container-high border border-md-outline-variant rounded-lg p-0.5 text-xs">
               <button
                 onClick={() => setActiveCodeTab('tool')}
                 className={`px-3 py-1 rounded-md font-mono text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
-                  activeCodeTab === 'tool' ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 font-semibold shadow-xs' : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+                  activeCodeTab === 'tool' ? 'bg-md-primary text-md-on-primary font-semibold shadow-xs' : 'text-md-on-surface-variant hover:text-md-on-surface'
                 }`}
               >
                 <FileCode className="w-3.5 h-3.5" />
@@ -217,7 +217,7 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
               <button
                 onClick={() => setActiveCodeTab('verify')}
                 className={`px-3 py-1 rounded-md font-mono text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
-                  activeCodeTab === 'verify' ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 font-semibold shadow-xs' : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+                  activeCodeTab === 'verify' ? 'bg-md-primary text-md-on-primary font-semibold shadow-xs' : 'text-md-on-surface-variant hover:text-md-on-surface'
                 }`}
               >
                 <ShieldCheck className="w-3.5 h-3.5" />
@@ -227,7 +227,7 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
           </div>
 
           {/* Textarea Code Area */}
-          <div className="h-64 p-3 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 flex flex-col shrink-0 transition-colors">
+          <div className="h-64 p-3 bg-md-surface-container-lowest border-b border-md-outline-variant flex flex-col shrink-0 transition-colors">
             <textarea
               value={activeCodeTab === 'tool' ? toolCode : verifyCode}
               onChange={(e) => {
@@ -240,13 +240,13 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
                   : "# verify.py test suite will sync here from the agent or you can type directly...\ndef test_happy_path():\n    assert ..."
               }
               spellCheck={false}
-              className="flex-1 w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-xl p-3 font-mono text-[11px] text-zinc-900 dark:text-zinc-100 focus:bg-white dark:focus:bg-zinc-950 focus:outline-none focus:border-indigo-600 dark:focus:border-indigo-400 focus:ring-1 focus:ring-indigo-500 resize-none leading-relaxed transition-colors"
+              className="flex-1 w-full bg-md-surface-container-lowest border border-md-outline-variant rounded-xl p-3 font-mono text-[11px] text-md-on-surface placeholder:text-md-on-surface-variant/70 focus:outline-none focus:border-md-primary focus:ring-1 focus:ring-md-primary resize-none leading-relaxed transition-colors"
             />
           </div>
 
           {/* Verification Results Panel */}
-          <div className="flex-1 p-4 bg-zinc-50/50 dark:bg-zinc-950/80 overflow-y-auto space-y-3 transition-colors">
-            <div className="flex items-center justify-between text-xs font-bold text-zinc-800 dark:text-zinc-200 uppercase tracking-wider">
+          <div className="flex-1 p-4 bg-md-surface overflow-y-auto space-y-3 transition-colors">
+            <div className="flex items-center justify-between text-xs font-bold text-md-on-surface uppercase tracking-wider">
               <span>Verification Output</span>
               {verifyResult && (
                 <span className={`inline-flex items-center gap-1 text-[10px] px-2.5 py-0.5 rounded-full font-bold ${
@@ -269,7 +269,7 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
 
                 {verifyResult.parsed_schema && (
                   <div>
-                    <div className="text-[10px] font-bold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1">
+                    <div className="text-[10px] font-bold text-md-on-surface uppercase tracking-wider mb-1">
                       Auto-extracted JSON Schema
                     </div>
                     <CodeBlock
@@ -280,7 +280,7 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
                 )}
               </>
             ) : (
-              <div className="text-center py-10 text-zinc-400 dark:text-zinc-600 text-xs">
+              <div className="text-center py-10 text-md-on-surface-variant text-xs">
                 {toolCode.trim() 
                   ? "Click Run Verification (verify.py) to test the implementation."
                   : "Ask the Tool Architect to generate a tool, or enter code above."}

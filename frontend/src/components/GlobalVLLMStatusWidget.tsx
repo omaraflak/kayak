@@ -93,7 +93,7 @@ export const GlobalVLLMStatusWidget: React.FC = () => {
           aria-label="vLLM server deployment status"
           className="fixed bottom-5 right-5 z-40 animate-slide-up font-sans"
         >
-          <div className="bg-zinc-950/95 text-white border border-zinc-700/80 rounded-2xl shadow-2xl p-3.5 backdrop-blur-md flex items-center space-x-3.5 max-w-md min-w-[320px]">
+          <div className="bg-md-inverse-surface text-md-inverse-on-surface border border-md-outline-variant rounded-2xl shadow-2xl p-3.5 backdrop-blur-md flex items-center space-x-3.5 max-w-md min-w-[320px]">
             {/* Status Icon */}
             <div 
               role="button"
@@ -103,7 +103,7 @@ export const GlobalVLLMStatusWidget: React.FC = () => {
               className="cursor-pointer"
             >
               {isBusy && (
-                <div className="w-9 h-9 rounded-xl bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center text-indigo-400 shrink-0">
+                <div className="w-9 h-9 rounded-xl bg-md-primary/20 border border-md-primary/40 flex items-center justify-center text-md-primary shrink-0">
                   <Loader2 className="w-5 h-5 animate-spin" />
                 </div>
               )}
@@ -128,15 +128,15 @@ export const GlobalVLLMStatusWidget: React.FC = () => {
               className="flex-1 min-w-0 cursor-pointer space-y-0.5"
             >
               <div className="flex items-center justify-between text-xs">
-                <span className="font-bold text-zinc-100 truncate pr-2">
+                <span className="font-bold text-md-inverse-on-surface truncate pr-2">
                   {isBusy ? `Deploying ${modelShortName}` : isReady ? `vLLM: ${modelShortName}` : 'vLLM Error'}
                 </span>
-                <span className="font-mono text-[11px] text-zinc-400 font-semibold shrink-0">
+                <span className="font-mono text-[11px] text-md-inverse-on-surface/70 font-semibold shrink-0">
                   {isReady ? `Port ${status?.port || 8001}` : ''}
                 </span>
               </div>
 
-              <p className="text-[10.5px] text-zinc-400 truncate">
+              <p className="text-[10.5px] text-md-inverse-on-surface/70 truncate">
                 {isBusy ? `${status?.message || 'Deploying...'} (${elapsedSeconds}s)` : status?.message}
               </p>
             </div>
@@ -146,7 +146,7 @@ export const GlobalVLLMStatusWidget: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setIsModalOpen(true)}
-                className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+                className="p-1.5 rounded-lg text-md-inverse-on-surface/60 hover:text-md-inverse-on-surface hover:bg-white/10 transition-colors"
                 title="Open full logs & controls"
               >
                 <Maximize2 className="w-4 h-4" />
@@ -156,7 +156,7 @@ export const GlobalVLLMStatusWidget: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsDismissed(true)}
-                  className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+                  className="p-1.5 rounded-lg text-md-inverse-on-surface/60 hover:text-md-inverse-on-surface hover:bg-white/10 transition-colors"
                   title="Dismiss pill"
                 >
                   <X className="w-4 h-4" />

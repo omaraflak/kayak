@@ -8,16 +8,51 @@ export default {
   theme: {
     extend: {
       colors: {
-        kayak: {
-          50: '#f0fdfa',
-          100: '#ccfbf1',
-          500: '#14b8a6',
-          600: '#0d9488',
-          700: '#0f766e',
-          900: '#134e4a',
-        }
+        md: {
+          primary: 'var(--md-sys-color-primary)',
+          'on-primary': 'var(--md-sys-color-on-primary)',
+          'primary-container': 'var(--md-sys-color-primary-container)',
+          'on-primary-container': 'var(--md-sys-color-on-primary-container)',
+          'inverse-primary': 'var(--md-sys-color-inverse-primary)',
+          
+          secondary: 'var(--md-sys-color-secondary)',
+          'on-secondary': 'var(--md-sys-color-on-secondary)',
+          'secondary-container': 'var(--md-sys-color-secondary-container)',
+          'on-secondary-container': 'var(--md-sys-color-on-secondary-container)',
+          
+          tertiary: 'var(--md-sys-color-tertiary)',
+          'on-tertiary': 'var(--md-sys-color-on-tertiary)',
+          'tertiary-container': 'var(--md-sys-color-tertiary-container)',
+          'on-tertiary-container': 'var(--md-sys-color-on-tertiary-container)',
+          
+          surface: 'var(--md-sys-color-surface)',
+          'surface-dim': 'var(--md-sys-color-surface-dim)',
+          'surface-bright': 'var(--md-sys-color-surface-bright)',
+          'on-surface': 'var(--md-sys-color-on-surface)',
+          'surface-variant': 'var(--md-sys-color-surface-variant)',
+          'on-surface-variant': 'var(--md-sys-color-on-surface-variant)',
+          
+          'surface-container-lowest': 'var(--md-sys-color-surface-container-lowest)',
+          'surface-container-low': 'var(--md-sys-color-surface-container-low)',
+          'surface-container': 'var(--md-sys-color-surface-container)',
+          'surface-container-high': 'var(--md-sys-color-surface-container-high)',
+          'surface-container-highest': 'var(--md-sys-color-surface-container-highest)',
+          
+          'inverse-surface': 'var(--md-sys-color-inverse-surface)',
+          'inverse-on-surface': 'var(--md-sys-color-inverse-on-surface)',
+          
+          outline: 'var(--md-sys-color-outline)',
+          'outline-variant': 'var(--md-sys-color-outline-variant)',
+          scrim: 'var(--md-sys-color-scrim)',
+          
+          error: 'var(--md-sys-color-error)',
+          'on-error': 'var(--md-sys-color-on-error)',
+          'error-container': 'var(--md-sys-color-error-container)',
+          'on-error-container': 'var(--md-sys-color-on-error-container)',
+        },
       }
     },
   },
   plugins: [],
 }
+

@@ -558,36 +558,36 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   // Markdown renderer for Assistant messages
   const assistantMarkdownComponents = {
     h1({ children, ...props }: any) {
-      return <h1 className="text-xl font-bold text-zinc-950 dark:text-zinc-100 mt-6 mb-3 tracking-tight" {...props}>{children}</h1>;
+      return <h1 className="text-xl font-bold text-md-on-surface mt-6 mb-3 tracking-tight" {...props}>{children}</h1>;
     },
     h2({ children, ...props }: any) {
-      return <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mt-5 mb-2 tracking-tight" {...props}>{children}</h2>;
+      return <h2 className="text-lg font-bold text-md-on-surface mt-5 mb-2 tracking-tight" {...props}>{children}</h2>;
     },
     h3({ children, ...props }: any) {
-      return <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100 mt-4 mb-1.5" {...props}>{children}</h3>;
+      return <h3 className="text-base font-semibold text-md-on-surface mt-4 mb-1.5" {...props}>{children}</h3>;
     },
     p({ children, ...props }: any) {
-      return <p className="mb-3.5 text-zinc-850 dark:text-zinc-200 text-[15px] leading-relaxed font-normal" {...props}>{children}</p>;
+      return <p className="mb-3.5 text-md-on-surface text-[15px] leading-relaxed font-normal" {...props}>{children}</p>;
     },
     ul({ children, ...props }: any) {
-      return <ul className="list-disc pl-5 my-3 space-y-1.5 text-zinc-850 dark:text-zinc-200 text-[15px] leading-relaxed" {...props}>{children}</ul>;
+      return <ul className="list-disc pl-5 my-3 space-y-1.5 text-md-on-surface text-[15px] leading-relaxed" {...props}>{children}</ul>;
     },
     ol({ children, ...props }: any) {
-      return <ol className="list-decimal pl-5 my-3 space-y-1.5 text-zinc-850 dark:text-zinc-200 text-[15px] leading-relaxed" {...props}>{children}</ol>;
+      return <ol className="list-decimal pl-5 my-3 space-y-1.5 text-md-on-surface text-[15px] leading-relaxed" {...props}>{children}</ol>;
     },
     li({ children, ...props }: any) {
-      return <li className="leading-relaxed text-[15px]" {...props}>{children}</li>;
+      return <li className="leading-relaxed text-[15px] text-md-on-surface" {...props}>{children}</li>;
     },
     blockquote({ children, ...props }: any) {
       return (
-        <blockquote className="border-l-3 border-indigo-500 pl-4 py-1.5 my-3.5 text-zinc-700 dark:text-zinc-300 bg-indigo-50/40 dark:bg-indigo-950/30 rounded-r-xl italic text-[14px] leading-relaxed" {...props}>
+        <blockquote className="border-l-3 border-md-primary pl-4 py-1.5 my-3.5 text-md-on-surface bg-md-primary-container/30 rounded-r-xl italic text-[14px] leading-relaxed" {...props}>
           {children}
         </blockquote>
       );
     },
     table({ children, ...props }: any) {
       return (
-        <div className="my-4 overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs">
+        <div className="my-4 overflow-x-auto rounded-xl border border-md-outline-variant shadow-xs">
           <table className="w-full text-left text-xs border-collapse" {...props}>
             {children}
           </table>
@@ -595,10 +595,10 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       );
     },
     th({ children, ...props }: any) {
-      return <th className="bg-zinc-100/80 dark:bg-zinc-800/80 p-3 font-bold text-zinc-800 dark:text-zinc-200 border-b border-zinc-200 dark:border-zinc-700" {...props}>{children}</th>;
+      return <th className="bg-md-surface-container-high p-3 font-bold text-md-on-surface border-b border-md-outline-variant" {...props}>{children}</th>;
     },
     td({ children, ...props }: any) {
-      return <td className="p-3 border-b border-zinc-100 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300" {...props}>{children}</td>;
+      return <td className="p-3 border-b border-md-outline-variant text-md-on-surface" {...props}>{children}</td>;
     },
     code({ node, inline, className, children, ...props }: any) {
       const match = /language-(\w+)/.exec(className || '');
@@ -614,43 +614,43 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
         );
       }
       return (
-        <code className="px-1.5 py-0.5 rounded-md bg-zinc-200/70 dark:bg-zinc-800 border border-zinc-300/60 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 font-mono text-[13px]" {...props}>
+        <code className="px-1.5 py-0.5 rounded-md bg-md-surface-container-high border border-md-outline-variant text-md-on-surface font-mono text-[13px]" {...props}>
           {children}
         </code>
       );
     }
   };
 
-  // Markdown renderer for User message bubble (pure white text on dark background)
+  // Markdown renderer for User message bubble
   const userMarkdownComponents = {
     h1({ children, ...props }: any) {
-      return <h1 className="text-lg font-bold text-white my-2" {...props}>{children}</h1>;
+      return <h1 className="text-lg font-bold text-md-on-primary my-2" {...props}>{children}</h1>;
     },
     h2({ children, ...props }: any) {
-      return <h2 className="text-base font-bold text-white my-1.5" {...props}>{children}</h2>;
+      return <h2 className="text-base font-bold text-md-on-primary my-1.5" {...props}>{children}</h2>;
     },
     h3({ children, ...props }: any) {
-      return <h3 className="text-sm font-bold text-white my-1" {...props}>{children}</h3>;
+      return <h3 className="text-sm font-bold text-md-on-primary my-1" {...props}>{children}</h3>;
     },
     p({ children, ...props }: any) {
-      return <p className="text-white text-[15px] leading-relaxed mb-2 last:mb-0 font-normal" {...props}>{children}</p>;
+      return <p className="text-md-on-primary text-[15px] leading-relaxed mb-2 last:mb-0 font-normal" {...props}>{children}</p>;
     },
     ul({ children, ...props }: any) {
-      return <ul className="list-disc pl-5 my-2 text-white text-[15px] space-y-1" {...props}>{children}</ul>;
+      return <ul className="list-disc pl-5 my-2 text-md-on-primary text-[15px] space-y-1" {...props}>{children}</ul>;
     },
     ol({ children, ...props }: any) {
-      return <ol className="list-decimal pl-5 my-2 text-white text-[15px] space-y-1" {...props}>{children}</ol>;
+      return <ol className="list-decimal pl-5 my-2 text-md-on-primary text-[15px] space-y-1" {...props}>{children}</ol>;
     },
     li({ children, ...props }: any) {
-      return <li className="text-white leading-relaxed text-[15px]" {...props}>{children}</li>;
+      return <li className="text-md-on-primary leading-relaxed text-[15px]" {...props}>{children}</li>;
     },
     strong({ children, ...props }: any) {
-      return <strong className="font-bold text-white" {...props}>{children}</strong>;
+      return <strong className="font-bold text-md-on-primary" {...props}>{children}</strong>;
     },
     code({ node, inline, className, children, ...props }: any) {
       const codeStr = String(children).replace(/\n$/, '');
       return (
-        <code className="px-1.5 py-0.5 rounded bg-zinc-800 dark:bg-indigo-900 border border-zinc-700 dark:border-indigo-700 text-zinc-100 font-mono text-[13px]" {...props}>
+        <code className="px-1.5 py-0.5 rounded bg-md-on-primary/20 border border-md-on-primary/30 text-md-on-primary font-mono text-[13px]" {...props}>
           {codeStr}
         </code>
       );
@@ -660,16 +660,16 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   const groupedTurns = groupMessagesIntoTurns(messages);
 
   return (
-    <div className="flex-1 flex flex-col h-full min-h-0 bg-zinc-50 dark:bg-zinc-950 overflow-hidden transition-colors">
+    <div className="flex-1 flex flex-col h-full min-h-0 bg-md-surface overflow-hidden transition-colors">
       {/* Optional Sub-Header */}
       {showHeader && (
-        <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex items-center justify-between text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-300 shrink-0 transition-colors">
+        <div className="p-3 border-b border-md-outline-variant bg-md-surface-container-low flex items-center justify-between text-xs font-bold uppercase tracking-wider text-md-on-surface shrink-0 transition-colors">
           <div className="flex items-center space-x-2">
-            <Bot className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            <Bot className="w-4 h-4 text-md-primary" />
             <span>{headerTitle || agentName}</span>
           </div>
           {headerBadge && (
-            <span className="text-[10px] font-mono text-zinc-500 dark:text-zinc-400 font-normal">{headerBadge}</span>
+            <span className="text-[10px] font-mono text-md-on-surface-variant font-normal">{headerBadge}</span>
           )}
         </div>
       )}
@@ -679,11 +679,11 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
         <div className="max-w-3xl mx-auto w-full space-y-6">
           {groupedTurns.length === 0 && !streamingTokenText && !streamingThinkingText && Object.keys(activeToolExecutions).length === 0 && (
             <div className="text-center py-20 space-y-3">
-              <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 flex items-center justify-center text-indigo-600 dark:text-indigo-400 mx-auto shadow-xs">
+              <div className="w-12 h-12 rounded-2xl bg-md-primary-container text-md-on-primary-container border border-md-outline-variant flex items-center justify-center mx-auto shadow-xs">
                 <Sparkles className="w-6 h-6" />
               </div>
-              <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">{headerTitle || `Chat with ${agentName}`}</h3>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-sm mx-auto leading-relaxed">
+              <h3 className="text-sm font-bold text-md-on-surface">{headerTitle || `Chat with ${agentName}`}</h3>
+              <p className="text-xs text-md-on-surface-variant max-w-sm mx-auto leading-relaxed">
                 {headerSubtitle || 'Type your instructions below to begin interactive agent synthesis and refinement.'}
               </p>
             </div>
@@ -693,7 +693,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
             if (turn.role === 'user') {
               return (
                 <div key={turn.id} className="flex justify-end pt-2">
-                  <div className="max-w-2xl bg-zinc-900 dark:bg-indigo-600 text-white rounded-2xl rounded-tr-xs px-5 py-3 text-[15px] shadow-xs leading-relaxed">
+                  <div className="max-w-2xl bg-md-primary text-md-on-primary rounded-2xl rounded-tr-xs px-5 py-3 text-[15px] shadow-xs leading-relaxed">
                     <ReactMarkdown 
                       remarkPlugins={[remarkGfm, remarkMath]} 
                       rehypePlugins={[rehypeKatex]}
@@ -716,7 +716,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
                   {/* Direct Response Text on Background without enclosing white card or icons */}
                   {turn.content && (
-                    <div className="text-zinc-800 dark:text-zinc-200 text-[15px] leading-relaxed">
+                    <div className="text-md-on-surface text-[15px] leading-relaxed">
                       <ReactMarkdown 
                         remarkPlugins={[remarkGfm, remarkMath]} 
                         rehypePlugins={[rehypeKatex]}
@@ -751,11 +751,11 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
             <div className="w-full space-y-2 pt-2 animate-fade-in">
               {/* Agent Preparing / Thinking Loader before first token arrives */}
               {isSending && !streamingTokenText && !streamingThinkingText && Object.keys(activeToolExecutions).length === 0 && (
-                <div className="flex items-center space-x-2.5 py-3 text-zinc-500 dark:text-zinc-400 animate-pulse">
-                  <div className="w-7 h-7 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/80 dark:border-indigo-800/80 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shrink-0">
+                <div className="flex items-center space-x-2.5 py-3 text-md-on-surface-variant animate-pulse">
+                  <div className="w-7 h-7 rounded-xl bg-md-primary-container border border-md-outline-variant flex items-center justify-center text-md-on-primary-container shrink-0">
                     <Loader2 className="w-4 h-4 animate-spin" />
                   </div>
-                  <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Reaching model...</span>
+                  <span className="text-xs font-medium text-md-on-surface-variant">Reaching model...</span>
                 </div>
               )}
 
@@ -770,7 +770,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
               {/* Streaming token text directly on background */}
               {streamingTokenText && (
-                <div className="text-zinc-800 dark:text-zinc-200 text-[15px] leading-relaxed">
+                <div className="text-md-on-surface text-[15px] leading-relaxed">
                   <ReactMarkdown 
                     remarkPlugins={[remarkGfm, remarkMath]} 
                     rehypePlugins={[rehypeKatex]}
@@ -802,10 +802,10 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       </div>
 
       {/* Input Composer - Constrained to max-w-3xl for standard chat, full width in studio mode */}
-      <div className="p-4 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shrink-0 transition-colors">
+      <div className="p-4 border-t border-md-outline-variant bg-md-surface shrink-0 transition-colors">
         <form
           onSubmit={handleSend}
-          className={`${fullWidthInput ? 'w-full' : 'max-w-3xl mx-auto'} relative bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-2xl overflow-hidden focus-within:border-indigo-600 dark:focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-500/20 shadow-xs transition-all`}
+          className={`${fullWidthInput ? 'w-full' : 'max-w-3xl mx-auto'} relative bg-md-surface-container-lowest border border-md-outline-variant rounded-2xl overflow-hidden focus-within:border-md-primary focus-within:ring-2 focus-within:ring-md-primary/20 shadow-xs transition-all`}
         >
           <textarea
             value={inputContent}
@@ -820,29 +820,29 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                 ? `Local model ${vllmModelId} is initializing...`
                 : placeholder || `Message ${agentName}... (Enter to send, Shift+Enter for new line)`
             }
-            className="w-full bg-transparent px-4 py-3 text-xs text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none resize-none leading-relaxed disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full bg-transparent px-4 py-3 text-xs text-md-on-surface placeholder:text-md-on-surface-variant/70 focus:outline-none resize-none leading-relaxed disabled:opacity-60 disabled:cursor-not-allowed"
           />
 
-          <div className="flex items-center justify-between px-3.5 py-2 bg-zinc-50 dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-700">
-            <div className="flex items-center space-x-2 text-[11px] text-zinc-600 dark:text-zinc-300">
-              <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-              <span className="font-semibold text-zinc-800 dark:text-zinc-200">{agentName}</span>
+          <div className="flex items-center justify-between px-3.5 py-2 bg-md-surface-container-low border-t border-md-outline-variant">
+            <div className="flex items-center space-x-2 text-[11px] text-md-on-surface-variant">
+              <Sparkles className="w-3.5 h-3.5 text-md-primary" />
+              <span className="font-semibold text-md-on-surface">{agentName}</span>
               {agentModel && (
-                <span className="font-mono text-[10px] text-zinc-500 dark:text-zinc-400">
+                <span className="font-mono text-[10px] text-md-on-surface-variant">
                   ({agentModel.split('/')[1] || agentModel})
                 </span>
               )}
               {isVllmAgent && (
                 isVllmModelReady ? (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/60 px-2 py-0.5 rounded-full">
-                    <CheckCircle2 className="w-2.5 h-2.5" /> Serving
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-800 dark:text-emerald-200 bg-emerald-100 dark:bg-emerald-950/80 border border-emerald-300 dark:border-emerald-800/80 px-2 py-0.5 rounded-full">
+                    <CheckCircle2 className="w-2.5 h-2.5 stroke-[2.5]" /> Serving
                   </span>
                 ) : isVllmModelLoading ? (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800/60 px-2 py-0.5 rounded-full">
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 dark:text-amber-200 bg-amber-100 dark:bg-amber-950/80 border border-amber-300 dark:border-amber-800/80 px-2 py-0.5 rounded-full">
                     <Loader2 className="w-2.5 h-2.5 animate-spin" /> Loading
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-zinc-600 dark:text-zinc-300 bg-zinc-200 dark:bg-zinc-750 border border-zinc-300 dark:border-zinc-600 px-2 py-0.5 rounded-full">
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-md-on-surface-variant bg-md-surface-container-highest border border-md-outline-variant px-2 py-0.5 rounded-full">
                     Offline
                   </span>
                 )
@@ -854,9 +854,9 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                 <button
                   type="button"
                   onClick={handleCancelGeneration}
-                  className="inline-flex items-center space-x-1 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition-colors shadow-xs cursor-pointer"
+                  className="inline-flex items-center space-x-1 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-md-error text-md-on-error hover:opacity-90 transition-opacity shadow-xs cursor-pointer"
                 >
-                  <Square className="w-3 h-3 fill-white" />
+                  <Square className="w-3 h-3 fill-current" />
                   <span>Stop</span>
                 </button>
               ) : isVllmModelOffline ? (
@@ -864,16 +864,16 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                   type="button"
                   onClick={handleStartVllmModel}
                   disabled={isStartingVllm}
-                  className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white transition-colors shadow-xs cursor-pointer"
+                  className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-md-primary text-md-on-primary hover:opacity-90 disabled:opacity-50 transition-opacity shadow-xs cursor-pointer"
                 >
-                  {isStartingVllm ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-white" />}
+                  {isStartingVllm ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
                   <span>Start Model</span>
                 </button>
               ) : (
                 <button
                   type="submit"
                   disabled={!inputContent.trim() || isVllmModelLoading}
-                  className="inline-flex items-center space-x-1 px-4 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 dark:bg-indigo-500 hover:bg-indigo-700 dark:hover:bg-indigo-600 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white transition-colors shadow-xs cursor-pointer"
+                  className="inline-flex items-center space-x-1 px-4 py-1.5 rounded-lg text-xs font-semibold bg-md-primary text-md-on-primary hover:opacity-90 disabled:opacity-40 disabled:hover:opacity-40 transition-opacity shadow-xs cursor-pointer"
                 >
                   <span>{isVllmModelLoading ? 'Model Loading...' : 'Send'}</span>
                   {isVllmModelLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
