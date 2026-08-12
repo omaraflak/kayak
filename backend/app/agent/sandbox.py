@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 import docker
 from docker.errors import DockerException, NotFound
 from backend.app.config import settings
+from backend.app.docker_utils import DockerPathResolver
 
 
 class SandboxManager:
@@ -21,6 +22,7 @@ class SandboxManager:
             self._client = docker.from_env()
             self._client.ping()
             self._docker_available = True
+            DockerPathResolver.initialize(self._client)
         except Exception:
             self._client = None
             self._docker_available = False
@@ -64,37 +66,23 @@ class SandboxManager:
         except Exception:
             image_name = "python:3.11-slim"
 
-        # Build volumes map: Mount workspace, full codebase, skills and tools
+        # Build volumes map: Mount workspace and persistent data
+        workspace_src = DockerPathResolver.resolve_volume_source(workspace_dir)
         volumes_map: Dict[str, Dict[str, str]] = {
-            str(workspace_dir.resolve()): {
+            workspace_src: {
                 "bind": "/workspace",
                 "mode": "rw",
             },
         }
 
-        # Mount codebase into /app if exists
-        if settings.BASE_DIR.exists():
-            volumes_map[str(settings.BASE_DIR.resolve())] = {
-                "bind": "/app",
-                "mode": "ro",
-            }
-
-        # Mount data directory into /data, /skills, /tools
+        # Mount data directory into /data if it maps to a valid host path
         if settings.DATA_DIR.exists():
-            volumes_map[str(settings.DATA_DIR.resolve())] = {
-                "bind": "/data",
-                "mode": "ro",
-            }
-        if settings.SKILLS_DIR.exists():
-            volumes_map[str(settings.SKILLS_DIR.resolve())] = {
-                "bind": "/skills",
-                "mode": "ro",
-            }
-        if settings.TOOLS_DIR.exists():
-            volumes_map[str(settings.TOOLS_DIR.resolve())] = {
-                "bind": "/tools",
-                "mode": "ro",
-            }
+            data_src = DockerPathResolver.resolve_volume_source(settings.DATA_DIR)
+            if not DockerPathResolver.is_in_container() or not data_src.startswith("/app"):
+                volumes_map[data_src] = {
+                    "bind": "/data",
+                    "mode": "ro",
+                }
 
         container = self._client.containers.run(
             image=image_name,

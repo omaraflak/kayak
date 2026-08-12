@@ -11,6 +11,7 @@ import docker
 from docker.errors import DockerException, NotFound, ImageNotFound
 import httpx
 from backend.app.config import settings
+from backend.app.docker_utils import DockerPathResolver
 from backend.app.vllm.models import (
     VLLMDeployRequest,
     VLLMDeploymentProgress,
@@ -48,6 +49,7 @@ class VLLMManager:
             self._client = docker.from_env()
             self._client.ping()
             self._docker_available = True
+            DockerPathResolver.initialize(self._client)
         except Exception:
             self._client = None
             self._docker_available = False
@@ -275,8 +277,12 @@ class VLLMManager:
                 except Exception:
                     pass
 
+                hf_cache_src = DockerPathResolver.resolve_volume_source(
+                    hf_cache_dir,
+                    fallback_named_volume="kayak-huggingface-cache",
+                )
                 volumes = {
-                    str(hf_cache_dir.resolve()): {
+                    hf_cache_src: {
                         "bind": "/root/.cache/huggingface",
                         "mode": "rw",
                     }

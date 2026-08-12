@@ -24,5 +24,7 @@ services:
       - VLLM_API_BASE=${VLLM_API_BASE:-http://host.docker.internal:8001/v1}
       - OLLAMA_API_BASE=${OLLAMA_API_BASE:-http://host.docker.internal:11434}
       - KAYAK_SANDBOX_IMAGE=kayak-sandbox:latest
+      # Host path propagation for Docker-out-of-Docker sibling mounts on macOS/Linux
+      - KAYAK_HOST_DATA_DIR=${KAYAK_HOST_DATA_DIR:-${PWD}/data}
     extra_hosts:
       - "host.docker.internal:host-gateway"
