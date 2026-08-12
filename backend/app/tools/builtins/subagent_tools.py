@@ -83,7 +83,7 @@ async def spawn_subagent(
     """Spawns an autonomous sub-agent to handle a focused sub-task.
 
     Args:
-        agent_id: The ID of the agent configuration profile to use (e.g. 'coding', 'researcher', 'general').
+        agent_id: The ID of the agent configuration profile to use (e.g. 'coding', 'general', 'tool_architect').
         prompt: The specific task or prompt instruction for the sub-agent.
         wait_for_completion: If True, waits for the sub-agent to finish and returns the answer. If False, runs in background and returns task ID.
     """

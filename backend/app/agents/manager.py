@@ -96,26 +96,6 @@ DEFAULT_AGENTS: List[AgentConfig] = [
         preloaded_skills=["skill_creator"],
         tool_permissions={},
     ),
-    AgentConfig(
-        id="researcher",
-        name="Research Analyst",
-        description="Deep research agent that investigates topics across the web, synthesizes sources, and spawns sub-agents for parallel exploration.",
-        model="gemini/gemini-3.6-flash",
-        temperature=0.5,
-        system_prompt="You are Kayak's Research Analyst. Perform thorough investigations using web search and URL fetching. Synthesize findings into structured, cited markdown reports. When appropriate, spawn sub-agents to explore parallel research questions.",
-        allowed_tools=[
-            "web_search",
-            "fetch_url",
-            "spawn_subagent",
-            "get_subagent_result",
-            "load_skill",
-            "read_file",
-            "write_file",
-        ],
-        allowed_skills=["web_researcher"],
-        preloaded_skills=["web_researcher"],
-        tool_permissions={},
-    ),
 ]
 
 
