@@ -6,6 +6,9 @@ export interface RouteState {
   itemId?: string | null;
 }
 
+/** Tabs that follow the /<tab>/<optional-id> URL pattern. */
+const ITEM_TABS = new Set<NavigationTab>(['agents', 'skills', 'tools']);
+
 /**
  * Parses the current window.location.pathname into structured RouteState.
  */
@@ -13,57 +16,29 @@ export function parseCurrentUrl(): RouteState {
   const path = window.location.pathname.replace(/\/+$/, '') || '/';
   const parts = path.split('/').filter(Boolean);
 
+  // Root or explicit /chat
   if (parts.length === 0 || parts[0] === 'chat') {
-    return {
-      tab: 'chat',
-      conversationId: parts[1] || null,
-    };
+    return { tab: 'chat', conversationId: parts[1] || null };
   }
 
+  // Shorthand conversation URL: /c/<id>
   if (parts[0] === 'c') {
-    return {
-      tab: 'chat',
-      conversationId: parts[1] || null,
-    };
+    return { tab: 'chat', conversationId: parts[1] || null };
   }
 
-  if (parts[0] === 'agents') {
-    return {
-      tab: 'agents',
-      itemId: parts[1] || null,
-    };
+  // Tabs with optional item IDs: /agents, /skills, /tools
+  const firstPart = parts[0] as NavigationTab;
+  if (ITEM_TABS.has(firstPart)) {
+    return { tab: firstPart, itemId: parts[1] || null };
   }
 
-  if (parts[0] === 'skills') {
-    return {
-      tab: 'skills',
-      itemId: parts[1] || null,
-    };
+  // Simple tabs without sub-IDs: /tasks, /settings, /models
+  const SIMPLE_TABS = new Set<NavigationTab>(['tasks', 'settings', 'models']);
+  if (SIMPLE_TABS.has(firstPart)) {
+    return { tab: firstPart };
   }
 
-  if (parts[0] === 'tools') {
-    return {
-      tab: 'tools',
-      itemId: parts[1] || null,
-    };
-  }
-
-  if (parts[0] === 'tasks') {
-    return {
-      tab: 'tasks',
-    };
-  }
-
-  if (parts[0] === 'settings') {
-    return {
-      tab: 'settings',
-    };
-  }
-
-  return {
-    tab: 'chat',
-    conversationId: null,
-  };
+  return { tab: 'chat', conversationId: null };
 }
 
 /**
@@ -77,19 +52,14 @@ export function navigateTo(tab: NavigationTab, id?: string | null, replace = fal
       targetPath = id ? `/c/${id}` : '/chat';
       break;
     case 'agents':
-      targetPath = id ? `/agents/${encodeURIComponent(id)}` : '/agents';
-      break;
     case 'skills':
-      targetPath = id ? `/skills/${encodeURIComponent(id)}` : '/skills';
-      break;
     case 'tools':
-      targetPath = id ? `/tools/${encodeURIComponent(id)}` : '/tools';
+      targetPath = id ? `/${tab}/${encodeURIComponent(id)}` : `/${tab}`;
       break;
     case 'tasks':
-      targetPath = '/tasks';
-      break;
     case 'settings':
-      targetPath = '/settings';
+    case 'models':
+      targetPath = `/${tab}`;
       break;
     default:
       targetPath = '/';

@@ -1,14 +1,11 @@
 import asyncio
-from datetime import datetime
-import json
 import os
 from pathlib import Path
-import re
 import shutil
 import threading
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 import docker
-from docker.errors import DockerException, NotFound, ImageNotFound
+from docker.errors import NotFound, ImageNotFound
 import httpx
 from backend.app.config import settings
 from backend.app.docker_utils import DockerPathResolver
@@ -57,6 +54,26 @@ class VLLMManager:
     @property
     def is_docker_available(self) -> bool:
         return self._docker_available
+
+    def _get_endpoint_urls(self) -> List[str]:
+        """Returns the ordered list of vLLM endpoint URLs to probe."""
+        return [
+            f"http://host.docker.internal:{settings.VLLM_PORT}/v1/models",
+            f"{settings.VLLM_API_BASE.rstrip('/')}/models",
+            f"http://localhost:{settings.VLLM_PORT}/v1/models",
+            f"http://127.0.0.1:{settings.VLLM_PORT}/v1/models",
+        ]
+
+    def _ensure_log_streamer(self, container: Any) -> None:
+        """Spawns a log streaming thread if one isn't already running."""
+        if self._log_stop_event:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            self._log_stop_event = threading.Event()
+            self._spawn_log_stream_thread(container, loop, self._log_stop_event)
+        except Exception:
+            pass
 
     def subscribe(self) -> asyncio.Queue:
         """Subscribes to live SSE events from the vLLM manager."""
@@ -356,12 +373,8 @@ class VLLMManager:
 
         This is the sole mechanism for transitioning to READY state.
         """
-        urls_to_try = [
-            f"http://host.docker.internal:{settings.VLLM_PORT}/v1/models",
+        urls_to_try = self._get_endpoint_urls() + [
             f"http://host.docker.internal:{settings.VLLM_PORT}/health",
-            f"{settings.VLLM_API_BASE.rstrip('/')}/models",
-            f"http://localhost:{settings.VLLM_PORT}/v1/models",
-            f"http://127.0.0.1:{settings.VLLM_PORT}/v1/models",
         ]
         async with httpx.AsyncClient(timeout=1.0) as client:
             for _ in range(max_attempts):
@@ -432,22 +445,14 @@ class VLLMManager:
     async def check_and_sync_status(self) -> VLLMDeploymentProgress:
         """Inspects Docker and probes the vLLM HTTP endpoint to synchronize internal state."""
         # 1. Probe the HTTP endpoint to see if vLLM is responding
-        urls = [
-            f"http://host.docker.internal:{settings.VLLM_PORT}/v1/models",
-            f"{settings.VLLM_API_BASE.rstrip('/')}/models",
-            f"http://localhost:{settings.VLLM_PORT}/v1/models",
-            f"http://127.0.0.1:{settings.VLLM_PORT}/v1/models",
-        ]
-
         served_models: List[Dict[str, Any]] = []
         is_endpoint_alive = False
         async with httpx.AsyncClient(timeout=1.5) as client:
-            for url in urls:
+            for url in self._get_endpoint_urls():
                 try:
                     resp = await client.get(url)
                     if resp.status_code == 200:
-                        data = resp.json()
-                        served_models = data.get("data", [])
+                        served_models = resp.json().get("data", [])
                         is_endpoint_alive = True
                         break
                 except Exception:
@@ -484,14 +489,8 @@ class VLLMManager:
                 self._status.error = None
                 self._broadcast({"type": "status", "data": self._status.model_dump()})
 
-            # If container exists and log streamer thread is not running, spawn it
-            if container and container.status == "running" and not self._log_stop_event:
-                try:
-                    loop = asyncio.get_running_loop()
-                    self._log_stop_event = threading.Event()
-                    self._spawn_log_stream_thread(container, loop, self._log_stop_event)
-                except Exception:
-                    pass
+            if container and container.status == "running":
+                self._ensure_log_streamer(container)
 
         elif container and container.status == "running":
             # Container is running but endpoint is still initializing
@@ -520,14 +519,8 @@ class VLLMManager:
                 self._status.error = None
                 self._broadcast({"type": "status", "data": self._status.model_dump()})
 
-                # Attach log streaming if needed
-                if not self._log_stop_event:
-                    try:
-                        loop = asyncio.get_running_loop()
-                        self._log_stop_event = threading.Event()
-                        self._spawn_log_stream_thread(container, loop, self._log_stop_event)
-                    except Exception:
-                        pass
+            self._ensure_log_streamer(container)
+
         elif self._status.state == VLLMServerState.READY and not is_endpoint_alive:
             # Server was marked ready previously but is no longer responding
             self._status.state = VLLMServerState.STOPPED
@@ -541,19 +534,12 @@ class VLLMManager:
 
     async def list_served_models(self) -> List[Dict[str, Any]]:
         """Queries the running vLLM OpenAI endpoint for served models."""
-        urls = [
-            f"http://host.docker.internal:{settings.VLLM_PORT}/v1/models",
-            f"{settings.VLLM_API_BASE.rstrip('/')}/models",
-            f"http://localhost:{settings.VLLM_PORT}/v1/models",
-            f"http://127.0.0.1:{settings.VLLM_PORT}/v1/models",
-        ]
         async with httpx.AsyncClient(timeout=2.0) as client:
-            for url in urls:
+            for url in self._get_endpoint_urls():
                 try:
                     resp = await client.get(url)
                     if resp.status_code == 200:
-                        data = resp.json()
-                        models = data.get("data", [])
+                        models = resp.json().get("data", [])
                         if models:
                             active_id = models[0].get("id")
                             if self._status.state != VLLMServerState.READY or self._status.model_id != active_id:

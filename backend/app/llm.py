@@ -1,5 +1,3 @@
-import json
-import os
 import re
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 import litellm
@@ -22,63 +20,39 @@ class ThinkingStreamParser:
         self.buffer += text
 
         while self.buffer:
-            if not self.in_think:
-                open_idx = self.buffer.find("<think>")
-                if open_idx != -1:
-                    prefix = self.buffer[:open_idx]
-                    if prefix:
-                        events.append({"type": "token", "content": prefix})
-                    self.in_think = True
-                    self.buffer = self.buffer[open_idx + len("<think>"):]
-                    continue
-                else:
-                    # Check for partial prefix match of "<think>" at tail of buffer
-                    partial_len = 0
-                    for i in range(1, min(len("<think>"), len(self.buffer) + 1)):
-                        if "<think>".startswith(self.buffer[-i:]):
-                            partial_len = i
-                            break
-                    if partial_len > 0:
-                        emit_text = self.buffer[:-partial_len]
-                        if emit_text:
-                            events.append({"type": "token", "content": emit_text})
-                        self.buffer = self.buffer[-partial_len:]
-                        break
-                    else:
-                        events.append({"type": "token", "content": self.buffer})
-                        self.buffer = ""
-                        break
-            else:
-                close_idx = self.buffer.find("</think>")
-                if close_idx != -1:
-                    think_text = self.buffer[:close_idx]
-                    if think_text:
-                        events.append({"type": "thinking", "content": think_text})
-                    self.in_think = False
-                    self.buffer = self.buffer[close_idx + len("</think>"):]
-                    # Strip leading newline after </think> if present
+            tag = "<think>" if not self.in_think else "</think>"
+            emit_type = "token" if not self.in_think else "thinking"
+            idx = self.buffer.find(tag)
+
+            if idx != -1:
+                prefix = self.buffer[:idx]
+                if prefix:
+                    events.append({"type": emit_type, "content": prefix})
+                self.in_think = not self.in_think
+                self.buffer = self.buffer[idx + len(tag):]
+                # Strip leading newlines after </think>
+                if not self.in_think:
                     if self.buffer.startswith("\n\n"):
                         self.buffer = self.buffer[2:]
                     elif self.buffer.startswith("\n"):
                         self.buffer = self.buffer[1:]
-                    continue
+                continue
+            else:
+                # Check for partial tag match at tail
+                partial_len = 0
+                for i in range(1, min(len(tag), len(self.buffer) + 1)):
+                    if tag.startswith(self.buffer[-i:]):
+                        partial_len = i
+                        break
+                if partial_len > 0:
+                    emit_text = self.buffer[:-partial_len]
+                    if emit_text:
+                        events.append({"type": emit_type, "content": emit_text})
+                    self.buffer = self.buffer[-partial_len:]
                 else:
-                    # Check for partial prefix match of "</think>" at tail of buffer
-                    partial_len = 0
-                    for i in range(1, min(len("</think>"), len(self.buffer) + 1)):
-                        if "</think>".startswith(self.buffer[-i:]):
-                            partial_len = i
-                            break
-                    if partial_len > 0:
-                        emit_think = self.buffer[:-partial_len]
-                        if emit_think:
-                            events.append({"type": "thinking", "content": emit_think})
-                        self.buffer = self.buffer[-partial_len:]
-                        break
-                    else:
-                        events.append({"type": "thinking", "content": self.buffer})
-                        self.buffer = ""
-                        break
+                    events.append({"type": emit_type, "content": self.buffer})
+                    self.buffer = ""
+                break
 
         return events
 
@@ -105,12 +79,21 @@ def extract_thinking_and_content(raw_text: Optional[str]) -> Tuple[Optional[str]
     return None, raw_text
 
 
-def get_llm_kwargs(model: str, temperature: float = 0.7) -> Dict[str, Any]:
+def _build_llm_kwargs(
+    model: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    temperature: float = 0.7,
+    stream: bool = False,
+) -> Dict[str, Any]:
     """Builds provider-specific keyword arguments for LiteLLM completions.
 
     Args:
         model: LiteLLM model identifier string.
+        messages: List of message dictionaries.
+        tools: Optional OpenAI-compatible tool specifications.
         temperature: Sampling temperature between 0.0 and 1.0.
+        stream: Whether to stream the response.
 
     Returns:
         Dict[str, Any]: Kwargs dictionary including API keys or custom endpoints.
@@ -118,6 +101,8 @@ def get_llm_kwargs(model: str, temperature: float = 0.7) -> Dict[str, Any]:
     kwargs: Dict[str, Any] = {
         "model": model,
         "temperature": temperature,
+        "messages": messages,
+        "stream": stream,
     }
 
     # Pass API keys or custom endpoints based on model prefix
@@ -135,7 +120,64 @@ def get_llm_kwargs(model: str, temperature: float = 0.7) -> Dict[str, Any]:
         kwargs["api_base"] = settings.VLLM_API_BASE
         kwargs["api_key"] = "EMPTY"
 
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = "auto"
+
     return kwargs
+
+
+def _strip_tools(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Returns a copy of kwargs with tool-related keys removed for fallback retry."""
+    fallback = dict(kwargs)
+    fallback.pop("tools", None)
+    fallback.pop("tool_choice", None)
+    return fallback
+
+
+def _is_tool_error(error: Exception) -> bool:
+    """Checks whether an API error is likely caused by unsupported tool calling."""
+    msg = str(error).lower()
+    return "tool" in msg or "400" in msg
+
+
+async def _stream_response(kwargs: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+    """Streams completion chunks from a single LiteLLM call, parsing thinking tokens."""
+    parser = ThinkingStreamParser()
+    response = await litellm.acompletion(**kwargs)
+
+    async for chunk in response:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if not delta:
+            continue
+
+        # Native reasoning_content field (e.g. from vLLM/OpenAI o-series/DeepSeek)
+        reasoning_content = getattr(delta, "reasoning_content", None)
+        if reasoning_content:
+            yield {"type": "thinking", "content": reasoning_content}
+
+        # Standard content tokens (may contain <think>...</think> tags)
+        if hasattr(delta, "content") and delta.content:
+            for event in parser.feed(delta.content):
+                yield event
+
+        # Tool call chunks
+        if hasattr(delta, "tool_calls") and delta.tool_calls:
+            for tool_call in delta.tool_calls:
+                yield {
+                    "type": "tool_call_delta",
+                    "index": tool_call.index,
+                    "id": getattr(tool_call, "id", None),
+                    "name": getattr(tool_call.function, "name", None)
+                    if hasattr(tool_call, "function")
+                    else None,
+                    "arguments": getattr(tool_call.function, "arguments", "")
+                    if hasattr(tool_call, "function")
+                    else "",
+                }
+
+    for event in parser.flush():
+        yield event
 
 
 async def generate_completion_stream(
@@ -155,83 +197,49 @@ async def generate_completion_stream(
     Yields:
         Dict[str, Any]: Token chunks, thinking chunks, tool call deltas, or errors.
     """
-    kwargs = get_llm_kwargs(model, temperature)
-    kwargs["messages"] = messages
-    kwargs["stream"] = True
-
-    if tools:
-        kwargs["tools"] = tools
-        kwargs["tool_choice"] = "auto"
-
-    parser = ThinkingStreamParser()
+    kwargs = _build_llm_kwargs(model, messages, tools, temperature, stream=True)
 
     try:
-        response = await litellm.acompletion(**kwargs)
-        async for chunk in response:
-            delta = chunk.choices[0].delta if chunk.choices else None
-            if not delta:
-                continue
-
-            # 1. Native reasoning_content field (e.g. from vLLM/OpenAI o-series/DeepSeek)
-            reasoning_content = getattr(delta, "reasoning_content", None)
-            if reasoning_content:
-                yield {"type": "thinking", "content": reasoning_content}
-
-            # 2. Standard content tokens (may contain <think>...</think> tags)
-            if hasattr(delta, "content") and delta.content:
-                for event in parser.feed(delta.content):
-                    yield event
-
-            # 3. Tool call chunks
-            if hasattr(delta, "tool_calls") and delta.tool_calls:
-                for tool_call in delta.tool_calls:
-                    yield {
-                        "type": "tool_call_delta",
-                        "index": tool_call.index,
-                        "id": getattr(tool_call, "id", None),
-                        "name": getattr(tool_call.function, "name", None)
-                        if hasattr(tool_call, "function")
-                        else None,
-                        "arguments": getattr(tool_call.function, "arguments", "")
-                        if hasattr(tool_call, "function")
-                        else "",
-                    }
-
-        # Flush any trailing buffered tokens
-        for event in parser.flush():
+        async for event in _stream_response(kwargs):
             yield event
-
     except Exception as error:
-        # If tool calling failed on the provider, gracefully fall back to plain text generation
-        if tools and ("tool" in str(error).lower() or "400" in str(error)):
+        if tools and _is_tool_error(error):
             try:
-                fallback_kwargs = dict(kwargs)
-                fallback_kwargs.pop("tools", None)
-                fallback_kwargs.pop("tool_choice", None)
-                fallback_response = await litellm.acompletion(**fallback_kwargs)
-                fallback_parser = ThinkingStreamParser()
-
-                async for chunk in fallback_response:
-                    delta = chunk.choices[0].delta if chunk.choices else None
-                    if not delta:
-                        continue
-
-                    reasoning_content = getattr(delta, "reasoning_content", None)
-                    if reasoning_content:
-                        yield {"type": "thinking", "content": reasoning_content}
-
-                    if hasattr(delta, "content") and delta.content:
-                        for event in fallback_parser.feed(delta.content):
-                            yield event
-
-                for event in fallback_parser.flush():
+                async for event in _stream_response(_strip_tools(kwargs)):
                     yield event
                 return
             except Exception as fallback_error:
                 yield {"type": "error", "error": str(fallback_error)}
                 return
-
         yield {"type": "error", "error": str(error)}
+
+
+def _parse_completion_response(message: Any) -> Dict[str, Any]:
+    """Extracts content, thinking, and tool calls from a non-streamed completion response."""
+    raw_content = getattr(message, "content", None)
+    native_reasoning = getattr(message, "reasoning_content", None)
+    extracted_thinking, clean_content = extract_thinking_and_content(raw_content)
+
+    result: Dict[str, Any] = {
+        "content": clean_content,
+        "thinking": native_reasoning or extracted_thinking,
+        "tool_calls": None,
+    }
+
+    if hasattr(message, "tool_calls") and message.tool_calls:
+        result["tool_calls"] = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments,
+                },
+            }
+            for tc in message.tool_calls
+        ]
+
+    return result
 
 
 async def generate_completion(
@@ -251,55 +259,18 @@ async def generate_completion(
     Returns:
         Dict[str, Any]: Response content, thinking, and parsed tool calls.
     """
-    kwargs = get_llm_kwargs(model, temperature)
-    kwargs["messages"] = messages
-
-    if tools:
-        kwargs["tools"] = tools
-        kwargs["tool_choice"] = "auto"
+    kwargs = _build_llm_kwargs(model, messages, tools, temperature, stream=False)
 
     try:
         response = await litellm.acompletion(**kwargs)
-        message = response.choices[0].message
-        raw_content = getattr(message, "content", None)
-        native_reasoning = getattr(message, "reasoning_content", None)
-
-        extracted_thinking, clean_content = extract_thinking_and_content(raw_content)
-        final_thinking = native_reasoning or extracted_thinking
-
-        return {
-            "content": clean_content,
-            "thinking": final_thinking,
-            "tool_calls": [
-                {
-                    "id": tool_call.id,
-                    "type": "function",
-                    "function": {
-                        "name": tool_call.function.name,
-                        "arguments": tool_call.function.arguments,
-                    },
-                }
-                for tool_call in (message.tool_calls or [])
-            ]
-            if hasattr(message, "tool_calls") and message.tool_calls
-            else None,
-        }
+        return _parse_completion_response(response.choices[0].message)
     except Exception as error:
-        if tools and ("tool" in str(error).lower() or "400" in str(error)):
+        if tools and _is_tool_error(error):
             try:
-                fallback_kwargs = dict(kwargs)
-                fallback_kwargs.pop("tools", None)
-                fallback_kwargs.pop("tool_choice", None)
-                response = await litellm.acompletion(**fallback_kwargs)
-                message = response.choices[0].message
-                raw_content = getattr(message, "content", None)
-                native_reasoning = getattr(message, "reasoning_content", None)
-                extracted_thinking, clean_content = extract_thinking_and_content(raw_content)
-                return {
-                    "content": clean_content,
-                    "thinking": native_reasoning or extracted_thinking,
-                    "tool_calls": None,
-                }
+                response = await litellm.acompletion(**_strip_tools(kwargs))
+                result = _parse_completion_response(response.choices[0].message)
+                result["tool_calls"] = None
+                return result
             except Exception as fallback_error:
                 return {"content": None, "thinking": None, "tool_calls": None, "error": str(fallback_error)}
 

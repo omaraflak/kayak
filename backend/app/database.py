@@ -96,6 +96,56 @@ async def init_db() -> None:
         await db.commit()
 
 
+# --- Row-to-Model Helpers ---
+
+
+def _row_to_conversation(row: aiosqlite.Row) -> Conversation:
+    """Converts a database row to a Conversation model."""
+    return Conversation(
+        id=row["id"],
+        title=row["title"],
+        agent_id=row["agent_id"],
+        isolated_container=bool(row["isolated_container"]),
+        container_id=row["container_id"],
+        status=ConversationStatus(row["status"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_task(row: aiosqlite.Row) -> BackgroundTask:
+    """Converts a database row to a BackgroundTask model."""
+    return BackgroundTask(
+        id=row["id"],
+        conversation_id=row["conversation_id"],
+        task_type=TaskType(row["task_type"]),
+        name=row["name"],
+        command=row["command"],
+        status=TaskStatus(row["status"]),
+        pid=row["pid"],
+        exit_code=row["exit_code"],
+        stdout=row["stdout"],
+        stderr=row["stderr"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_message(row: aiosqlite.Row) -> Message:
+    """Converts a database row to a Message model."""
+    return Message(
+        id=row["id"],
+        conversation_id=row["conversation_id"],
+        role=MessageRole(row["role"]),
+        content=row["content"],
+        thinking=row["thinking"] if "thinking" in row.keys() else None,
+        tool_calls=json.loads(row["tool_calls"]) if row["tool_calls"] else None,
+        tool_call_id=row["tool_call_id"],
+        name=row["name"],
+        created_at=row["created_at"],
+    )
+
+
 # --- Conversation Operations ---
 
 
@@ -159,18 +209,7 @@ async def get_conversation(conversation_id: str) -> Optional[Conversation]:
             "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
         )
         row = await cursor.fetchone()
-        if not row:
-            return None
-        return Conversation(
-            id=row["id"],
-            title=row["title"],
-            agent_id=row["agent_id"],
-            isolated_container=bool(row["isolated_container"]),
-            container_id=row["container_id"],
-            status=ConversationStatus(row["status"]),
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-        )
+        return _row_to_conversation(row) if row else None
 
 
 async def list_conversations() -> List[Conversation]:
@@ -184,19 +223,7 @@ async def list_conversations() -> List[Conversation]:
             "SELECT * FROM conversations ORDER BY updated_at DESC"
         )
         rows = await cursor.fetchall()
-        return [
-            Conversation(
-                id=row["id"],
-                title=row["title"],
-                agent_id=row["agent_id"],
-                isolated_container=bool(row["isolated_container"]),
-                container_id=row["container_id"],
-                status=ConversationStatus(row["status"]),
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
-            for row in rows
-        ]
+        return [_row_to_conversation(row) for row in rows]
 
 
 async def update_conversation(
@@ -338,24 +365,7 @@ async def get_messages(conversation_id: str) -> List[Message]:
             (conversation_id,),
         )
         rows = await cursor.fetchall()
-        result: List[Message] = []
-        for row in rows:
-            tc = json.loads(row["tool_calls"]) if row["tool_calls"] else None
-            thinking_val = row["thinking"] if "thinking" in row.keys() else None
-            result.append(
-                Message(
-                    id=row["id"],
-                    conversation_id=row["conversation_id"],
-                    role=MessageRole(row["role"]),
-                    content=row["content"],
-                    thinking=thinking_val,
-                    tool_calls=tc,
-                    tool_call_id=row["tool_call_id"],
-                    name=row["name"],
-                    created_at=row["created_at"],
-                )
-            )
-        return result
+        return [_row_to_message(row) for row in rows]
 
 
 # --- Task Operations ---
@@ -423,22 +433,7 @@ async def get_task(task_id: str) -> Optional[BackgroundTask]:
     async with get_db_connection() as db:
         cursor = await db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
         row = await cursor.fetchone()
-        if not row:
-            return None
-        return BackgroundTask(
-            id=row["id"],
-            conversation_id=row["conversation_id"],
-            task_type=TaskType(row["task_type"]),
-            name=row["name"],
-            command=row["command"],
-            status=TaskStatus(row["status"]),
-            pid=row["pid"],
-            exit_code=row["exit_code"],
-            stdout=row["stdout"],
-            stderr=row["stderr"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-        )
+        return _row_to_task(row) if row else None
 
 
 async def list_tasks(
@@ -464,23 +459,7 @@ async def list_tasks(
                 "SELECT * FROM tasks ORDER BY created_at DESC"
             )
         rows = await cursor.fetchall()
-        return [
-            BackgroundTask(
-                id=row["id"],
-                conversation_id=row["conversation_id"],
-                task_type=TaskType(row["task_type"]),
-                name=row["name"],
-                command=row["command"],
-                status=TaskStatus(row["status"]),
-                pid=row["pid"],
-                exit_code=row["exit_code"],
-                stdout=row["stdout"],
-                stderr=row["stderr"],
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
-            for row in rows
-        ]
+        return [_row_to_task(row) for row in rows]
 
 
 async def update_task(

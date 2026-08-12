@@ -17,6 +17,16 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 for directory in [DATA_DIR, AGENTS_DIR, SKILLS_DIR, TOOLS_DIR, WORKSPACES_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
+# Keys that are persisted to/from settings.json
+_PERSISTABLE_KEYS = [
+    "DEFAULT_MODEL",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "HUGGINGFACE_API_KEY",
+    "VLLM_API_BASE",
+]
+
 
 class Settings:
 
@@ -64,23 +74,15 @@ class Settings:
 
     def load_from_file(self) -> None:
         """Loads persistent user credentials and endpoints from data/settings.json."""
-        if self.SETTINGS_FILE.exists():
-            try:
-                data = json.loads(self.SETTINGS_FILE.read_text(encoding="utf-8"))
-                if "DEFAULT_MODEL" in data:
-                    self.DEFAULT_MODEL = data["DEFAULT_MODEL"]
-                if "OPENAI_API_KEY" in data:
-                    self.OPENAI_API_KEY = data["OPENAI_API_KEY"]
-                if "GEMINI_API_KEY" in data:
-                    self.GEMINI_API_KEY = data["GEMINI_API_KEY"]
-                if "ANTHROPIC_API_KEY" in data:
-                    self.ANTHROPIC_API_KEY = data["ANTHROPIC_API_KEY"]
-                if "HUGGINGFACE_API_KEY" in data:
-                    self.HUGGINGFACE_API_KEY = data["HUGGINGFACE_API_KEY"]
-                if "VLLM_API_BASE" in data:
-                    self.VLLM_API_BASE = data["VLLM_API_BASE"]
-            except Exception as error:
-                print(f"Error reading settings file: {error}")
+        if not self.SETTINGS_FILE.exists():
+            return
+        try:
+            data = json.loads(self.SETTINGS_FILE.read_text(encoding="utf-8"))
+            for key in _PERSISTABLE_KEYS:
+                if key in data:
+                    setattr(self, key, data[key])
+        except Exception as error:
+            print(f"Error reading settings file: {error}")
 
     def save_settings(self, updates: Dict[str, Any]) -> None:
         """Persists updated configuration dictionary to data/settings.json.
@@ -88,14 +90,7 @@ class Settings:
         Args:
             updates: Dictionary of setting keys and their new values.
         """
-        current = {
-            "DEFAULT_MODEL": self.DEFAULT_MODEL,
-            "OPENAI_API_KEY": self.OPENAI_API_KEY,
-            "GEMINI_API_KEY": self.GEMINI_API_KEY,
-            "ANTHROPIC_API_KEY": self.ANTHROPIC_API_KEY,
-            "HUGGINGFACE_API_KEY": self.HUGGINGFACE_API_KEY,
-            "VLLM_API_BASE": self.VLLM_API_BASE,
-        }
+        current = {key: getattr(self, key) for key in _PERSISTABLE_KEYS}
         for key, value in updates.items():
             if value is not None and key in current:
                 current[key] = value

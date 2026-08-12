@@ -15,201 +15,146 @@ import {
 
 const API_BASE = '/api';
 
+/** Fetches JSON from the API, throwing on non-OK responses. */
+async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`API error ${res.status}: ${body || res.statusText}`);
+  }
+  return res.json();
+}
+
+/** Shorthand for JSON POST/PUT requests. */
+function postJSON(url: string, data: unknown): Promise<Response> {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
+async function fetchJSONPost<T>(url: string, data: unknown): Promise<T> {
+  const res = await postJSON(url, data);
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`API error ${res.status}: ${body || res.statusText}`);
+  }
+  return res.json();
+}
+
 export const api = {
   // Conversations
-  listConversations: async (): Promise<Conversation[]> => {
-    const res = await fetch(`${API_BASE}/conversations`);
-    return res.json();
-  },
+  listConversations: (): Promise<Conversation[]> =>
+    fetchJSON(`${API_BASE}/conversations`),
 
-  getConversation: async (id: string): Promise<{ conversation: Conversation; messages: Message[] }> => {
-    const res = await fetch(`${API_BASE}/conversations/${id}`);
-    return res.json();
-  },
+  getConversation: (id: string): Promise<{ conversation: Conversation; messages: Message[] }> =>
+    fetchJSON(`${API_BASE}/conversations/${id}`),
 
-  createConversation: async (data: { title?: string; agent_id: string; isolated_container?: boolean; initial_message?: string }): Promise<Conversation> => {
-    const res = await fetch(`${API_BASE}/conversations`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    return res.json();
-  },
+  createConversation: (data: { title?: string; agent_id: string; isolated_container?: boolean; initial_message?: string }): Promise<Conversation> =>
+    fetchJSONPost(`${API_BASE}/conversations`, data),
 
   deleteConversation: async (id: string): Promise<void> => {
-    await fetch(`${API_BASE}/conversations/${id}`, { method: 'DELETE' });
+    const res = await fetch(`${API_BASE}/conversations/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`Failed to delete conversation: ${res.statusText}`);
   },
 
-  cancelConversation: async (id: string): Promise<{ status: string }> => {
-    const res = await fetch(`${API_BASE}/conversations/${id}/cancel`, { method: 'POST' });
-    return res.json();
-  },
+  cancelConversation: (id: string): Promise<{ status: string }> =>
+    fetchJSON(`${API_BASE}/conversations/${id}/cancel`, { method: 'POST' }),
 
-  sendMessage: async (conversationId: string, content: string): Promise<Message> => {
-    const res = await fetch(`${API_BASE}/conversations/${conversationId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    });
-    return res.json();
-  },
+  sendMessage: (conversationId: string, content: string): Promise<Message> =>
+    fetchJSONPost(`${API_BASE}/conversations/${conversationId}/messages`, { content }),
 
   // Agents
-  listAgents: async (): Promise<AgentConfig[]> => {
-    const res = await fetch(`${API_BASE}/agents`);
-    return res.json();
-  },
+  listAgents: (): Promise<AgentConfig[]> =>
+    fetchJSON(`${API_BASE}/agents`),
 
-  getAgent: async (id: string): Promise<AgentConfig> => {
-    const res = await fetch(`${API_BASE}/agents/${id}`);
-    return res.json();
-  },
+  getAgent: (id: string): Promise<AgentConfig> =>
+    fetchJSON(`${API_BASE}/agents/${id}`),
 
-  saveAgent: async (agent: AgentConfig): Promise<AgentConfig> => {
-    const res = await fetch(`${API_BASE}/agents`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(agent),
-    });
-    return res.json();
-  },
+  saveAgent: (agent: AgentConfig): Promise<AgentConfig> =>
+    fetchJSONPost(`${API_BASE}/agents`, agent),
 
   deleteAgent: async (id: string): Promise<void> => {
-    await fetch(`${API_BASE}/agents/${id}`, { method: 'DELETE' });
+    const res = await fetch(`${API_BASE}/agents/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`Failed to delete agent: ${res.statusText}`);
   },
 
   // Skills
-  listSkills: async (): Promise<Skill[]> => {
-    const res = await fetch(`${API_BASE}/skills`);
-    return res.json();
-  },
+  listSkills: (): Promise<Skill[]> =>
+    fetchJSON(`${API_BASE}/skills`),
 
-  getSkill: async (name: string): Promise<Skill> => {
-    const res = await fetch(`${API_BASE}/skills/${name}`);
-    return res.json();
-  },
+  getSkill: (name: string): Promise<Skill> =>
+    fetchJSON(`${API_BASE}/skills/${name}`),
 
-  saveSkill: async (data: { name: string; description: string; instructions: string }): Promise<Skill> => {
-    const res = await fetch(`${API_BASE}/skills`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    return res.json();
-  },
+  saveSkill: (data: { name: string; description: string; instructions: string }): Promise<Skill> =>
+    fetchJSONPost(`${API_BASE}/skills`, data),
 
   deleteSkill: async (name: string): Promise<void> => {
-    await fetch(`${API_BASE}/skills/${name}`, { method: 'DELETE' });
+    const res = await fetch(`${API_BASE}/skills/${name}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`Failed to delete skill: ${res.statusText}`);
   },
 
   // Tools
-  listTools: async (): Promise<ToolDefinition[]> => {
-    const res = await fetch(`${API_BASE}/tools`);
-    return res.json();
-  },
+  listTools: (): Promise<ToolDefinition[]> =>
+    fetchJSON(`${API_BASE}/tools`),
 
-  reloadTools: async (): Promise<any> => {
-    const res = await fetch(`${API_BASE}/tools/reload`, { method: 'POST' });
-    return res.json();
-  },
+  reloadTools: (): Promise<{ status: string; total_tools: number }> =>
+    fetchJSON(`${API_BASE}/tools/reload`, { method: 'POST' }),
 
   deleteTool: async (name: string): Promise<void> => {
-    await fetch(`${API_BASE}/tools/${name}`, { method: 'DELETE' });
+    const res = await fetch(`${API_BASE}/tools/${name}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`Failed to delete tool: ${res.statusText}`);
   },
 
   // Tool Builder
-  verifyTool: async (data: { tool_name: string; tool_code: string; verify_code: string }): Promise<VerifyToolResponse> => {
-    const res = await fetch(`${API_BASE}/tool-builder/verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    return res.json();
-  },
+  verifyTool: (data: { tool_name: string; tool_code: string; verify_code: string }): Promise<VerifyToolResponse> =>
+    fetchJSONPost(`${API_BASE}/tool-builder/verify`, data),
 
-  activateTool: async (data: { tool_name: string; tool_code: string; verify_code: string }): Promise<ToolDefinition> => {
-    const res = await fetch(`${API_BASE}/tool-builder/activate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    return res.json();
-  },
+  activateTool: (data: { tool_name: string; tool_code: string; verify_code: string }): Promise<ToolDefinition> =>
+    fetchJSONPost(`${API_BASE}/tool-builder/activate`, data),
 
   // Tasks
-  listTasks: async (conversationId?: string): Promise<BackgroundTask[]> => {
+  listTasks: (conversationId?: string): Promise<BackgroundTask[]> => {
     const url = conversationId ? `${API_BASE}/tasks?conversation_id=${conversationId}` : `${API_BASE}/tasks`;
-    const res = await fetch(url);
-    return res.json();
+    return fetchJSON(url);
   },
 
   stopTask: async (taskId: string): Promise<void> => {
-    await fetch(`${API_BASE}/tasks/${taskId}/stop`, { method: 'POST' });
+    const res = await fetch(`${API_BASE}/tasks/${taskId}/stop`, { method: 'POST' });
+    if (!res.ok) throw new Error(`Failed to stop task: ${res.statusText}`);
   },
 
-  sendTaskInput: async (taskId: string, input: string): Promise<void> => {
-    await fetch(`${API_BASE}/tasks/${taskId}/input`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input }),
-    });
-  },
+  sendTaskInput: (taskId: string, input: string): Promise<{ status: string }> =>
+    fetchJSONPost(`${API_BASE}/tasks/${taskId}/input`, { input }),
 
   // Settings
-  getSettings: async (): Promise<AppSettings> => {
-    const res = await fetch(`${API_BASE}/settings`);
-    return res.json();
-  },
+  getSettings: (): Promise<AppSettings> =>
+    fetchJSON(`${API_BASE}/settings`),
 
-  updateSettings: async (settings: Partial<AppSettings>): Promise<{ status: string; settings: AppSettings }> => {
-    const res = await fetch(`${API_BASE}/settings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(settings),
-    });
-    return res.json();
-  },
+  updateSettings: (settings: Partial<AppSettings>): Promise<{ status: string; settings: AppSettings }> =>
+    fetchJSONPost(`${API_BASE}/settings`, settings),
 
   // Models Discovery & Hugging Face Hub
-  listModels: async (): Promise<ProviderModels[]> => {
-    const res = await fetch(`${API_BASE}/models`);
-    return res.json();
-  },
+  listModels: (): Promise<ProviderModels[]> =>
+    fetchJSON(`${API_BASE}/models`),
 
-  searchHuggingFaceModels: async (query: string): Promise<HuggingFaceModelSearchResult[]> => {
-    const res = await fetch(`${API_BASE}/models/huggingface/search?query=${encodeURIComponent(query)}`);
-    return res.json();
-  },
+  searchHuggingFaceModels: (query: string): Promise<HuggingFaceModelSearchResult[]> =>
+    fetchJSON(`${API_BASE}/models/huggingface/search?query=${encodeURIComponent(query)}`),
 
   // vLLM Local Container Orchestration
-  getVLLMStatus: async (): Promise<VLLMDeploymentProgress> => {
-    const res = await fetch(`${API_BASE}/vllm/status`);
-    return res.json();
-  },
+  getVLLMStatus: (): Promise<VLLMDeploymentProgress> =>
+    fetchJSON(`${API_BASE}/vllm/status`),
 
-  deployVLLMModel: async (data: VLLMDeployRequest): Promise<VLLMDeploymentProgress> => {
-    const res = await fetch(`${API_BASE}/vllm/deploy`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    return res.json();
-  },
+  deployVLLMModel: (data: VLLMDeployRequest): Promise<VLLMDeploymentProgress> =>
+    fetchJSONPost(`${API_BASE}/vllm/deploy`, data),
 
-  stopVLLMServer: async (): Promise<{ status: string; message: string }> => {
-    const res = await fetch(`${API_BASE}/vllm/stop`, {
-      method: 'POST',
-    });
-    return res.json();
-  },
+  stopVLLMServer: (): Promise<{ status: string; message: string }> =>
+    fetchJSON(`${API_BASE}/vllm/stop`, { method: 'POST' }),
 
   getVLLMServedModels: async (): Promise<any[]> => {
     try {
-      const res = await fetch(`${API_BASE}/vllm/models`);
-      if (res.ok) {
-        return res.json();
-      }
-      return [];
+      return await fetchJSON(`${API_BASE}/vllm/models`);
     } catch {
       return [];
     }
