@@ -1,16 +1,44 @@
 import asyncio
-import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from backend.app.agent.sandbox import sandbox_manager
 from backend.app.database import (
     append_task_output,
     create_task,
-    get_task,
-    list_tasks,
     update_task,
 )
 from backend.app.models import BackgroundTask, TaskStatus, TaskType
+
+
+async def _read_and_forward_stream(
+    stream: Optional[asyncio.StreamReader],
+    task_id: str,
+    conversation_id: str,
+    is_stderr: bool,
+    notify_fn: Callable[[str, Dict[str, Any]], None],
+) -> None:
+    """Reads lines from an asyncio stream and appends them to DB and SSE subscribers."""
+    if not stream:
+        return
+    while True:
+        line = await stream.readline()
+        if not line:
+            break
+        text = line.decode("utf-8", errors="replace")
+        if is_stderr:
+            await append_task_output(task_id, stderr_chunk=text)
+        else:
+            await append_task_output(task_id, stdout_chunk=text)
+
+        notify_fn(
+            conversation_id,
+            {
+                "type": "task_output",
+                "task_id": task_id,
+                "stream": "stderr" if is_stderr else "stdout",
+                "text": text,
+            },
+        )
 
 
 class TaskManager:
@@ -25,12 +53,7 @@ class TaskManager:
     def add_listener(
         self, conversation_id: str, listener: Callable[[Dict[str, Any]], None]
     ) -> None:
-        """Subscribes an event callback listener to live task events for a conversation.
-
-        Args:
-            conversation_id: Unique conversation identifier.
-            listener: Callback taking an event dictionary.
-        """
+        """Subscribes an event callback listener to live task events for a conversation."""
         if conversation_id not in self._listeners:
             self._listeners[conversation_id] = []
         self._listeners[conversation_id].append(listener)
@@ -38,29 +61,120 @@ class TaskManager:
     def remove_listener(
         self, conversation_id: str, listener: Callable[[Dict[str, Any]], None]
     ) -> None:
-        """Unsubscribes a listener callback.
-
-        Args:
-            conversation_id: Unique conversation identifier.
-            listener: The callback to remove.
-        """
+        """Unsubscribes a listener callback."""
         if conversation_id in self._listeners:
             if listener in self._listeners[conversation_id]:
                 self._listeners[conversation_id].remove(listener)
 
     def notify_listeners(self, conversation_id: str, event: Dict[str, Any]) -> None:
-        """Dispatches an event to all subscribed listeners for a conversation.
-
-        Args:
-            conversation_id: Unique conversation identifier.
-            event: Event payload.
-        """
+        """Dispatches an event to all subscribed listeners for a conversation."""
         if conversation_id in self._listeners:
             for listener in list(self._listeners[conversation_id]):
                 try:
                     listener(event)
                 except Exception:
                     pass
+
+    async def _execute_local_process(
+        self,
+        task: BackgroundTask,
+        command: str,
+        cwd: Path,
+        conversation_id: str,
+        name: str,
+    ) -> None:
+        """Spawns a local subprocess, monitors its stdout/stderr streams, and notifies on completion."""
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.PIPE,
+            cwd=str(cwd),
+        )
+        self._running_processes[task.id] = proc
+        await update_task(task.id, pid=proc.pid, status=TaskStatus.RUNNING)
+
+        self.notify_listeners(
+            conversation_id,
+            {
+                "type": "task_started",
+                "task_id": task.id,
+                "name": name,
+                "pid": proc.pid,
+            },
+        )
+
+        await asyncio.gather(
+            _read_and_forward_stream(
+                proc.stdout, task.id, conversation_id, is_stderr=False, notify_fn=self.notify_listeners
+            ),
+            _read_and_forward_stream(
+                proc.stderr, task.id, conversation_id, is_stderr=True, notify_fn=self.notify_listeners
+            ),
+        )
+
+        exit_code = await proc.wait()
+        final_status = TaskStatus.COMPLETED if exit_code == 0 else TaskStatus.FAILED
+        await update_task(task.id, status=final_status, exit_code=exit_code)
+
+        self.notify_listeners(
+            conversation_id,
+            {
+                "type": "task_finished",
+                "task_id": task.id,
+                "name": name,
+                "status": final_status.value,
+                "exit_code": exit_code,
+            },
+        )
+
+    async def _run_process_wrapper(
+        self,
+        task: BackgroundTask,
+        command: str,
+        conversation_id: str,
+        name: str,
+        cwd: Path,
+        container_id: Optional[str],
+    ) -> None:
+        """Wrapper handling top-level exception catching and cleanup for background tasks."""
+        try:
+            if container_id:
+                await sandbox_manager.exec_background_command(
+                    container_id=container_id, command=command
+                )
+                await update_task(task.id, status=TaskStatus.RUNNING)
+                self.notify_listeners(
+                    conversation_id,
+                    {
+                        "type": "task_started",
+                        "task_id": task.id,
+                        "name": name,
+                    },
+                )
+                return
+
+            await self._execute_local_process(
+                task=task,
+                command=command,
+                cwd=cwd,
+                conversation_id=conversation_id,
+                name=name,
+            )
+        except Exception as e:
+            await update_task(task.id, status=TaskStatus.FAILED, stderr=str(e))
+            self.notify_listeners(
+                conversation_id,
+                {
+                    "type": "task_finished",
+                    "task_id": task.id,
+                    "name": name,
+                    "status": TaskStatus.FAILED.value,
+                    "error": str(e),
+                },
+            )
+        finally:
+            self._running_processes.pop(task.id, None)
 
     async def start_shell_task(
         self,
@@ -90,112 +204,16 @@ class TaskManager:
         )
 
         cwd = workspace_dir if workspace_dir else Path.cwd()
-
-        async def _run_process():
-            try:
-                # If running inside a container
-                if container_id:
-                    # Execute in background inside container
-                    proc = await sandbox_manager.exec_background_command(
-                        container_id=container_id, command=command
-                    )
-                    await update_task(task.id, status=TaskStatus.RUNNING)
-                    self.notify_listeners(
-                        conversation_id,
-                        {
-                            "type": "task_started",
-                            "task_id": task.id,
-                            "name": name,
-                        },
-                    )
-                    return
-
-                # Local process
-                proc = await asyncio.create_subprocess_shell(
-                    command,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    stdin=asyncio.subprocess.PIPE,
-                    cwd=str(cwd),
-                )
-                self._running_processes[task.id] = proc
-                await update_task(task.id, pid=proc.pid, status=TaskStatus.RUNNING)
-
-                self.notify_listeners(
-                    conversation_id,
-                    {
-                        "type": "task_started",
-                        "task_id": task.id,
-                        "name": name,
-                        "pid": proc.pid,
-                    },
-                )
-
-                async def _read_stream(stream: Optional[asyncio.StreamReader], is_stderr: bool = False):
-                    if not stream:
-                        return
-                    while True:
-                        line = await stream.readline()
-                        if not line:
-                            break
-                        text = line.decode("utf-8", errors="replace")
-                        if is_stderr:
-                            await append_task_output(
-                                task.id, stderr_chunk=text
-                            )
-                        else:
-                            await append_task_output(
-                                task.id, stdout_chunk=text
-                            )
-
-                        self.notify_listeners(
-                            conversation_id,
-                            {
-                                "type": "task_output",
-                                "task_id": task.id,
-                                "stream": "stderr" if is_stderr else "stdout",
-                                "text": text,
-                            },
-                        )
-
-                await asyncio.gather(
-                    _read_stream(proc.stdout, is_stderr=False),
-                    _read_stream(proc.stderr, is_stderr=True),
-                )
-
-                exit_code = await proc.wait()
-                final_status = TaskStatus.COMPLETED if exit_code == 0 else TaskStatus.FAILED
-                await update_task(
-                    task.id, status=final_status, exit_code=exit_code
-                )
-
-                self.notify_listeners(
-                    conversation_id,
-                    {
-                        "type": "task_finished",
-                        "task_id": task.id,
-                        "name": name,
-                        "status": final_status.value,
-                        "exit_code": exit_code,
-                    },
-                )
-
-            except Exception as e:
-                await update_task(task.id, status=TaskStatus.FAILED, stderr=str(e))
-                self.notify_listeners(
-                    conversation_id,
-                    {
-                        "type": "task_finished",
-                        "task_id": task.id,
-                        "name": name,
-                        "status": TaskStatus.FAILED.value,
-                        "error": str(e),
-                    },
-                )
-            finally:
-                self._running_processes.pop(task.id, None)
-
-        async_task = asyncio.create_task(_run_process())
+        async_task = asyncio.create_task(
+            self._run_process_wrapper(
+                task=task,
+                command=command,
+                conversation_id=conversation_id,
+                name=name,
+                cwd=cwd,
+                container_id=container_id,
+            )
+        )
         self._running_async_tasks[task.id] = async_task
         return task
 

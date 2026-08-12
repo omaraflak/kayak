@@ -41,16 +41,23 @@ _running_agent_tasks: Dict[str, asyncio.Task[Any]] = {}
 _active_turn_buffers: Dict[str, Dict[str, Any]] = {}
 
 
-def broadcast_event(conversation_id: str, event: Dict[str, Any]) -> None:
-    """Pushes a real-time event to all listening SSE client queues for a conversation.
-
-    Args:
-        conversation_id: Unique conversation identifier.
-        event: JSON serializable event payload.
-    """
+def _broadcast_event(conversation_id: str, event: Dict[str, Any]) -> None:
+    """Pushes a real-time event to all listening SSE client queues for a conversation."""
     if conversation_id in _conversation_event_queues:
         for event_queue in _conversation_event_queues[conversation_id]:
             event_queue.put_nowait(event)
+
+
+# Public alias for external callers
+broadcast_event = _broadcast_event
+
+
+def _clean_initial_title(prompt: Optional[str]) -> Optional[str]:
+    """Derives a provisional title from the first words of an initial message."""
+    if not prompt:
+        return None
+    clean = " ".join(prompt.strip().split())
+    return clean[:36].rsplit(" ", 1)[0] + "..." if len(clean) > 36 else clean
 
 
 async def _async_generate_and_update_title(conversation_id: str, prompt: str, model_name: str) -> None:
@@ -59,25 +66,49 @@ async def _async_generate_and_update_title(conversation_id: str, prompt: str, mo
         generated = await generate_title(prompt, model=model_name)
         if generated:
             await update_conversation(conversation_id, title=generated)
-            broadcast_event(conversation_id, {"type": "title_updated", "title": generated})
+            _broadcast_event(conversation_id, {"type": "title_updated", "title": generated})
     except Exception:
         pass
 
 
+async def _run_agent_turn(conversation_id: str, agent_id: str) -> None:
+    """Background task executing the agent turn loop and broadcasting events."""
+    try:
+        conversation = await get_conversation(conversation_id)
+        if not conversation:
+            return
+
+        workspace_directory = settings.WORKSPACES_DIR / conversation_id
+        _active_turn_buffers[conversation_id] = {"thinking": "", "tokens": ""}
+
+        async for event in agent_engine.run(
+            conversation_id=conversation_id,
+            agent_id=agent_id,
+            workspace_dir=workspace_directory,
+            container_id=conversation.container_id,
+        ):
+            if conversation_id in _active_turn_buffers:
+                if event.get("type") == "thinking":
+                    _active_turn_buffers[conversation_id]["thinking"] += event.get("content", "")
+                elif event.get("type") == "token":
+                    _active_turn_buffers[conversation_id]["tokens"] += event.get("content", "")
+
+            _broadcast_event(conversation_id, event)
+    except asyncio.CancelledError:
+        await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
+        _broadcast_event(conversation_id, {"type": "cancelled"})
+    except Exception as error:
+        await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
+        _broadcast_event(conversation_id, {"type": "error", "error": str(error)})
+    finally:
+        _active_turn_buffers.pop(conversation_id, None)
+        _running_agent_tasks.pop(conversation_id, None)
+
+
 @router.post("", response_model=Conversation)
 async def create_new_conversation(request: CreateConversationRequest) -> Conversation:
-    """Creates a new conversation record immediately and optionally initializes an isolated Docker sandbox.
-
-    Args:
-        request: Conversation creation request containing agent ID, optional title, and isolated container flag.
-
-    Returns:
-        The newly created Conversation database model.
-    """
-    title = request.title
-    if not title and request.initial_message:
-        clean = " ".join(request.initial_message.strip().split())
-        title = clean[:36].rsplit(" ", 1)[0] + "..." if len(clean) > 36 else clean
+    """Creates a new conversation record immediately and optionally initializes an isolated Docker sandbox."""
+    title = request.title or _clean_initial_title(request.initial_message)
 
     conversation = await create_conversation(
         title=title or "New Conversation",
@@ -119,27 +150,13 @@ async def create_new_conversation(request: CreateConversationRequest) -> Convers
 
 @router.get("", response_model=List[Conversation])
 async def get_all_conversations() -> List[Conversation]:
-    """Lists all active and stored conversations.
-
-    Returns:
-        A list of all Conversation records.
-    """
+    """Lists all active and stored conversations."""
     return await list_conversations()
 
 
 @router.get("/{conversation_id}")
 async def get_conversation_details(conversation_id: str) -> Dict[str, Any]:
-    """Returns conversation metadata and full message history.
-
-    Args:
-        conversation_id: Unique conversation identifier.
-
-    Returns:
-        Dictionary with 'conversation' and 'messages' keys.
-
-    Raises:
-        HTTPException: If the conversation is not found.
-    """
+    """Returns conversation metadata and full message history."""
     conversation = await get_conversation(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -149,34 +166,21 @@ async def get_conversation_details(conversation_id: str) -> Dict[str, Any]:
 
 @router.delete("/{conversation_id}")
 async def delete_existing_conversation(conversation_id: str) -> Dict[str, str]:
-    """Deletes a conversation, cleans up its Docker container, and deletes workspace files.
-
-    Args:
-        conversation_id: Unique conversation identifier.
-
-    Returns:
-        Status response dictionary.
-
-    Raises:
-        HTTPException: If the conversation is not found.
-    """
+    """Deletes a conversation, cleans up its Docker container, and deletes workspace files."""
     conversation = await get_conversation(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # Cancel running agent task if any
     task = _running_agent_tasks.pop(conversation_id, None)
     if task and not task.done():
         task.cancel()
 
-    # Stop container if exists
     if conversation.container_id:
         try:
             await sandbox_manager.stop_and_remove_sandbox(conversation.container_id)
         except Exception:
             pass
 
-    # Delete workspace directory
     workspace_directory = settings.WORKSPACES_DIR / conversation_id
     if workspace_directory.exists():
         shutil.rmtree(workspace_directory, ignore_errors=True)
@@ -185,93 +189,27 @@ async def delete_existing_conversation(conversation_id: str) -> Dict[str, str]:
     return {"status": "deleted"}
 
 
-async def _run_agent_turn(conversation_id: str, agent_id: str) -> None:
-    """Background task executing the agent turn loop and broadcasting events.
-
-    Args:
-        conversation_id: Unique conversation identifier.
-        agent_id: Identifier of the agent executing the turn.
-    """
-    try:
-        conversation = await get_conversation(conversation_id)
-        if not conversation:
-            return
-
-        workspace_directory = settings.WORKSPACES_DIR / conversation_id
-        _active_turn_buffers[conversation_id] = {"thinking": "", "tokens": ""}
-
-        async for event in agent_engine.run(
-            conversation_id=conversation_id,
-            agent_id=agent_id,
-            workspace_dir=workspace_directory,
-            container_id=conversation.container_id,
-        ):
-            if conversation_id in _active_turn_buffers:
-                if event.get("type") == "thinking":
-                    _active_turn_buffers[conversation_id]["thinking"] += event.get("content", "")
-                elif event.get("type") == "token":
-                    _active_turn_buffers[conversation_id]["tokens"] += event.get("content", "")
-
-            broadcast_event(conversation_id, event)
-    except asyncio.CancelledError:
-        await update_conversation(
-            conversation_id, status=ConversationStatus.ACTIVE
-        )
-        broadcast_event(conversation_id, {"type": "cancelled"})
-    except Exception as error:
-        await update_conversation(
-            conversation_id, status=ConversationStatus.ACTIVE
-        )
-        broadcast_event(conversation_id, {"type": "error", "error": str(error)})
-    finally:
-        _active_turn_buffers.pop(conversation_id, None)
-        _running_agent_tasks.pop(conversation_id, None)
-
-
 @router.post("/{conversation_id}/cancel")
 async def cancel_agent_turn(conversation_id: str) -> Dict[str, str]:
-    """Cancels an ongoing agent response turn for a conversation.
-
-    Args:
-        conversation_id: Unique conversation identifier.
-
-    Returns:
-        Status indicating whether the turn was cancelled or was not running.
-    """
+    """Cancels an ongoing agent response turn for a conversation."""
     task = _running_agent_tasks.get(conversation_id)
     if task and not task.done():
         task.cancel()
-        await update_conversation(
-            conversation_id, status=ConversationStatus.ACTIVE
-        )
-        broadcast_event(conversation_id, {"type": "cancelled"})
+        await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
+        _broadcast_event(conversation_id, {"type": "cancelled"})
         return {"status": "cancelled"}
 
-    await update_conversation(
-        conversation_id, status=ConversationStatus.ACTIVE
-    )
+    await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
     return {"status": "not_running"}
 
 
 @router.post("/{conversation_id}/messages", response_model=Message)
 async def send_user_message(conversation_id: str, request: SendMessageRequest) -> Message:
-    """Dispatches a user prompt to a conversation session and triggers an autonomous agent turn.
-
-    Args:
-        conversation_id: Unique conversation identifier.
-        request: Message send payload with text content.
-
-    Returns:
-        The newly recorded user Message object.
-
-    Raises:
-        HTTPException: If the conversation is not found.
-    """
+    """Dispatches a user prompt to a conversation session and triggers an autonomous agent turn."""
     conversation = await get_conversation(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # If there's an existing turn running, cancel it before processing new message
     existing_task = _running_agent_tasks.get(conversation_id)
     if existing_task and not existing_task.done():
         existing_task.cancel()
@@ -282,7 +220,7 @@ async def send_user_message(conversation_id: str, request: SendMessageRequest) -
         content=request.content,
     )
 
-    broadcast_event(
+    _broadcast_event(
         conversation_id,
         {
             "type": "user_message",
@@ -290,7 +228,6 @@ async def send_user_message(conversation_id: str, request: SendMessageRequest) -
         },
     )
 
-    # Launch agent turn in background
     task = asyncio.create_task(_run_agent_turn(conversation_id, conversation.agent_id))
     _running_agent_tasks[conversation_id] = task
 
@@ -299,18 +236,7 @@ async def send_user_message(conversation_id: str, request: SendMessageRequest) -
 
 @router.get("/{conversation_id}/events")
 async def stream_conversation_events(conversation_id: str, request: Request) -> StreamingResponse:
-    """Server-Sent Events (SSE) stream for real-time conversation updates.
-
-    Args:
-        conversation_id: Unique conversation identifier.
-        request: FastAPI raw request object used to detect client disconnects.
-
-    Returns:
-        StreamingResponse streaming text/event-stream payloads.
-
-    Raises:
-        HTTPException: If the conversation is not found.
-    """
+    """Server-Sent Events (SSE) stream for real-time conversation updates."""
     conversation = await get_conversation(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -320,7 +246,6 @@ async def stream_conversation_events(conversation_id: str, request: Request) -> 
         _conversation_event_queues[conversation_id] = []
     _conversation_event_queues[conversation_id].append(event_queue)
 
-    # Hook task manager notifications to queue
     def on_task_event(event: Dict[str, Any]) -> None:
         event_queue.put_nowait(event)
 
@@ -328,10 +253,9 @@ async def stream_conversation_events(conversation_id: str, request: Request) -> 
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
-            # Send initial connection confirmation event
             yield f"data: {json.dumps({'type': 'connected', 'status': conversation.status.value})}\n\n"
 
-            # Replay any in-progress turn thoughts or tokens for reconnecting/refreshed clients
+            # Replay active turn buffer if client reconnected during turn
             active_buffer = _active_turn_buffers.get(conversation_id)
             if active_buffer:
                 if active_buffer.get("thinking"):
@@ -346,7 +270,6 @@ async def stream_conversation_events(conversation_id: str, request: Request) -> 
                     event = await asyncio.wait_for(event_queue.get(), timeout=20.0)
                     yield f"data: {json.dumps(event)}\n\n"
                 except asyncio.TimeoutError:
-                    # Keep-alive heartbeat
                     yield f"data: {json.dumps({'type': 'ping'})}\n\n"
         finally:
             task_manager.remove_listener(conversation_id, on_task_event)

@@ -1,7 +1,30 @@
 from pathlib import Path
 from typing import Optional
 from backend.app.agent.task_manager import task_manager
-from backend.app.database import get_task, list_tasks
+from backend.app.database import get_task
+from backend.app.models import BackgroundTask
+
+
+def _format_task_status(task: BackgroundTask) -> str:
+    """Formats a BackgroundTask model into a descriptive status string with output tails."""
+    output = [
+        f"Task: {task.name} ({task.id})",
+        f"Type: {task.task_type.value if hasattr(task.task_type, 'value') else task.task_type}",
+        f"Status: {task.status.value if hasattr(task.status, 'value') else task.status}",
+    ]
+    if task.pid:
+        output.append(f"PID: {task.pid}")
+    if task.exit_code is not None:
+        output.append(f"Exit Code: {task.exit_code}")
+
+    if task.stdout:
+        tail_stdout = task.stdout[-2000:] if len(task.stdout) > 2000 else task.stdout
+        output.append(f"\n--- STDOUT (recent) ---\n{tail_stdout}")
+    if task.stderr:
+        tail_stderr = task.stderr[-2000:] if len(task.stderr) > 2000 else task.stderr
+        output.append(f"\n--- STDERR (recent) ---\n{tail_stderr}")
+
+    return "\n".join(output)
 
 
 async def start_background_task(
@@ -43,29 +66,7 @@ async def get_task_status(task_id: str) -> str:
     if not task:
         return f"Error: Task with ID '{task_id}' not found."
 
-    output = [
-        f"Task: {task.name} ({task.id})",
-        f"Type: {task.task_type}",
-        f"Status: {task.status}",
-    ]
-    if task.pid:
-        output.append(f"PID: {task.pid}")
-    if task.exit_code is not None:
-        output.append(f"Exit Code: {task.exit_code}")
-
-    if task.stdout:
-        # Show last 2000 chars
-        tail_stdout = (
-            task.stdout[-2000:] if len(task.stdout) > 2000 else task.stdout
-        )
-        output.append(f"\n--- STDOUT (recent) ---\n{tail_stdout}")
-    if task.stderr:
-        tail_stderr = (
-            task.stderr[-2000:] if len(task.stderr) > 2000 else task.stderr
-        )
-        output.append(f"\n--- STDERR (recent) ---\n{tail_stderr}")
-
-    return "\n".join(output)
+    return _format_task_status(task)
 
 
 async def send_task_input(task_id: str, input_text: str) -> str:

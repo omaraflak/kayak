@@ -1,8 +1,21 @@
-import json
 from typing import Optional
 from bs4 import BeautifulSoup
 from duckduckgo_search import DDGS
 import httpx
+
+
+def _clean_html_text(html_content: str, max_length: int = 4000) -> str:
+    """Strips non-content tags and normalizes whitespace from raw HTML."""
+    soup = BeautifulSoup(html_content, "html.parser")
+    for tag in soup(["script", "style", "nav", "footer", "header", "noscript"]):
+        tag.decompose()
+
+    text = soup.get_text(separator=" ", strip=True)
+    text = " ".join(text.split())
+
+    if len(text) > max_length:
+        text = text[:max_length] + "\n\n... [Content truncated due to length]"
+    return text
 
 
 async def web_search(query: str, max_results: Optional[int] = 5) -> str:
@@ -51,27 +64,9 @@ async def fetch_url(url: str, max_length: Optional[int] = 4000) -> str:
         ) as client:
             response = await client.get(url)
             if response.status_code != 200:
-                return (
-                    f"Error: Received HTTP {response.status_code} from '{url}'"
-                )
+                return f"Error: Received HTTP {response.status_code} from '{url}'"
 
-            soup = BeautifulSoup(response.text, "html.parser")
-
-            # Remove scripts, styles, and navigational elements
-            for tag in soup(
-                ["script", "style", "nav", "footer", "header", "noscript"]
-            ):
-                tag.decompose()
-
-            text = soup.get_text(separator=" ", strip=True)
-            text = " ".join(text.split())  # normalize whitespace
-
-            if len(text) > (max_length or 4000):
-                text = (
-                    text[: max_length or 4000]
-                    + "\n\n... [Content truncated due to length]"
-                )
-
-            return f"=== Content from {url} ===\n\n{text}"
+            cleaned = _clean_html_text(response.text, max_length or 4000)
+            return f"=== Content from {url} ===\n\n{cleaned}"
     except Exception as e:
         return f"Error fetching URL '{url}': {str(e)}"

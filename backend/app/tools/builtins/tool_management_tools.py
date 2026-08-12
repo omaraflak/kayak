@@ -1,34 +1,18 @@
-import asyncio
-import importlib.util
-import json
-import os
 from pathlib import Path
-import re
-import tempfile
 from typing import Optional
 from backend.app.agent.sandbox import sandbox_manager
 from backend.app.config import settings
-from backend.app.tools.registry import extract_tool_schema, tool_registry
+from backend.app.tools.registry import tool_registry
+from backend.app.tools.verifier import clean_tool_identifier, run_tool_verification
 
 
-async def verify_tool(
-    tool_name: str,
+async def _verify_tool_in_container(
+    container_id: str,
     tool_code: str,
     verify_code: str,
-    container_id: Optional[str] = None,
 ) -> str:
-    """Executes the verification unit tests for a tool in an isolated test environment and checks schema extraction.
-
-    Args:
-        tool_name: Identifier for the tool (e.g. 'fetch_weather').
-        tool_code: Python source code for `tool.py`.
-        verify_code: Python verification test code for `verify.py`.
-        container_id: Optional container ID for running verification inside the sandbox.
-    """
-    clean_name = re.sub(r"[^a-zA-Z0-9_-]", "_", tool_name.lower().strip())
-
-    if container_id:
-        script = f"""
+    """Executes verification tests inside a running Docker sandbox container."""
+    script = f"""
 import sys
 import os
 import tempfile
@@ -60,80 +44,37 @@ with tempfile.TemporaryDirectory(prefix="kayak_verify_") as tmpdir:
     else:
         print(f"✗ Verification Failed (exit code {{res.returncode}})\\n\\nSTDOUT:\\n{{res.stdout}}\\n\\nSTDERR:\\n{{res.stderr}}")
 """
-        return await sandbox_manager.exec_python(container_id, script)
+    return await sandbox_manager.exec_python(container_id, script)
 
-    with tempfile.TemporaryDirectory(
-        prefix=f"kayak_verify_{clean_name}_"
-    ) as tmpdir:
-        tmp_path = Path(tmpdir)
-        tool_file = tmp_path / "tool.py"
-        verify_file = tmp_path / "verify.py"
 
-        tool_file.write_text(tool_code, encoding="utf-8")
-        verify_file.write_text(verify_code, encoding="utf-8")
+async def verify_tool(
+    tool_name: str,
+    tool_code: str,
+    verify_code: str,
+    container_id: Optional[str] = None,
+) -> str:
+    """Executes the verification unit tests for a tool in an isolated test environment and checks schema extraction.
 
-        # 1. Schema check
-        schema_info = ""
-        try:
-            spec = importlib.util.spec_from_file_location(
-                f"tmp_verify_{clean_name}", tool_file
-            )
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                target_func = (
-                    getattr(module, "execute", None)
-                    or getattr(module, "main", None)
-                    or getattr(module, clean_name, None)
-                )
-                if not target_func:
-                    for attr_name in dir(module):
-                        attr = getattr(module, attr_name)
-                        if callable(attr) and not attr_name.startswith("_"):
-                            target_func = attr
-                            break
-                if target_func:
-                    schema = extract_tool_schema(target_func, clean_name).get(
-                        "function"
-                    )
-                    schema_info = f"\n✓ Auto-extracted JSON Schema: {schema}"
-        except Exception as e:
-            return f"Error importing tool.py: {str(e)}"
+    Args:
+        tool_name: Identifier for the tool (e.g. 'fetch_weather').
+        tool_code: Python source code for `tool.py`.
+        verify_code: Python verification test code for `verify.py`.
+        container_id: Optional container ID for running verification inside the sandbox.
+    """
+    if container_id:
+        return await _verify_tool_in_container(container_id, tool_code, verify_code)
 
-        # 2. Run verify.py
-        try:
-            env = os.environ.copy()
-            env["PYTHONPATH"] = f"{str(tmp_path)}:{env.get('PYTHONPATH', '')}"
+    result = await run_tool_verification(
+        tool_name=tool_name,
+        tool_code=tool_code,
+        verify_code=verify_code,
+    )
 
-            process = await asyncio.create_subprocess_exec(
-                "python3",
-                "verify.py",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=str(tmp_path),
-                env=env,
-            )
-
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(), timeout=30
-            )
-            stdout = stdout_bytes.decode("utf-8", errors="replace")
-            stderr = stderr_bytes.decode("utf-8", errors="replace")
-
-            if process.returncode == 0:
-                return (
-                    f"✓ Verification Passed!\n\nSTDOUT:\n{stdout}{schema_info}"
-                )
-            else:
-                return (
-                    f"✗ Verification Failed (exit code"
-                    f" {process.returncode})\n\nSTDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
-                )
-
-        except asyncio.TimeoutError:
-            return "✗ Verification timed out after 30 seconds."
-        except Exception as e:
-            return f"✗ Verification error: {str(e)}"
+    schema_info = f"\n✓ Auto-extracted JSON Schema: {result.parsed_schema}" if result.parsed_schema else ""
+    if result.success:
+        return f"✓ Verification Passed!\n\nSTDOUT:\n{result.stdout}{schema_info}"
+    else:
+        return f"✗ Verification Failed ({result.error})\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
 
 
 async def activate_tool(
@@ -146,7 +87,7 @@ async def activate_tool(
         tool_code: Python source code for `tool.py`.
         verify_code: Python verification test code for `verify.py`.
     """
-    clean_name = re.sub(r"[^a-zA-Z0-9_-]", "_", tool_name.lower().strip())
+    clean_name = clean_tool_identifier(tool_name)
     tool_dir = settings.TOOLS_DIR / clean_name
     tool_dir.mkdir(parents=True, exist_ok=True)
 

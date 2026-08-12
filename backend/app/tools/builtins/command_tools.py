@@ -1,8 +1,19 @@
 import asyncio
-import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Optional
 from backend.app.agent.sandbox import sandbox_manager
+
+
+def _format_process_output(stdout_str: str, stderr_str: str, exit_code: int) -> str:
+    """Formats standard output, standard error, and exit code into a response string."""
+    output = []
+    if stdout_str:
+        output.append(stdout_str)
+    if stderr_str:
+        output.append(f"STDERR:\n{stderr_str}")
+    if exit_code != 0:
+        output.append(f"\n[Exit code: {exit_code}]")
+    return "\n".join(output) if output else "Command executed with no output."
 
 
 async def run_command(
@@ -17,7 +28,6 @@ async def run_command(
         command: The shell command line string to execute.
         timeout: Maximum execution time in seconds before terminating (default 60s).
     """
-    # 1. If running in an isolated Docker sandbox container
     if container_id:
         try:
             return await sandbox_manager.exec_command(
@@ -29,7 +39,6 @@ async def run_command(
                 f" '{container_id}': {str(e)}"
             )
 
-    # 2. Local workspace execution
     cwd = workspace_dir if workspace_dir else Path.cwd()
     try:
         process = await asyncio.create_subprocess_shell(
@@ -51,15 +60,7 @@ async def run_command(
         stdout_str = stdout.decode("utf-8", errors="replace")
         stderr_str = stderr.decode("utf-8", errors="replace")
 
-        output = []
-        if stdout_str:
-            output.append(stdout_str)
-        if stderr_str:
-            output.append(f"STDERR:\n{stderr_str}")
-        if process.returncode != 0:
-            output.append(f"\n[Exit code: {process.returncode}]")
-
-        return "\n".join(output) if output else "Command executed with no output."
+        return _format_process_output(stdout_str, stderr_str, process.returncode)
 
     except Exception as e:
         return f"Error executing command: {str(e)}"

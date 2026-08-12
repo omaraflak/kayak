@@ -1,17 +1,47 @@
-import asyncio
-import json
-import os
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from backend.app.agent.sandbox import sandbox_manager
 
 
 def _resolve_path(path_str: str, workspace_dir: Optional[Path]) -> Path:
+    """Resolves a relative or absolute path relative to the workspace root."""
     base = workspace_dir if workspace_dir else Path.cwd()
     target = Path(path_str)
     if not target.is_absolute():
         target = (base / target).resolve()
     return target
+
+
+def _format_file_lines(
+    lines: List[str],
+    start_line: Optional[int] = None,
+    end_line: Optional[int] = None,
+) -> str:
+    """Formats file lines with 1-indexed line numbers, slicing if requested or capping at 500 lines."""
+    if start_line is not None or end_line is not None:
+        s = max(1, start_line) if start_line else 1
+        e = min(len(lines), end_line) if end_line else len(lines)
+        sliced_lines = lines[s - 1 : e]
+        return "".join([f"{i + s:4d} | {line}" for i, line in enumerate(sliced_lines)])
+
+    if len(lines) <= 500:
+        return "".join([f"{i + 1:4d} | {line}" for i, line in enumerate(lines)])
+
+    prefix = f"File has {len(lines)} lines. Showing first 500 lines:\n"
+    return prefix + "".join([f"{i + 1:4d} | {line}" for i, line in enumerate(lines[:500])])
+
+
+def _format_dir_entries(items: List[Path], path_str: str) -> str:
+    """Formats directory contents into a human-readable list."""
+    if not items:
+        return f"Directory '{path_str}' is empty."
+
+    output = []
+    for item in items:
+        prefix = "[DIR] " if item.is_dir() else "[FILE]"
+        size = f" ({item.stat().st_size} bytes)" if not item.is_dir() else ""
+        output.append(f"{prefix} {item.name}{size}")
+    return "\n".join(output)
 
 
 async def read_file(
@@ -73,27 +103,7 @@ except Exception as e:
     try:
         content = file_path.read_text(encoding="utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
-
-        if start_line is not None or end_line is not None:
-            s = max(1, start_line) if start_line else 1
-            e = min(len(lines), end_line) if end_line else len(lines)
-            sliced_lines = lines[s - 1 : e]
-            numbered = [
-                f"{i + s:4d} | {line}" for i, line in enumerate(sliced_lines)
-            ]
-            return "".join(numbered)
-
-        if len(lines) <= 500:
-            numbered = [
-                f"{i + 1:4d} | {line}" for i, line in enumerate(lines)
-            ]
-            return "".join(numbered)
-        return (
-            f"File has {len(lines)} lines. Showing first 500 lines:\n"
-            + "".join(
-                f"{i + 1:4d} | {line}" for i, line in enumerate(lines[:500])
-            )
-        )
+        return _format_file_lines(lines, start_line, end_line)
     except Exception as e:
         return f"Error reading file '{path}': {str(e)}"
 
@@ -260,16 +270,6 @@ except Exception as e:
 
     try:
         items = sorted(list(dir_path.iterdir()))
-        output = []
-        for item in items:
-            prefix = "[DIR] " if item.is_dir() else "[FILE]"
-            size = (
-                f" ({item.stat().st_size} bytes)" if not item.is_dir() else ""
-            )
-            output.append(f"{prefix} {item.name}{size}")
-
-        if not output:
-            return f"Directory '{path}' is empty."
-        return "\n".join(output)
+        return _format_dir_entries(items, path or ".")
     except Exception as e:
         return f"Error listing directory '{path}': {str(e)}"

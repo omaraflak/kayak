@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 import re
 from typing import Dict, List, Optional
@@ -120,7 +119,24 @@ DEFAULT_AGENTS: List[AgentConfig] = [
 ]
 
 
+def _clean_agent_id(raw_id: str) -> str:
+    """Sanitizes an agent identifier to safe filesystem/URL characters."""
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", raw_id.lower().strip())
+
+
+def _load_agent_file(file_path: Path) -> Optional[AgentConfig]:
+    """Parses a YAML agent configuration file."""
+    try:
+        data = yaml.safe_load(file_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return AgentConfig(**data)
+    except Exception as e:
+        print(f"Error loading agent from '{file_path.name}': {e}")
+    return None
+
+
 class AgentManager:
+    """Manages custom and built-in AgentConfig profiles stored as YAML files."""
 
     def __init__(self):
         self._agents: Dict[str, AgentConfig] = {}
@@ -137,6 +153,7 @@ class AgentManager:
                 self.save_agent(default_agent)
 
     def load_all_agents(self):
+        """Scans the agents directory and reloads all YAML configurations."""
         self._agents.clear()
         agents_dir = settings.AGENTS_DIR
         if not agents_dir.exists():
@@ -144,13 +161,9 @@ class AgentManager:
 
         for file_path in agents_dir.iterdir():
             if file_path.suffix in [".yaml", ".yml"]:
-                try:
-                    data = yaml.safe_load(file_path.read_text(encoding="utf-8"))
-                    if isinstance(data, dict):
-                        agent = AgentConfig(**data)
-                        self._agents[agent.id] = agent
-                except Exception as e:
-                    print(f"Error loading agent from '{file_path.name}': {e}")
+                agent = _load_agent_file(file_path)
+                if agent:
+                    self._agents[agent.id] = agent
 
     def list_agents(self) -> List[AgentConfig]:
         self.load_all_agents()
@@ -161,7 +174,7 @@ class AgentManager:
         return self._agents.get(agent_id)
 
     def save_agent(self, agent: AgentConfig):
-        clean_id = re.sub(r"[^a-zA-Z0-9_-]", "_", agent.id.lower().strip())
+        clean_id = _clean_agent_id(agent.id)
         agent.id = clean_id
         file_path = settings.AGENTS_DIR / f"{clean_id}.yaml"
 

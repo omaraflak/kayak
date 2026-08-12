@@ -1,8 +1,16 @@
 import os
-import socket
 from pathlib import Path
-from typing import Optional, Dict, Any, Union
+import socket
+from typing import Dict, Optional, Union
 import docker
+
+
+def _is_host_absolute_path(path: str) -> bool:
+    """Checks if a path string is an absolute path on Linux/macOS or Windows."""
+    if path.startswith("/") or path.startswith("\\"):
+        return True
+    return len(path) > 1 and path[1] == ":"
+
 
 class DockerPathResolver:
     """Resolves container-internal filesystem paths to Docker host paths or named volumes.
@@ -85,14 +93,12 @@ class DockerPathResolver:
                 return src
             if path_str.startswith(dest + "/"):
                 rel = os.path.relpath(path_str, dest)
-                # If src is an absolute host path (Linux/macOS/Windows)
-                if src.startswith("/") or src.startswith("\\") or (len(src) > 1 and src[1] == ":"):
+                if _is_host_absolute_path(src):
                     return os.path.normpath(os.path.join(src, rel))
                 else:
-                    # Named volume
                     return src
 
-        # If inside a container and path starts with /app/ but cannot be mapped to host
+        # Fallback if inside a container and unmapped
         if cls._is_in_container and path_str.startswith("/app"):
             if fallback_named_volume:
                 return fallback_named_volume

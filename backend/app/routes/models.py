@@ -1,4 +1,5 @@
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 from fastapi import APIRouter, Query
 import httpx
 import litellm
@@ -40,6 +41,25 @@ class HuggingFaceModelSearchResult(BaseModel):
     model_string_vllm: str
 
 
+@dataclass(frozen=True)
+class ModelEntry:
+    """Static catalog entry for a curated model."""
+    id: str
+    name: str
+    description: str
+    default_context_window: str
+
+
+@dataclass(frozen=True)
+class ProviderCatalogItem:
+    """Static catalog configuration for a model provider."""
+    provider_id: str
+    provider_name: str
+    icon: str
+    api_key_attr: str
+    models: List[ModelEntry]
+
+
 def _get_context_window(model_id: str, default: str) -> str:
     """Retrieves context window limit from LiteLLM model info."""
     try:
@@ -52,64 +72,68 @@ def _get_context_window(model_id: str, default: str) -> str:
     return default
 
 
-# Provider catalog: (provider_id, display_name, icon, api_key_attr, models_list)
-# Each model entry: (model_id, display_name, description, default_context_window)
-_PROVIDER_CATALOG = [
-    (
-        "gemini", "Google", "✨", "GEMINI_API_KEY", [
-            ("gemini/gemini-2.5-pro", "Gemini 2.5 Pro", "Flagship model for complex agentic workflows, deep coding, and complex tool reasoning.", "2,000,000 tokens"),
-            ("gemini/gemini-2.5-flash", "Gemini 2.5 Flash", "Next-gen balanced frontier model with rapid response and multimodal reasoning.", "1,000,000 tokens"),
-            ("gemini/gemini-2.5-flash-thinking", "Gemini 2.5 Flash Thinking", "Integrated chain-of-thought reasoning model for difficult logic and multi-step tasks.", "1,000,000 tokens"),
-            ("gemini/gemini-3.6-flash", "Gemini 3.6 Flash", "Default ultra-fast agent synthesis engine with sub-second token latency.", "1,000,000 tokens"),
-            ("gemini/gemini-1.5-pro", "Gemini 1.5 Pro", "Massive context multimodal model for large codebase comprehension.", "2,000,000 tokens"),
-            ("gemini/gemini-1.5-flash", "Gemini 1.5 Flash", "High-frequency lightweight model optimized for rapid tool calling.", "1,000,000 tokens"),
+_PROVIDER_CATALOG: List[ProviderCatalogItem] = [
+    ProviderCatalogItem(
+        provider_id="gemini",
+        provider_name="Google",
+        icon="✨",
+        api_key_attr="GEMINI_API_KEY",
+        models=[
+            ModelEntry("gemini/gemini-2.5-pro", "Gemini 2.5 Pro", "Flagship model for complex agentic workflows, deep coding, and complex tool reasoning.", "2,000,000 tokens"),
+            ModelEntry("gemini/gemini-2.5-flash", "Gemini 2.5 Flash", "Next-gen balanced frontier model with rapid response and multimodal reasoning.", "1,000,000 tokens"),
+            ModelEntry("gemini/gemini-2.5-flash-thinking", "Gemini 2.5 Flash Thinking", "Integrated chain-of-thought reasoning model for difficult logic and multi-step tasks.", "1,000,000 tokens"),
+            ModelEntry("gemini/gemini-3.6-flash", "Gemini 3.6 Flash", "Default ultra-fast agent synthesis engine with sub-second token latency.", "1,000,000 tokens"),
+            ModelEntry("gemini/gemini-1.5-pro", "Gemini 1.5 Pro", "Massive context multimodal model for large codebase comprehension.", "2,000,000 tokens"),
+            ModelEntry("gemini/gemini-1.5-flash", "Gemini 1.5 Flash", "High-frequency lightweight model optimized for rapid tool calling.", "1,000,000 tokens"),
         ],
     ),
-    (
-        "openai", "OpenAI", "🧠", "OPENAI_API_KEY", [
-            ("openai/gpt-4o", "GPT-4o", "OpenAI's flagship omni model for advanced reasoning and general agent workflows.", "128,000 tokens"),
-            ("openai/gpt-4o-mini", "GPT-4o Mini", "Fast and lightweight model offering high intelligence at low latency.", "128,000 tokens"),
-            ("openai/o1", "o1", "Deep reasoning model designed to think through math, code, and difficult logic.", "200,000 tokens"),
-            ("openai/o3-mini", "o3-mini", "High-speed reasoning model specialized for coding, math, and tool execution.", "200,000 tokens"),
-            ("openai/gpt-4-turbo", "GPT-4 Turbo", "High-capability model with 128k context and accurate function calling.", "128,000 tokens"),
+    ProviderCatalogItem(
+        provider_id="openai",
+        provider_name="OpenAI",
+        icon="🧠",
+        api_key_attr="OPENAI_API_KEY",
+        models=[
+            ModelEntry("openai/gpt-4o", "GPT-4o", "OpenAI's flagship omni model for advanced reasoning and general agent workflows.", "128,000 tokens"),
+            ModelEntry("openai/gpt-4o-mini", "GPT-4o Mini", "Fast and lightweight model offering high intelligence at low latency.", "128,000 tokens"),
+            ModelEntry("openai/o1", "o1", "Deep reasoning model designed to think through math, code, and difficult logic.", "200,000 tokens"),
+            ModelEntry("openai/o3-mini", "o3-mini", "High-speed reasoning model specialized for coding, math, and tool execution.", "200,000 tokens"),
+            ModelEntry("openai/gpt-4-turbo", "GPT-4 Turbo", "High-capability model with 128k context and accurate function calling.", "128,000 tokens"),
         ],
     ),
-    (
-        "anthropic", "Anthropic", "⚡", "ANTHROPIC_API_KEY", [
-            ("anthropic/claude-3-7-sonnet-latest", "Claude 3.7 Sonnet", "Anthropic's flagship hybrid reasoning model for precision engineering.", "200,000 tokens"),
-            ("anthropic/claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", "Industry-leading precision coding and agentic execution model.", "200,000 tokens"),
-            ("anthropic/claude-3-5-haiku-20241022", "Claude 3.5 Haiku", "Near-instantaneous token generation with exceptional coding intelligence.", "200,000 tokens"),
-            ("anthropic/claude-3-opus-20240229", "Claude 3 Opus", "Deep analytical model for complex synthesis and writing tasks.", "200,000 tokens"),
+    ProviderCatalogItem(
+        provider_id="anthropic",
+        provider_name="Anthropic",
+        icon="⚡",
+        api_key_attr="ANTHROPIC_API_KEY",
+        models=[
+            ModelEntry("anthropic/claude-3-7-sonnet-latest", "Claude 3.7 Sonnet", "Anthropic's flagship hybrid reasoning model for precision engineering.", "200,000 tokens"),
+            ModelEntry("anthropic/claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", "Industry-leading precision coding and agentic execution model.", "200,000 tokens"),
+            ModelEntry("anthropic/claude-3-5-haiku-20241022", "Claude 3.5 Haiku", "Near-instantaneous token generation with exceptional coding intelligence.", "200,000 tokens"),
+            ModelEntry("anthropic/claude-3-opus-20240229", "Claude 3 Opus", "Deep analytical model for complex synthesis and writing tasks.", "200,000 tokens"),
         ],
     ),
 ]
 
 
-def _build_provider(
-    provider_id: str,
-    provider_name: str,
-    icon: str,
-    api_key_attr: str,
-    model_entries: List[tuple],
-) -> ProviderModels:
-    """Constructs a ProviderModels object from catalog data."""
-    has_key = bool(getattr(settings, api_key_attr, ""))
+def _build_provider_response(provider: ProviderCatalogItem) -> ProviderModels:
+    """Constructs a ProviderModels API response from a catalog item and current settings."""
+    has_key = bool(getattr(settings, provider.api_key_attr, ""))
     items = [
         ModelItem(
-            id=mid,
-            name=name,
-            provider=provider_id,
-            description=desc,
-            context_window=_get_context_window(mid, ctx),
+            id=entry.id,
+            name=entry.name,
+            provider=provider.provider_id,
+            description=entry.description,
+            context_window=_get_context_window(entry.id, entry.default_context_window),
             is_available=has_key,
             is_running_locally=False,
         )
-        for mid, name, desc, ctx in model_entries
+        for entry in provider.models
     ]
     return ProviderModels(
-        provider_id=provider_id,
-        provider_name=provider_name,
-        icon=icon,
+        provider_id=provider.provider_id,
+        provider_name=provider.provider_name,
+        icon=provider.icon,
         is_configured=has_key,
         status_message="API Key Configured" if has_key else "Missing API Key in Settings",
         models=items,
@@ -118,29 +142,15 @@ def _build_provider(
 
 @router.get("", response_model=List[ProviderModels])
 async def list_available_models() -> List[ProviderModels]:
-    """Returns provider-specific curated models, active local servers, and configured API statuses.
-
-    Returns:
-        A list of ProviderModels distinctly separated by provider.
-    """
-    return [
-        _build_provider(pid, pname, icon, key_attr, models)
-        for pid, pname, icon, key_attr, models in _PROVIDER_CATALOG
-    ]
+    """Returns provider-specific curated models, active local servers, and configured API statuses."""
+    return [_build_provider_response(p) for p in _PROVIDER_CATALOG]
 
 
 @router.get("/huggingface/search", response_model=List[HuggingFaceModelSearchResult])
 async def search_huggingface_models(
     query: str = Query(..., min_length=2, description="Search term for Hugging Face Hub")
 ) -> List[HuggingFaceModelSearchResult]:
-    """Queries the Hugging Face Hub API for open-weight LLM models matching search query.
-
-    Args:
-        query: Model keyword or organization (e.g., 'qwen', 'llama-3', 'mistral').
-
-    Returns:
-        List of matching models with download stats and formatted model strings.
-    """
+    """Queries the Hugging Face Hub API for open-weight LLM models matching search query."""
     results: List[HuggingFaceModelSearchResult] = []
     url = f"https://huggingface.co/api/models?pipeline_tag=text-generation&search={query}&limit=16&sort=downloads&direction=-1"
 
