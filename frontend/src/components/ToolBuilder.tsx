@@ -182,6 +182,7 @@ export const ToolBuilder: React.FC<ToolBuilderProps> = ({
             headerBadge="Autonomous Synthesis"
             headerSubtitle="Describe the tool you want to build. The agent will draft tool.py, test it with verify.py, and sync code to the live editor."
             placeholder="e.g. Create a uuidv4() generator tool with formatting options..."
+            fullWidthInput={true}
             onConversationCreated={(newId) => setConversationId(newId)}
             onToolDraftDetected={handleToolDraftDetected}
             onRefreshConversations={onRefreshConversations}

@@ -32,6 +32,7 @@ export interface ChatPaneProps {
   headerTitle?: string;
   headerBadge?: string;
   headerSubtitle?: string;
+  fullWidthInput?: boolean;
   onSendMessage?: (content: string) => Promise<string | void>;
   onConversationCreated?: (newId: string) => void;
   onToolDraftDetected?: (tool: { name?: string; toolCode?: string; verifyCode?: string; verifyOutput?: string; isSuccess?: boolean }) => void;
@@ -217,6 +218,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   headerTitle,
   headerBadge,
   headerSubtitle,
+  fullWidthInput = false,
   onSendMessage,
   onConversationCreated,
   onToolDraftDetected,
@@ -799,11 +801,11 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
         </div>
       </div>
 
-      {/* Input Composer - Constrained to match max-w-3xl */}
+      {/* Input Composer - Constrained to max-w-3xl for standard chat, full width in studio mode */}
       <div className="p-4 border-t border-zinc-200 bg-white shrink-0">
         <form
           onSubmit={handleSend}
-          className="max-w-3xl mx-auto relative bg-zinc-50 border border-zinc-300 rounded-xl overflow-hidden focus-within:bg-white focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-600 shadow-xs transition-all"
+          className={`${fullWidthInput ? 'w-full' : 'max-w-3xl mx-auto'} relative bg-zinc-50 border border-zinc-300 rounded-xl overflow-hidden focus-within:bg-white focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-600 shadow-xs transition-all`}
         >
           <textarea
             value={inputContent}

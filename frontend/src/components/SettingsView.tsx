@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { AppSettings } from '../types';
 import { api } from '../api/client';
 import { 
@@ -45,8 +45,21 @@ export const SettingsView: React.FC = () => {
     }
   };
 
+  const isDirty = useMemo(() => {
+    if (!settings) return false;
+    return (
+      geminiKey.trim() !== (settings.GEMINI_API_KEY || '').trim() ||
+      openaiKey.trim() !== (settings.OPENAI_API_KEY || '').trim() ||
+      anthropicKey.trim() !== (settings.ANTHROPIC_API_KEY || '').trim() ||
+      huggingfaceKey.trim() !== (settings.HUGGINGFACE_API_KEY || '').trim() ||
+      vllmBase.trim() !== (settings.VLLM_API_BASE || '').trim() ||
+      defaultModel.trim() !== (settings.DEFAULT_MODEL || '').trim()
+    );
+  }, [settings, geminiKey, openaiKey, anthropicKey, huggingfaceKey, vllmBase, defaultModel]);
+
   const handleSave = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!isDirty || isSaving) return;
     setIsSaving(true);
     setSaveSuccess(false);
 
@@ -78,7 +91,15 @@ export const SettingsView: React.FC = () => {
             <SettingsIcon className="w-4 h-4" />
           </div>
           <div>
-            <h1 className="font-bold text-base text-zinc-900">Platform Settings</h1>
+            <h1 className="font-bold text-base text-zinc-900 flex items-center gap-2">
+              <span>Platform Settings</span>
+              {isDirty && (
+                <span className="text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                  Unsaved changes
+                </span>
+              )}
+            </h1>
             <p className="text-xs text-zinc-500">
               Configure LLM provider API credentials, local inference endpoints, and default models.
             </p>
@@ -87,8 +108,8 @@ export const SettingsView: React.FC = () => {
 
         <button
           onClick={handleSave}
-          disabled={isSaving}
-          className="px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white flex items-center gap-1.5 shadow-sm transition-all focus:ring-2 focus:ring-indigo-500"
+          disabled={isSaving || !isDirty}
+          className="px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:hover:bg-indigo-600 disabled:cursor-not-allowed text-white flex items-center gap-1.5 shadow-sm transition-all focus:ring-2 focus:ring-indigo-500"
         >
           {isSaving ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />

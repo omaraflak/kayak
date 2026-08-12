@@ -327,6 +327,7 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
               headerBadge="Autonomous Synthesis"
               headerSubtitle="Describe the skill or workflow to teach your agents. Instructions and descriptions will sync directly to the live editor."
               placeholder="e.g. Write a skill for writing SQL queries and running schema migrations..."
+              fullWidthInput={true}
               onConversationCreated={(newId) => setConversationId(newId)}
               onSkillDraftDetected={handleSkillDraftDetected}
               onRefreshConversations={onRefreshConversations}
