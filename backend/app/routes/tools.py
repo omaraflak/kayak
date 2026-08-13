@@ -2,7 +2,8 @@ from typing import Any, Dict, List
 import shutil
 from fastapi import APIRouter, HTTPException
 from backend.app.config import settings
-from backend.app.models import ToolDefinition
+from backend.app.models import ToolCategoryInfo, ToolDefinition
+from backend.app.tools.metadata import list_categories
 from backend.app.tools.registry import tool_registry
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
@@ -16,6 +17,19 @@ async def list_all_tools() -> List[ToolDefinition]:
         A list of ToolDefinition representations.
     """
     return tool_registry.list_all_tools()
+
+
+@router.get("/categories", response_model=List[ToolCategoryInfo])
+async def list_tool_categories() -> List[ToolCategoryInfo]:
+    """Lists tool categories with display labels, in presentation order.
+
+    Served from the backend so clients group tools from data rather than carrying
+    their own copy of the taxonomy, which would drift as tools are added.
+
+    Returns:
+        Ordered list of ToolCategoryInfo entries.
+    """
+    return list_categories()
 
 
 @router.post("/reload")

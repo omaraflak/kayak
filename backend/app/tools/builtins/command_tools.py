@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import Optional
 from backend.app.agent.history import truncate_tool_result
 from backend.app.agent.sandbox import sandbox_manager
+from backend.app.models import ToolCategory, ToolRisk
+from backend.app.tools.metadata import tool_metadata
 
 # Upper bound on how long a foreground command may block an agent turn. Anything
 # longer belongs in start_background_task, which streams instead of blocking.
@@ -29,6 +31,7 @@ def _format_process_output(stdout_str: str, stderr_str: str, exit_code: int) -> 
     return "\n".join(output) if output else "Command executed with no output."
 
 
+@tool_metadata(category=ToolCategory.EXECUTION, risk=ToolRisk.HIGH)
 async def run_command(
     command: str,
     timeout: Optional[int] = 60,

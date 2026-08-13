@@ -23,9 +23,11 @@ def _agent(**overrides) -> AgentConfig:
 
 
 class TestResolveToolPermission:
-    def test_empty_allowlist_permits_everything(self):
+    def test_empty_allowlist_permits_nothing(self):
+        # Emptying the list must revoke every tool. Reading it as "unrestricted"
+        # would make turning an agent's last tool off grant it all of them.
         agent = _agent()
-        assert resolve_tool_permission(agent, "run_command") == ToolPermission.AUTO_APPROVE
+        assert resolve_tool_permission(agent, "run_command") == ToolPermission.DENIED
 
     def test_tool_absent_from_allowlist_is_denied(self):
         agent = _agent(allowed_tools=["read_file"])

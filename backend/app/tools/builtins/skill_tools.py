@@ -1,6 +1,9 @@
 from backend.app.skills.registry import skill_registry
+from backend.app.models import ToolCategory, ToolRisk
+from backend.app.tools.metadata import tool_metadata
 
 
+@tool_metadata(category=ToolCategory.KNOWLEDGE, risk=ToolRisk.LOW)
 def load_skill(skill_name: str) -> str:
     """Loads and retrieves the complete markdown instructions and knowledge for a specific skill.
 

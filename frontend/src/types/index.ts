@@ -10,6 +10,24 @@ export type ToolPermission = 'auto_approve' | 'ask_user' | 'denied';
 
 export type NavigationTab = 'chat' | 'agents' | 'skills' | 'tools' | 'tasks' | 'models' | 'settings';
 
+export type ToolCategory =
+  | 'filesystem'
+  | 'execution'
+  | 'web'
+  | 'orchestration'
+  | 'knowledge'
+  | 'tooling'
+  | 'custom';
+
+export type ToolRisk = 'low' | 'moderate' | 'high';
+
+/** Display metadata for a tool category, served by the backend. */
+export interface ToolCategoryInfo {
+  value: ToolCategory;
+  label: string;
+  description: string;
+}
+
 export type JSONSchemaType = 'string' | 'integer' | 'number' | 'boolean' | 'array' | 'object';
 
 export interface Conversation {
@@ -85,6 +103,8 @@ export interface ToolDefinition {
   description: string;
   parameters: ToolParametersSchema;
   is_builtin: boolean;
+  category: ToolCategory;
+  risk: ToolRisk;
   source_code?: string;
   verify_code?: string;
 }

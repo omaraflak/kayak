@@ -203,11 +203,6 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
                 <h1 className="text-base font-bold font-mono text-md-on-surface truncate">
                   {selectedSkill ? selectedSkill.name : 'Select Skill'}
                 </h1>
-                {selectedSkill && (
-                  <span className="text-xs px-2.5 py-0.5 rounded-full font-medium border bg-md-tertiary-container text-md-on-tertiary-container border-md-outline-variant shrink-0">
-                    Markdown Skill
-                  </span>
-                )}
               </div>
               <p className="text-xs text-md-on-surface-variant mt-0.5 truncate">
                 {selectedSkill?.description || 'Select a skill to read its instructions.'}

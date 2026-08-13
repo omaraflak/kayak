@@ -3,7 +3,11 @@ import inspect
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, get_type_hints
 from backend.app.config import settings
-from backend.app.models import ToolDefinition
+from backend.app.models import ToolCategory, ToolDefinition, ToolRisk
+from backend.app.tools.metadata import (
+    read_function_metadata,
+    read_module_metadata,
+)
 
 # Type mapping from Python to JSON Schema
 TYPE_MAP = {
@@ -159,12 +163,14 @@ class ToolRegistry:
         self._custom_schemas: Dict[str, Dict[str, Any]] = {}
         self._custom_source_codes: Dict[str, str] = {}
         self._custom_verify_codes: Dict[str, str] = {}
+        self._metadata: Dict[str, tuple[ToolCategory, ToolRisk]] = {}
 
     def register_builtin(self, func: Callable, name: Optional[str] = None):
         """Registers a built-in tool function."""
         tool_name = name or func.__name__
         self._builtin_tools[tool_name] = func
         self._builtin_schemas[tool_name] = extract_tool_schema(func, tool_name)
+        self._metadata[tool_name] = read_function_metadata(func)
 
     def load_custom_tools(self):
         """Scans data/tools/<name>/tool.py and loads each tool."""
@@ -172,6 +178,8 @@ class ToolRegistry:
         self._custom_schemas.clear()
         self._custom_source_codes.clear()
         self._custom_verify_codes.clear()
+        for tool_name in [n for n in self._metadata if n not in self._builtin_schemas]:
+            self._metadata.pop(tool_name, None)
 
         tools_dir = settings.TOOLS_DIR
         if not tools_dir.exists():
@@ -204,6 +212,10 @@ class ToolRegistry:
 
                 self._custom_tools[tool_name] = target_func
                 self._custom_schemas[tool_name] = extract_tool_schema(target_func, tool_name)
+                # A custom tool declares its own classification with module-level
+                # CATEGORY / RISK constants; it cannot import Kayak because the same
+                # file also runs standalone during verification and in the sandbox.
+                self._metadata[tool_name] = read_module_metadata(module)
                 self._custom_source_codes[tool_name] = tool_file.read_text(encoding="utf-8")
                 if verify_file.exists():
                     self._custom_verify_codes[tool_name] = verify_file.read_text(encoding="utf-8")
@@ -232,12 +244,17 @@ class ToolRegistry:
         for name, schema in all_schemas.items():
             fn = schema.get("function", {})
             is_builtin = name in self._builtin_schemas
+            category, risk = self._metadata.get(
+                name, (ToolCategory.CUSTOM, ToolRisk.MODERATE)
+            )
             result.append(
                 ToolDefinition(
                     name=name,
                     description=fn.get("description", ""),
                     parameters=fn.get("parameters", {}),
                     is_builtin=is_builtin,
+                    category=category,
+                    risk=risk,
                     source_code=self._custom_source_codes.get(name) if not is_builtin else None,
                     verify_code=self._custom_verify_codes.get(name) if not is_builtin else None,
                 )

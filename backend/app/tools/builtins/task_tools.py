@@ -3,6 +3,8 @@ from typing import Optional
 from backend.app.agent.task_manager import task_manager
 from backend.app.database import get_task
 from backend.app.models import BackgroundTask
+from backend.app.models import ToolCategory, ToolRisk
+from backend.app.tools.metadata import tool_metadata
 
 
 def _format_task_status(task: BackgroundTask) -> str:
@@ -27,6 +29,7 @@ def _format_task_status(task: BackgroundTask) -> str:
     return "\n".join(output)
 
 
+@tool_metadata(category=ToolCategory.EXECUTION, risk=ToolRisk.HIGH)
 async def start_background_task(
     command: str,
     name: str,
@@ -56,6 +59,7 @@ async def start_background_task(
     )
 
 
+@tool_metadata(category=ToolCategory.EXECUTION, risk=ToolRisk.LOW)
 async def get_task_status(task_id: str) -> str:
     """Checks the status and recent stdout/stderr output of a background task.
 
@@ -69,6 +73,7 @@ async def get_task_status(task_id: str) -> str:
     return _format_task_status(task)
 
 
+@tool_metadata(category=ToolCategory.EXECUTION, risk=ToolRisk.MODERATE)
 async def send_task_input(task_id: str, input_text: str) -> str:
     """Sends text input to standard input (stdin) of a running background task.
 
@@ -82,6 +87,7 @@ async def send_task_input(task_id: str, input_text: str) -> str:
     return f"Failed to send input. Task '{task_id}' may not be running or accepting stdin."
 
 
+@tool_metadata(category=ToolCategory.EXECUTION, risk=ToolRisk.MODERATE)
 async def stop_task(task_id: str) -> str:
     """Terminates or cancels a running background task.
 

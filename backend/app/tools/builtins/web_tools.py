@@ -1,6 +1,8 @@
 from typing import Optional
 from bs4 import BeautifulSoup
 import httpx
+from backend.app.models import ToolCategory, ToolRisk
+from backend.app.tools.metadata import tool_metadata
 
 try:
     # duckduckgo-search was renamed to ddgs; keep the old import working so an
@@ -24,6 +26,7 @@ def _clean_html_text(html_content: str, max_length: int = 4000) -> str:
     return text
 
 
+@tool_metadata(category=ToolCategory.WEB, risk=ToolRisk.LOW)
 async def web_search(query: str, max_results: Optional[int] = 5) -> str:
     """Performs an open-source web search using DuckDuckGo and returns search results.
 
@@ -58,6 +61,7 @@ async def web_search(query: str, max_results: Optional[int] = 5) -> str:
         return f"Error performing web search: {str(e)}"
 
 
+@tool_metadata(category=ToolCategory.WEB, risk=ToolRisk.MODERATE)
 async def fetch_url(url: str, max_length: Optional[int] = 4000) -> str:
     """Fetches the text content of a public web page, stripping HTML and scripts.
 

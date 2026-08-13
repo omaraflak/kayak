@@ -13,6 +13,8 @@ from backend.app.database import (
     update_task,
 )
 from backend.app.models import TaskStatus
+from backend.app.models import ToolCategory, ToolRisk
+from backend.app.tools.metadata import tool_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +103,7 @@ async def _last_assistant_text(conversation_id: str) -> str:
     return "[Sub-agent produced no textual output.]"
 
 
+@tool_metadata(category=ToolCategory.ORCHESTRATION, risk=ToolRisk.MODERATE)
 async def spawn_subagent(
     agent_id: str,
     prompt: str,
@@ -181,6 +184,7 @@ async def spawn_subagent(
     )
 
 
+@tool_metadata(category=ToolCategory.ORCHESTRATION, risk=ToolRisk.LOW)
 async def get_subagent_result(
     subagent_conversation_id: str,
 ) -> str:

@@ -40,6 +40,28 @@ class ToolPermission(str, Enum):
     DENIED = "denied"
 
 
+class ToolCategory(str, Enum):
+    """Broad capability a tool belongs to, used to group them for configuration."""
+    FILESYSTEM = "filesystem"
+    EXECUTION = "execution"
+    WEB = "web"
+    ORCHESTRATION = "orchestration"
+    KNOWLEDGE = "knowledge"
+    TOOLING = "tooling"
+    CUSTOM = "custom"
+
+
+class ToolRisk(str, Enum):
+    """How much damage a tool can do if the model uses it wrongly.
+
+    This is about blast radius, not likelihood: HIGH means the tool can execute
+    arbitrary code, reach the host, or change what the platform itself will run.
+    """
+    LOW = "low"
+    MODERATE = "moderate"
+    HIGH = "high"
+
+
 class JSONSchemaType(str, Enum):
     """JSON Schema primitive data types."""
     STRING = "string"
@@ -140,8 +162,17 @@ class ToolDefinition(BaseModel):
     description: str
     parameters: Dict[str, Any]
     is_builtin: bool = False
+    category: ToolCategory = ToolCategory.CUSTOM
+    risk: ToolRisk = ToolRisk.MODERATE
     source_code: Optional[str] = None
     verify_code: Optional[str] = None
+
+
+class ToolCategoryInfo(BaseModel):
+    """Display metadata for a tool category, so clients need no hardcoded list."""
+    value: ToolCategory
+    label: str
+    description: str
 
 
 class BackgroundTask(BaseModel):

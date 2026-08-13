@@ -1,6 +1,9 @@
 from backend.app.skills.registry import skill_registry
+from backend.app.models import ToolCategory, ToolRisk
+from backend.app.tools.metadata import tool_metadata
 
 
+@tool_metadata(category=ToolCategory.KNOWLEDGE, risk=ToolRisk.MODERATE)
 def create_or_update_skill(name: str, description: str, instructions: str) -> str:
     """Creates a new skill or updates an existing skill in data/skills/<name>/SKILL.md.
 
@@ -20,6 +23,7 @@ def create_or_update_skill(name: str, description: str, instructions: str) -> st
     )
 
 
+@tool_metadata(category=ToolCategory.KNOWLEDGE, risk=ToolRisk.LOW)
 def list_available_skills() -> str:
     """Lists all skills currently registered in the Kayak skills directory."""
     skills = skill_registry.list_skills()

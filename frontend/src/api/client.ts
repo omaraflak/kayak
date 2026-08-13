@@ -9,6 +9,7 @@ import {
   VerifyToolResponse,
   ProviderModels,
   HuggingFaceModelSearchResult,
+  ToolCategoryInfo,
   VLLMDeploymentProgress,
   VLLMDeployRequest
 } from '../types';
@@ -148,6 +149,9 @@ export const api = {
   // Tools
   listTools: (): Promise<ToolDefinition[]> =>
     fetchJSON(`${API_BASE}/tools`),
+
+  listToolCategories: (): Promise<ToolCategoryInfo[]> =>
+    fetchJSON(`${API_BASE}/tools/categories`),
 
   reloadTools: (): Promise<{ status: string; total_tools: number }> =>
     fetchJSON(`${API_BASE}/tools/reload`, { method: 'POST' }),

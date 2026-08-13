@@ -91,8 +91,10 @@ async def _resolve_session_context(
 
     effective_container_id = container_id if container_id else conv.container_id
 
+    # The allowlist is exhaustive, so an agent with no permitted tools is offered
+    # none rather than all of them.
     tool_schemas = tool_registry.get_tool_definitions(
-        allowed_names=agent_config.allowed_tools if agent_config.allowed_tools else None
+        allowed_names=agent_config.allowed_tools
     )
 
     runtime_ctx: Dict[str, Any] = {

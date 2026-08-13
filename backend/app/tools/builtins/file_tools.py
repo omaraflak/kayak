@@ -9,6 +9,8 @@ outside the workspace, rather than trusting a relative-looking path to stay put.
 from pathlib import Path
 from typing import List, Optional
 from backend.app.agent.sandbox import sandbox_manager
+from backend.app.models import ToolCategory, ToolRisk
+from backend.app.tools.metadata import tool_metadata
 
 # Hard cap on returned file content, independent of the line cap: a minified bundle
 # can be a handful of lines and still exhaust the model's context window.
@@ -122,6 +124,7 @@ def _format_dir_entries(items: List[Path], path_str: str) -> str:
     return "\n".join(output)
 
 
+@tool_metadata(category=ToolCategory.FILESYSTEM, risk=ToolRisk.LOW)
 async def read_file(
     path: str,
     start_line: Optional[int] = None,
@@ -191,6 +194,7 @@ except Exception as e:
         return f"Error reading file '{path}': {str(e)}"
 
 
+@tool_metadata(category=ToolCategory.FILESYSTEM, risk=ToolRisk.MODERATE)
 async def write_file(
     path: str,
     content: str,
@@ -231,6 +235,7 @@ except Exception as e:
         return f"Error writing to file '{path}': {str(e)}"
 
 
+@tool_metadata(category=ToolCategory.FILESYSTEM, risk=ToolRisk.MODERATE)
 async def edit_file(
     path: str,
     target: str,
@@ -295,6 +300,7 @@ except Exception as e:
         return f"Error editing file '{path}': {str(e)}"
 
 
+@tool_metadata(category=ToolCategory.FILESYSTEM, risk=ToolRisk.LOW)
 async def list_directory(
     path: Optional[str] = ".",
     workspace_dir: Optional[Path] = None,

@@ -14,9 +14,13 @@ def resolve_tool_permission(
 ) -> ToolPermission:
     """Returns the effective permission for a tool under an agent profile.
 
-    A non-empty ``allowed_tools`` list is an allowlist: anything absent from it is
-    denied outright. Tools on the list default to auto-approval unless
-    ``tool_permissions`` says otherwise.
+    ``allowed_tools`` is an exhaustive allowlist: a tool absent from it is denied,
+    and an empty list grants nothing. It deliberately does not mean "everything" --
+    that reading makes revoking an agent's last tool grant it every tool instead,
+    which is precisely backwards for a security control.
+
+    Tools on the list default to auto-approval unless ``tool_permissions`` says
+    otherwise.
 
     Args:
         agent_config: Profile of the agent making the call.
@@ -25,7 +29,7 @@ def resolve_tool_permission(
     Returns:
         ToolPermission: The policy to apply to this call.
     """
-    if agent_config.allowed_tools and tool_name not in agent_config.allowed_tools:
+    if tool_name not in agent_config.allowed_tools:
         return ToolPermission.DENIED
 
     permission = agent_config.tool_permissions.get(tool_name)

@@ -1,6 +1,8 @@
 from typing import Optional
 from backend.app.agent.sandbox import sandbox_manager
+from backend.app.models import ToolCategory, ToolRisk
 from backend.app.tools.activation import activate_verified_tool
+from backend.app.tools.metadata import tool_metadata
 from backend.app.tools.registry import tool_registry
 from backend.app.tools.verifier import clean_tool_identifier, run_tool_verification
 
@@ -46,6 +48,7 @@ with tempfile.TemporaryDirectory(prefix="kayak_verify_") as tmpdir:
     return await sandbox_manager.exec_python(container_id, script)
 
 
+@tool_metadata(category=ToolCategory.TOOLING, risk=ToolRisk.MODERATE)
 async def verify_tool(
     tool_name: str,
     tool_code: str,
@@ -76,6 +79,7 @@ async def verify_tool(
         return f"✗ Verification Failed ({result.error})\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
 
 
+@tool_metadata(category=ToolCategory.TOOLING, risk=ToolRisk.HIGH)
 async def activate_tool(
     tool_name: str, tool_code: str, verify_code: str
 ) -> str:
@@ -97,6 +101,7 @@ async def activate_tool(
     return result.message
 
 
+@tool_metadata(category=ToolCategory.TOOLING, risk=ToolRisk.LOW)
 def get_tool_source(tool_name: str) -> str:
     """Reads the current source code and test suite of an installed custom tool.
 

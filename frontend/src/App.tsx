@@ -156,11 +156,12 @@ export const App: React.FC = () => {
         )}
 
         {currentTab === 'agents' && (
-          <AgentsView 
-            agents={agents} 
+          <AgentsView
+            agents={agents}
             selectedId={selectedItemId}
             onSelectId={(id) => handleSelectItem('agents', id)}
-            onRefresh={loadInitialData} 
+            onRefresh={loadInitialData}
+            onStartAgentChat={handleStartAgentChat}
           />
         )}
 
