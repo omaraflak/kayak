@@ -70,12 +70,25 @@ export const App: React.FC = () => {
   }, [handlePopState]);
 
   const handleSelectTab = (tab: NavigationTab) => {
+    // Re-selecting the current tab keeps whatever is open in it.
+    if (tab === currentTab) {
+      navigateTo(tab, tab === 'chat' ? activeConversationId : selectedItemId);
+      return;
+    }
+
     setCurrentTab(tab);
+
     if (tab === 'chat') {
       navigateTo('chat', activeConversationId);
-    } else {
-      navigateTo(tab, selectedItemId);
+      return;
     }
+
+    // A selected item belongs to the tab it was selected in. One piece of state is
+    // shared across agents, skills and tools, so carrying it across a tab switch
+    // produced URLs like /tools/coding_best_practices -- a skill id under the tools
+    // tab, naming a tool that does not exist.
+    setSelectedItemId(null);
+    navigateTo(tab, null);
   };
 
   const handleSelectConversation = (id: string | null) => {
@@ -108,6 +121,16 @@ export const App: React.FC = () => {
     } catch (err) {
       console.error('Failed to create conversation:', err);
     }
+  };
+
+  /** Adds a conversation created elsewhere (a branch) to the list and opens it. */
+  const handleOpenConversation = (conversation: Conversation) => {
+    setConversations((prev) =>
+      prev.some((item) => item.id === conversation.id) ? prev : [conversation, ...prev]
+    );
+    setActiveConversationId(conversation.id);
+    setCurrentTab('chat');
+    navigateTo('chat', conversation.id);
   };
 
   const handleDeleteConversation = async (id: string) => {
@@ -152,6 +175,8 @@ export const App: React.FC = () => {
             initialDraftAgentId={draftAgentId}
             onCreateConversation={handleCreateConversation}
             onRefreshConversations={loadInitialData}
+            onOpenConversation={handleOpenConversation}
+            onSelectConversation={handleSelectConversation}
           />
         )}
 

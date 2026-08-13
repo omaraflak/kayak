@@ -132,6 +132,21 @@ export const api = {
   cancelConversation: (id: string): Promise<{ status: string }> =>
     fetchJSON(`${API_BASE}/conversations/${id}/cancel`, { method: 'POST' }),
 
+  /** Truncates the conversation at a turn and returns the prompt that started it. */
+  revertToMessage: (
+    id: string,
+    messageId: string
+  ): Promise<{ status: string; removed: number; prompt: string | null }> =>
+    fetchJSONPost(`${API_BASE}/conversations/${id}/revert`, { message_id: messageId }),
+
+  /** Discards a turn and generates it again from the same history. */
+  retryFromMessage: (id: string, messageId: string): Promise<{ status: string }> =>
+    fetchJSONPost(`${API_BASE}/conversations/${id}/retry`, { message_id: messageId }),
+
+  /** Copies the conversation up to a turn into a new one. */
+  branchFromMessage: (id: string, messageId: string): Promise<Conversation> =>
+    fetchJSONPost(`${API_BASE}/conversations/${id}/branch`, { message_id: messageId }),
+
   sendMessage: (conversationId: string, content: string): Promise<Message> =>
     fetchJSONPost(`${API_BASE}/conversations/${conversationId}/messages`, { content }),
 

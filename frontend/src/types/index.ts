@@ -37,7 +37,11 @@ export interface Conversation {
   isolated_container: boolean;
   container_id: string | null;
   status: ConversationStatus;
+  /** Set on sub-agent sessions; these are deleted with their parent. */
   parent_conversation_id?: string | null;
+  /** Where a branch was taken from. Independent of the parent link above. */
+  branched_from_conversation_id?: string | null;
+  branched_from_message_id?: string | null;
   created_at: string;
   updated_at: string;
 }

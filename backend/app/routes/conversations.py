@@ -15,10 +15,13 @@ from backend.app.agents.manager import agent_manager
 from backend.app.config import settings
 from backend.app.database import (
     add_message,
+    copy_messages_through,
     create_conversation,
     delete_conversation,
+    delete_messages_from,
     get_conversation,
     get_messages,
+    get_preceding_user_message,
     list_child_conversations,
     list_conversations,
     update_conversation,
@@ -57,6 +60,11 @@ _side_tasks: Set[asyncio.Task[Any]] = set()
 class ToolApprovalRequest(BaseModel):
     """Payload recording the user's decision on a gated tool call."""
     approved: bool
+
+
+class MessageAnchorRequest(BaseModel):
+    """Identifies the message a revert, retry, or branch is anchored on."""
+    message_id: str
 
 
 def _spawn_side_task(coro) -> asyncio.Task[Any]:
@@ -102,6 +110,28 @@ async def _async_generate_and_update_title(conversation_id: str, prompt: str, mo
         logger.debug("Title generation failed for %s", conversation_id, exc_info=True)
 
 
+def _record_in_turn_buffer(buffer: Dict[str, Any], event: Dict[str, Any]) -> None:
+    """Accumulates an event into the replay buffer for the in-flight turn.
+
+    The buffer is what a reconnecting client is caught up with. It has to cover tool
+    calls as well as text: a turn spends most of its wall-clock time inside tools, so
+    replaying only the prose left a reconnecting client staring at a turn that looked
+    idle while a command ran.
+    """
+    event_type = event.get("type")
+
+    if event_type == "thinking":
+        buffer["thinking"] += event.get("content", "")
+    elif event_type == "token":
+        buffer["tokens"] += event.get("content", "")
+    elif event_type in ("tool_call_executing", "tool_call_result"):
+        call_id = event.get("id")
+        if call_id:
+            entry = buffer["tool_calls"].setdefault(call_id, {})
+            entry.update({key: value for key, value in event.items() if key != "type"})
+            entry["done"] = event_type == "tool_call_result"
+
+
 async def _run_agent_turn(conversation_id: str, agent_id: str) -> None:
     """Background task executing the agent turn loop and broadcasting events."""
     try:
@@ -110,7 +140,11 @@ async def _run_agent_turn(conversation_id: str, agent_id: str) -> None:
             return
 
         workspace_directory = settings.WORKSPACES_DIR / conversation_id
-        _active_turn_buffers[conversation_id] = {"thinking": "", "tokens": ""}
+        _active_turn_buffers[conversation_id] = {
+            "thinking": "",
+            "tokens": "",
+            "tool_calls": {},
+        }
 
         async for event in agent_engine.run(
             conversation_id=conversation_id,
@@ -118,11 +152,9 @@ async def _run_agent_turn(conversation_id: str, agent_id: str) -> None:
             workspace_dir=workspace_directory,
             container_id=conversation.container_id,
         ):
-            if conversation_id in _active_turn_buffers:
-                if event.get("type") == "thinking":
-                    _active_turn_buffers[conversation_id]["thinking"] += event.get("content", "")
-                elif event.get("type") == "token":
-                    _active_turn_buffers[conversation_id]["tokens"] += event.get("content", "")
+            buffer = _active_turn_buffers.get(conversation_id)
+            if buffer is not None:
+                _record_in_turn_buffer(buffer, event)
 
             _broadcast_event(conversation_id, event)
     except asyncio.CancelledError:
@@ -323,6 +355,141 @@ async def send_user_message(conversation_id: str, request: SendMessageRequest) -
     return message
 
 
+async def _load_conversation_and_anchor(
+    conversation_id: str, message_id: str
+) -> Conversation:
+    """Validates that a conversation exists and that the anchor message belongs to it.
+
+    Raises:
+        HTTPException: 404 if either is missing.
+    """
+    conversation = await get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    messages = await get_messages(conversation_id)
+    if not any(message.id == message_id for message in messages):
+        raise HTTPException(
+            status_code=404,
+            detail="That message is not part of this conversation.",
+        )
+    return conversation
+
+
+@router.post("/{conversation_id}/revert")
+async def revert_to_message(
+    conversation_id: str, request: MessageAnchorRequest
+) -> Dict[str, Any]:
+    """Removes a turn and everything after it, returning the prompt that started it.
+
+    The anchor is the first message of an agent turn. Reverting deletes that turn and
+    every later message, along with the user message that prompted it, which is handed
+    back so the composer can be repopulated for editing.
+    """
+    await _load_conversation_and_anchor(conversation_id, request.message_id)
+
+    # Cancel first: the engine writes placeholder results for tool calls that never
+    # ran, and those writes must land before the history is truncated.
+    await _cancel_running_turn(conversation_id)
+
+    prompt_message = await get_preceding_user_message(conversation_id, request.message_id)
+    truncate_from = prompt_message.id if prompt_message and prompt_message.id else request.message_id
+
+    removed = await delete_messages_from(conversation_id, truncate_from)
+    await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
+    _broadcast_event(conversation_id, {"type": "history_changed"})
+
+    return {
+        "status": "reverted",
+        "removed": removed,
+        "prompt": prompt_message.content if prompt_message else None,
+    }
+
+
+@router.post("/{conversation_id}/retry")
+async def retry_from_message(
+    conversation_id: str, request: MessageAnchorRequest
+) -> Dict[str, str]:
+    """Discards a turn and generates it again from the same history."""
+    conversation = await _load_conversation_and_anchor(conversation_id, request.message_id)
+
+    await _cancel_running_turn(conversation_id)
+
+    removed = await delete_messages_from(conversation_id, request.message_id)
+    if not removed:
+        raise HTTPException(status_code=409, detail="Nothing to retry from that message.")
+
+    _broadcast_event(conversation_id, {"type": "history_changed"})
+
+    task = asyncio.create_task(_run_agent_turn(conversation_id, conversation.agent_id))
+    _running_agent_tasks[conversation_id] = task
+
+    return {"status": "running"}
+
+
+@router.post("/{conversation_id}/branch", response_model=Conversation)
+async def branch_from_message(
+    conversation_id: str, request: MessageAnchorRequest
+) -> Conversation:
+    """Copies this conversation up to a message into a new one to continue differently.
+
+    The anchor is the last message of the turn being branched at, so the copied history
+    ends on a complete turn -- a prefix cut mid-turn would leave a tool call with no
+    result, which providers reject.
+    """
+    source = await _load_conversation_and_anchor(conversation_id, request.message_id)
+
+    branch = await create_conversation(
+        title=source.title,
+        agent_id=source.agent_id,
+        isolated_container=source.isolated_container,
+        branched_from_conversation_id=source.id,
+        branched_from_message_id=request.message_id,
+    )
+
+    copied = await copy_messages_through(conversation_id, branch.id, request.message_id)
+    if not copied:
+        await delete_conversation(branch.id)
+        raise HTTPException(status_code=409, detail="Could not copy the conversation history.")
+
+    # The transcript refers to files the agent made; a branch that cannot see them
+    # would be reasoning about a workspace that does not exist.
+    await _copy_workspace(conversation_id, branch.id)
+
+    if source.isolated_container:
+        try:
+            container_id = await sandbox_manager.create_sandbox(
+                conversation_id=branch.id,
+                workspace_dir=settings.WORKSPACES_DIR / branch.id,
+            )
+            await update_conversation(branch.id, container_id=container_id)
+            branch.container_id = container_id
+        except Exception as error:
+            logger.warning("Failed to create sandbox for branch %s: %s", branch.id, error)
+
+    return branch
+
+
+async def _copy_workspace(source_conversation_id: str, target_conversation_id: str) -> None:
+    """Duplicates a conversation's workspace directory into the branch's own."""
+    source_dir: Path = settings.WORKSPACES_DIR / source_conversation_id
+    if not source_dir.is_dir():
+        return
+
+    target_dir: Path = settings.WORKSPACES_DIR / target_conversation_id
+
+    def _copy() -> None:
+        shutil.copytree(source_dir, target_dir, dirs_exist_ok=True, symlinks=True)
+
+    try:
+        # A workspace can hold a build tree; copying it must not block the event loop.
+        await asyncio.get_running_loop().run_in_executor(None, _copy)
+    except Exception:
+        logger.warning(
+            "Could not copy workspace for branch %s", target_conversation_id, exc_info=True
+        )
+
+
 @router.get("/{conversation_id}/events")
 async def stream_conversation_events(conversation_id: str, request: Request) -> StreamingResponse:
     """Server-Sent Events (SSE) stream for real-time conversation updates."""
@@ -345,7 +512,14 @@ async def stream_conversation_events(conversation_id: str, request: Request) -> 
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
-            yield f"data: {json.dumps({'type': 'connected', 'status': conversation.status.value})}\n\n"
+            # `is_running` is what the client needs to restore its composer state; the
+            # database status alone lags a turn that is finishing as we connect.
+            handshake = {
+                "type": "connected",
+                "status": conversation.status.value,
+                "is_running": conversation_id in _running_agent_tasks,
+            }
+            yield f"data: {json.dumps(handshake)}\n\n"
 
             # Replay active turn buffer if client reconnected during turn
             active_buffer = _active_turn_buffers.get(conversation_id)
@@ -354,6 +528,25 @@ async def stream_conversation_events(conversation_id: str, request: Request) -> 
                     yield f"data: {json.dumps({'type': 'thinking', 'content': active_buffer['thinking']})}\n\n"
                 if active_buffer.get("tokens"):
                     yield f"data: {json.dumps({'type': 'token', 'content': active_buffer['tokens']})}\n\n"
+
+                for call_id, call in active_buffer.get("tool_calls", {}).items():
+                    replay = {
+                        "type": "tool_call_result" if call.get("done") else "tool_call_executing",
+                        "id": call_id,
+                        "name": call.get("name", ""),
+                        "arguments": call.get("arguments", ""),
+                    }
+                    if call.get("done"):
+                        replay["output"] = call.get("output", "")
+                        replay["is_error"] = bool(call.get("is_error"))
+                    yield f"data: {json.dumps(replay)}\n\n"
+
+            # A turn parked on an approval has already announced it once, on a stream
+            # this client no longer holds. Re-announcing is the only thing that keeps
+            # a backgrounded tab from returning to a conversation that is silently
+            # blocked until the approval times out.
+            for approval in approval_registry.list_for_conversation(conversation_id):
+                yield f"data: {json.dumps({'type': 'tool_approval_required', **approval})}\n\n"
 
             while True:
                 if await request.is_disconnected():

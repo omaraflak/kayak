@@ -21,6 +21,13 @@ export interface SSECallbacks {
   onCancelled?: () => void;
   onError?: (error: string) => void;
   onUserMessage?: (message: any) => void;
+  /**
+   * Fired on every (re)connect with whether a turn is actually in flight. A tab that
+   * was backgrounded mid-turn has no other way to recover its composer state.
+   */
+  onConnected?: (data: { status: string; isRunning: boolean }) => void;
+  /** The stored history changed underneath us -- reload it. */
+  onHistoryChanged?: () => void;
 }
 
 export function useSSE(conversationId: string | null, callbacks: SSECallbacks) {
@@ -84,6 +91,15 @@ export function useSSE(conversationId: string | null, callbacks: SSECallbacks) {
               limit: data.limit,
               content: data.content,
             });
+            break;
+          case 'connected':
+            callbacksRef.current.onConnected?.({
+              status: data.status,
+              isRunning: Boolean(data.is_running),
+            });
+            break;
+          case 'history_changed':
+            callbacksRef.current.onHistoryChanged?.();
             break;
           case 'done':
             callbacksRef.current.onDone?.();

@@ -64,6 +64,17 @@ async def init_db() -> None:
         except Exception:
             pass
 
+        # Migration: record where a branch was taken from. Deliberately separate from
+        # parent_conversation_id, which means "sub-agent of" and cascades deletion --
+        # deleting a conversation must not take its branches with it.
+        for column in ("branched_from_conversation_id", "branched_from_message_id"):
+            try:
+                await db.execute(
+                    f"ALTER TABLE conversations ADD COLUMN {column} TEXT;"
+                )
+            except Exception:
+                pass
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY,
@@ -156,6 +167,16 @@ def _row_to_conversation(row: aiosqlite.Row) -> Conversation:
             if "parent_conversation_id" in row.keys()
             else None
         ),
+        branched_from_conversation_id=(
+            row["branched_from_conversation_id"]
+            if "branched_from_conversation_id" in row.keys()
+            else None
+        ),
+        branched_from_message_id=(
+            row["branched_from_message_id"]
+            if "branched_from_message_id" in row.keys()
+            else None
+        ),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -204,6 +225,8 @@ async def create_conversation(
     conversation_id: Optional[str] = None,
     container_id: Optional[str] = None,
     parent_conversation_id: Optional[str] = None,
+    branched_from_conversation_id: Optional[str] = None,
+    branched_from_message_id: Optional[str] = None,
 ) -> Conversation:
     """Creates a new conversation record in the database.
 
@@ -214,6 +237,8 @@ async def create_conversation(
         conversation_id: Optional predetermined UUID identifier.
         container_id: Optional Docker container this conversation is bound to.
         parent_conversation_id: Optional parent conversation, set for sub-agent sessions.
+        branched_from_conversation_id: Conversation this one was branched from, if any.
+        branched_from_message_id: Message in the source conversation the branch was taken at.
 
     Returns:
         Conversation: The newly created Conversation instance.
@@ -225,8 +250,8 @@ async def create_conversation(
     async with get_db_connection() as db:
         await db.execute(
             """
-        INSERT INTO conversations (id, title, agent_id, isolated_container, container_id, status, parent_conversation_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO conversations (id, title, agent_id, isolated_container, container_id, status, parent_conversation_id, branched_from_conversation_id, branched_from_message_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 cid,
@@ -236,6 +261,8 @@ async def create_conversation(
                 container_id,
                 status.value,
                 parent_conversation_id,
+                branched_from_conversation_id,
+                branched_from_message_id,
                 now,
                 now,
             ),
@@ -253,6 +280,8 @@ async def create_conversation(
         container_id=container_id,
         status=status,
         parent_conversation_id=parent_conversation_id,
+        branched_from_conversation_id=branched_from_conversation_id,
+        branched_from_message_id=branched_from_message_id,
         created_at=now,
         updated_at=now,
     )
@@ -429,6 +458,124 @@ async def get_messages(conversation_id: str) -> List[Message]:
         )
         rows = await cursor.fetchall()
         return [_row_to_message(row) for row in rows]
+
+
+async def _message_rowid(db, conversation_id: str, message_id: str) -> Optional[int]:
+    """Returns the storage order key of a message, or None if it is not in this conversation.
+
+    Messages are only ever appended, so rowid is exact insertion order -- a stronger
+    ordering than the created_at timestamps, which can tie.
+    """
+    cursor = await db.execute(
+        "SELECT rowid FROM messages WHERE conversation_id = ? AND id = ?",
+        (conversation_id, message_id),
+    )
+    row = await cursor.fetchone()
+    return row["rowid"] if row else None
+
+
+async def delete_messages_from(conversation_id: str, message_id: str) -> int:
+    """Deletes a message and everything stored after it in the same conversation.
+
+    Args:
+        conversation_id: Conversation to truncate.
+        message_id: First message to remove.
+
+    Returns:
+        int: Number of messages deleted; 0 if the message is not in this conversation.
+    """
+    async with get_db_connection() as db:
+        rowid = await _message_rowid(db, conversation_id, message_id)
+        if rowid is None:
+            return 0
+
+        cursor = await db.execute(
+            "DELETE FROM messages WHERE conversation_id = ? AND rowid >= ?",
+            (conversation_id, rowid),
+        )
+        removed = cursor.rowcount
+        await db.execute(
+            "UPDATE conversations SET updated_at = ? WHERE id = ?",
+            (_utc_now_iso(), conversation_id),
+        )
+        await db.commit()
+        return removed
+
+
+async def get_preceding_user_message(
+    conversation_id: str, message_id: str
+) -> Optional[Message]:
+    """Finds the user message that comes before the given message.
+
+    Used to answer "what did I ask that produced this?", which is the prompt a revert
+    puts back in the composer.
+    """
+    async with get_db_connection() as db:
+        rowid = await _message_rowid(db, conversation_id, message_id)
+        if rowid is None:
+            return None
+
+        cursor = await db.execute(
+            "SELECT * FROM messages WHERE conversation_id = ? AND rowid < ?"
+            " AND role = ? ORDER BY rowid DESC LIMIT 1",
+            (conversation_id, rowid, MessageRole.USER.value),
+        )
+        row = await cursor.fetchone()
+        return _row_to_message(row) if row else None
+
+
+async def copy_messages_through(
+    source_conversation_id: str,
+    target_conversation_id: str,
+    message_id: str,
+) -> int:
+    """Copies a conversation's history into another, up to and including a message.
+
+    Tool call ids are carried over unchanged. They only have to agree with each other
+    within the copied history, and copying a contiguous prefix keeps every call paired
+    with its result -- which the provider requires.
+
+    Returns:
+        int: Number of messages copied; 0 if the anchor is not in the source.
+    """
+    async with get_db_connection() as db:
+        rowid = await _message_rowid(db, source_conversation_id, message_id)
+        if rowid is None:
+            return 0
+
+        cursor = await db.execute(
+            "SELECT * FROM messages WHERE conversation_id = ? AND rowid <= ?"
+            " ORDER BY rowid ASC",
+            (source_conversation_id, rowid),
+        )
+        rows = await cursor.fetchall()
+
+        now = _utc_now_iso()
+        for row in rows:
+            await db.execute(
+                """
+            INSERT INTO messages (id, conversation_id, role, content, thinking, tool_calls, tool_call_id, name, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    str(uuid.uuid4()),
+                    target_conversation_id,
+                    row["role"],
+                    row["content"],
+                    row["thinking"] if "thinking" in row.keys() else None,
+                    row["tool_calls"],
+                    row["tool_call_id"],
+                    row["name"],
+                    row["created_at"],
+                ),
+            )
+
+        await db.execute(
+            "UPDATE conversations SET updated_at = ? WHERE id = ?",
+            (now, target_conversation_id),
+        )
+        await db.commit()
+        return len(rows)
 
 
 async def list_child_conversations(conversation_id: str) -> List[Conversation]:

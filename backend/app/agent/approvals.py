@@ -7,7 +7,7 @@ event keyed by tool call id, and the REST endpoint the UI hits resolves it.
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # An unanswered prompt should not pin an agent turn forever; a closed browser tab
 # would otherwise leak the task and leave the conversation stuck as RUNNING.
@@ -19,6 +19,9 @@ class _PendingApproval:
     """A tool call awaiting a decision from the user."""
     conversation_id: str
     tool_name: str
+    #: The call's raw arguments, kept so a reconnecting client can be shown the
+    #: same prompt it would have received live.
+    arguments: str = ""
     event: asyncio.Event = field(default_factory=asyncio.Event)
     approved: Optional[bool] = None
 
@@ -34,7 +37,11 @@ class ApprovalRegistry:
         return call_id in self._pending
 
     def register(
-        self, call_id: str, conversation_id: str, tool_name: str
+        self,
+        call_id: str,
+        conversation_id: str,
+        tool_name: str,
+        arguments: str = "",
     ) -> _PendingApproval:
         """Records a tool call as awaiting approval and returns its handle.
 
@@ -44,10 +51,30 @@ class ApprovalRegistry:
         resolve and be dropped, stalling the turn until its timeout.
         """
         pending = _PendingApproval(
-            conversation_id=conversation_id, tool_name=tool_name
+            conversation_id=conversation_id,
+            tool_name=tool_name,
+            arguments=arguments,
         )
         self._pending[call_id] = pending
         return pending
+
+    def list_for_conversation(self, conversation_id: str) -> List[Dict[str, Any]]:
+        """Describes the tool calls a conversation is currently parked on.
+
+        A reconnecting client has no other way to learn that the turn is waiting on
+        it: the approval request was announced once, over a stream it has since
+        dropped. Without this the conversation appears idle while the engine waits
+        out its full timeout.
+        """
+        return [
+            {
+                "id": call_id,
+                "name": pending.tool_name,
+                "arguments": pending.arguments,
+            }
+            for call_id, pending in self._pending.items()
+            if pending.conversation_id == conversation_id
+        ]
 
     async def wait(
         self,

@@ -108,7 +108,12 @@ class Conversation(BaseModel):
     isolated_container: bool = False
     container_id: Optional[str] = None
     status: ConversationStatus = ConversationStatus.ACTIVE
+    #: Set on sub-agent sessions. Deleting a conversation deletes these with it.
     parent_conversation_id: Optional[str] = None
+    #: Provenance for a branch. Kept separate from parent_conversation_id so that
+    #: deleting the original conversation does not delete the branches taken from it.
+    branched_from_conversation_id: Optional[str] = None
+    branched_from_message_id: Optional[str] = None
     created_at: str
     updated_at: str
 

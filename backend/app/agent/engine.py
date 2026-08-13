@@ -454,6 +454,7 @@ class AgentEngine:
                     call_id=call_id,
                     conversation_id=session.conversation_id,
                     tool_name=fn_name,
+                    arguments=raw_args,
                 )
                 yield {
                     "type": "tool_approval_required",
