@@ -13,83 +13,28 @@ import {
   ChevronUp
 } from 'lucide-react';
 import { api } from '../api/client';
-import { VLLMDeploymentProgress } from '../types';
 import { useDialog } from '../context/DialogContext';
+import { useVLLMStatus } from '../context/VLLMStatusContext';
 import { HuggingFaceCatalog } from './HuggingFaceCatalog';
 
 export const ModelsView: React.FC = () => {
   const dialog = useDialog();
-  const [status, setStatus] = useState<VLLMDeploymentProgress | null>(null);
+  const { status, logs, refresh: fetchStatus } = useVLLMStatus();
   const [isStopping, setIsStopping] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
 
-  const fetchStatus = useCallback(async () => {
-    try {
-      const st = await api.getVLLMStatus();
-      setStatus(st);
-    } catch (err) {
-      console.error('Failed to load vLLM status:', err);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchStatus();
-
-    // SSE connection for live status and log updates directly in the card
-    const eventSource = new EventSource('/api/vllm/events');
-
-    eventSource.addEventListener('status', (e: MessageEvent) => {
-      try {
-        const payload = JSON.parse(e.data);
-        if (payload.data) {
-          setStatus(payload.data);
-        }
-      } catch {}
-    });
-
-    eventSource.addEventListener('update', (e: MessageEvent) => {
-      try {
-        const payload = JSON.parse(e.data);
-        if (payload.data) {
-          setStatus(payload.data);
-        }
-      } catch {}
-    });
-
-    eventSource.addEventListener('log', (e: MessageEvent) => {
-      try {
-        const payload = JSON.parse(e.data);
-        if (payload.line) {
-          setStatus((prev) => {
-            if (!prev) return prev;
-            const updatedLogs = [...(prev.logs_tail || []), payload.line];
-            return {
-              ...prev,
-              logs_tail: updatedLogs.slice(-50),
-            };
-          });
-        }
-      } catch {}
-    });
-
-    return () => {
-      eventSource.close();
-    };
-  }, [fetchStatus]);
-
   useEffect(() => {
     if (showLogs && logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
-  }, [status?.logs_tail, showLogs]);
+  }, [logs, showLogs]);
 
   const handleStartModel = async (modelId: string) => {
     setIsDeploying(true);
     try {
-      const st = await api.deployVLLMModel({ model_id: modelId });
-      setStatus(st);
+      await api.deployVLLMModel({ model_id: modelId });
       await fetchStatus();
     } catch (err) {
       console.error('Failed to deploy model:', err);
@@ -128,7 +73,6 @@ export const ModelsView: React.FC = () => {
   const isReady = status?.state === 'ready';
   const isLoading = ['pulling_image', 'starting_container', 'loading'].includes(status?.state || '') || isDeploying;
   const isError = status?.state === 'error';
-  const logs = status?.logs_tail || [];
 
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 bg-md-surface overflow-hidden font-sans transition-colors">

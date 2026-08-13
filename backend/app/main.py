@@ -1,14 +1,18 @@
+import asyncio
 from contextlib import asynccontextmanager
-from pathlib import Path
-from fastapi import FastAPI, HTTPException
+import logging
+from typing import Set
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from backend.app.agent.sandbox import sandbox_manager
 from backend.app.agents.manager import agent_manager
 from backend.app.config import settings
-from backend.app.database import init_db
+from backend.app.database import init_db, reconcile_interrupted_state
 from backend.app.routes import (
     agents,
+    auth,
     conversations,
     models,
     settings as settings_route,
@@ -17,14 +21,35 @@ from backend.app.routes import (
     tool_builder,
     tools,
 )
+from backend.app.routes.auth import PUBLIC_API_PATHS, is_authorized
 from backend.app.skills.registry import skill_registry
 from backend.app.tools.registry import tool_registry
+from backend.app.vllm import routes as vllm_routes
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Background tasks are held here for their lifetime: asyncio keeps only weak
+# references to running tasks, so a fire-and-forget task can be garbage collected
+# mid-flight.
+_background_tasks: Set[asyncio.Task] = set()
+
+
+def track_background_task(task: asyncio.Task) -> asyncio.Task:
+    """Retains a strong reference to a background task until it finishes."""
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     await init_db()
+    # A previous process may have died mid-turn, leaving conversations pinned in a
+    # RUNNING state that the UI can never clear on its own.
+    await reconcile_interrupted_state()
+
     agent_manager.ensure_default_agents()
     agent_manager.load_all_agents()
     skill_registry.load_all_skills()
@@ -35,10 +60,22 @@ async def lifespan(app: FastAPI):
     tool_registry.load_custom_tools()
 
     from backend.app.vllm.manager import vllm_manager
-    import asyncio
-    asyncio.create_task(vllm_manager.check_and_sync_status())
+
+    track_background_task(asyncio.create_task(vllm_manager.check_and_sync_status()))
+
+    if not settings.AUTH_TOKEN and settings.HOST not in ("127.0.0.1", "localhost", "::1"):
+        logger.warning(
+            "Kayak is bound to %s with no KAYAK_AUTH_TOKEN set. Agents have shell and "
+            "filesystem access, so anyone who can reach this port can run code on this "
+            "host. Set KAYAK_AUTH_TOKEN or bind to 127.0.0.1.",
+            settings.HOST,
+        )
+
     yield
-    # Shutdown
+
+    # Shutdown: stop sandbox containers this process started so they do not outlive it.
+    await conversations.shutdown_active_turns()
+    await sandbox_manager.shutdown_all()
 
 
 app = FastAPI(
@@ -48,18 +85,34 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Enable CORS for frontend development
+# Explicit origins rather than a wildcard: credentialed requests are rejected by
+# browsers under a wildcard, and the session cookie makes this a credentialed API.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-from backend.app.vllm import routes as vllm_routes
+
+@app.middleware("http")
+async def require_auth_token(request: Request, call_next):
+    """Rejects unauthenticated API calls when a shared secret is configured."""
+    path = request.url.path
+    if (
+        settings.AUTH_TOKEN
+        and path.startswith("/api")
+        and path not in PUBLIC_API_PATHS
+        and request.method != "OPTIONS"
+        and not is_authorized(request)
+    ):
+        return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+    return await call_next(request)
+
 
 # Register API Routers
+app.include_router(auth.router)
 app.include_router(conversations.router)
 app.include_router(agents.router)
 app.include_router(models.router)

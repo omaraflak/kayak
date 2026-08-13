@@ -1,0 +1,48 @@
+# Build context exclusions.
+#
+# data/ is copied into the image so a fresh container ships with the default agents,
+# skills, and sample tools. Everything runtime-local or secret must be kept out of it:
+# the image can be pushed to a registry, and a baked settings.json would ship live
+# provider API keys with it.
+data/settings.json
+data/kayak.db
+data/kayak.db-wal
+data/kayak.db-shm
+data/workspaces/*
+!data/workspaces/.gitkeep
+data/huggingface_cache/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Version control and local tooling
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# Python artifacts
+**/__pycache__/
+**/*.py[cod]
+.venv
+venv
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Frontend artifacts (the image builds these itself)
+frontend/node_modules
+frontend/dist
+frontend/.vite
+
+# OS noise
+.DS_Store
+**/.DS_Store
+*.log

@@ -1,7 +1,9 @@
 import asyncio
+import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional, Set
 from backend.app.agent.task_manager import task_manager
+from backend.app.config import settings
 from backend.app.database import (
     add_message,
     create_conversation,
@@ -12,6 +14,12 @@ from backend.app.database import (
 )
 from backend.app.models import TaskStatus
 
+logger = logging.getLogger(__name__)
+
+# Detached sub-agent runs are held here so the event loop cannot collect them
+# mid-execution; asyncio only keeps weak references to running tasks.
+_detached_subagent_tasks: Set[asyncio.Task[Any]] = set()
+
 
 async def _run_subagent_loop(
     child_conv_id: str,
@@ -20,6 +28,7 @@ async def _run_subagent_loop(
     parent_id: str,
     workspace_dir: Optional[Path],
     container_id: Optional[str],
+    depth: int,
 ) -> str:
     """Executes the subagent engine loop and broadcasts start/finish events."""
     from backend.app.agent.engine import agent_engine
@@ -41,9 +50,17 @@ async def _run_subagent_loop(
             agent_id=agent_id,
             workspace_dir=workspace_dir,
             container_id=container_id,
+            depth=depth,
         ):
             if event.get("type") == "token":
                 final_response += event.get("content", "")
+            elif event.get("type") == "error":
+                final_response += f"\n[Sub-agent error: {event.get('error')}]"
+
+        if not final_response.strip():
+            # A sub-agent that ended on a tool call rather than prose still has a
+            # result worth returning; fall back to its last assistant message.
+            final_response = await _last_assistant_text(child_conv_id)
 
         await update_task(task_id, status=TaskStatus.COMPLETED, stdout=final_response)
         task_manager.notify_listeners(
@@ -57,7 +74,11 @@ async def _run_subagent_loop(
             },
         )
         return final_response
+    except asyncio.CancelledError:
+        await update_task(task_id, status=TaskStatus.STOPPED)
+        raise
     except Exception as e:
+        logger.exception("Sub-agent run failed for conversation %s", child_conv_id)
         await update_task(task_id, status=TaskStatus.FAILED, stderr=str(e))
         task_manager.notify_listeners(
             parent_id,
@@ -72,6 +93,14 @@ async def _run_subagent_loop(
         return f"Error executing sub-agent: {str(e)}"
 
 
+async def _last_assistant_text(conversation_id: str) -> str:
+    """Returns the most recent assistant prose from a conversation, if any."""
+    for msg in reversed(await get_messages(conversation_id)):
+        if msg.role.value == "assistant" and msg.content:
+            return msg.content
+    return "[Sub-agent produced no textual output.]"
+
+
 async def spawn_subagent(
     agent_id: str,
     prompt: str,
@@ -79,6 +108,7 @@ async def spawn_subagent(
     conversation_id: Optional[str] = None,
     workspace_dir: Optional[Path] = None,
     container_id: Optional[str] = None,
+    agent_depth: int = 0,
 ) -> str:
     """Spawns an autonomous sub-agent to handle a focused sub-task.
 
@@ -87,17 +117,28 @@ async def spawn_subagent(
         prompt: The specific task or prompt instruction for the sub-agent.
         wait_for_completion: If True, waits for the sub-agent to finish and returns the answer. If False, runs in background and returns task ID.
     """
-    parent_id = conversation_id or "root"
+    if not conversation_id:
+        return "Error: No active conversation context found."
+
+    # Without a ceiling a sub-agent can spawn sub-agents indefinitely, fanning out
+    # into unbounded model spend from a single user message.
+    if agent_depth >= settings.AGENT_MAX_SUBAGENT_DEPTH:
+        return (
+            f"Error: Maximum sub-agent nesting depth ({settings.AGENT_MAX_SUBAGENT_DEPTH})"
+            " reached. Complete this work yourself rather than delegating further."
+        )
+
     title = f"SubAgent: {prompt[:30]}..."
 
     child_conv = await create_conversation(
         title=title,
         agent_id=agent_id,
         isolated_container=bool(container_id),
+        # Persisted rather than set in memory: a child whose container is only known
+        # to the running task loses its sandbox the moment it is reopened or resumed.
+        container_id=container_id,
+        parent_conversation_id=conversation_id,
     )
-
-    if container_id:
-        child_conv.container_id = container_id
 
     await add_message(
         conversation_id=child_conv.id,
@@ -106,41 +147,38 @@ async def spawn_subagent(
     )
 
     task = await create_task(
-        conversation_id=parent_id,
+        conversation_id=conversation_id,
         task_type="subagent",
         name=f"SubAgent [{agent_id}]",
         command=prompt,
     )
 
+    run_kwargs: Dict[str, Any] = {
+        "child_conv_id": child_conv.id,
+        "agent_id": agent_id,
+        "task_id": task.id,
+        "parent_id": conversation_id,
+        "workspace_dir": workspace_dir,
+        "container_id": container_id,
+        "depth": agent_depth + 1,
+    }
+
     if wait_for_completion:
-        result = await _run_subagent_loop(
-            child_conv_id=child_conv.id,
-            agent_id=agent_id,
-            task_id=task.id,
-            parent_id=parent_id,
-            workspace_dir=workspace_dir,
-            container_id=container_id,
-        )
+        result = await _run_subagent_loop(**run_kwargs)
         return (
             f"=== SubAgent [{agent_id}] Finished ===\nConversation ID:"
             f" {child_conv.id}\n\n{result}"
         )
-    else:
-        asyncio.create_task(
-            _run_subagent_loop(
-                child_conv_id=child_conv.id,
-                agent_id=agent_id,
-                task_id=task.id,
-                parent_id=parent_id,
-                workspace_dir=workspace_dir,
-                container_id=container_id,
-            )
-        )
-        return (
-            f"SubAgent [{agent_id}] spawned in background.\nTask ID:"
-            f" {task.id}\nConversation ID: {child_conv.id}\nUse"
-            " `get_task_status(task_id)` to monitor progress."
-        )
+
+    detached = asyncio.create_task(_run_subagent_loop(**run_kwargs))
+    _detached_subagent_tasks.add(detached)
+    detached.add_done_callback(_detached_subagent_tasks.discard)
+
+    return (
+        f"SubAgent [{agent_id}] spawned in background.\nTask ID:"
+        f" {task.id}\nConversation ID: {child_conv.id}\nUse"
+        " `get_task_status(task_id)` to monitor progress."
+    )
 
 
 async def get_subagent_result(

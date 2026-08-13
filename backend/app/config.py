@@ -5,7 +5,9 @@ from typing import Any, Dict
 
 # Base Paths
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
-DATA_DIR = BASE_DIR / "data"
+# Overridable so a test run or a second instance can operate on its own state
+# instead of the checkout's data directory.
+DATA_DIR = Path(os.getenv("KAYAK_DATA_DIR") or (BASE_DIR / "data")).resolve()
 AGENTS_DIR = DATA_DIR / "agents"
 SKILLS_DIR = DATA_DIR / "skills"
 TOOLS_DIR = DATA_DIR / "tools"
@@ -28,13 +30,42 @@ _PERSISTABLE_KEYS = [
 ]
 
 
+def _split_csv(raw: str) -> list[str]:
+    """Splits a comma-separated environment value into a clean list."""
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 class Settings:
 
     def __init__(self):
-        # Server
-        self.HOST: str = os.getenv("KAYAK_HOST", "0.0.0.0")
+        # Server. Kayak grants agents shell and filesystem access, so it binds to
+        # loopback unless explicitly told otherwise; the container image overrides
+        # this to 0.0.0.0 because Docker isolates the network itself.
+        self.HOST: str = os.getenv("KAYAK_HOST", "127.0.0.1")
         self.PORT: int = int(os.getenv("KAYAK_PORT", "8000"))
         self.DEBUG: bool = os.getenv("KAYAK_DEBUG", "false").lower() == "true"
+
+        # Shared secret required on every /api request when set. Left empty the
+        # server is unauthenticated, which is only safe on a loopback bind.
+        self.AUTH_TOKEN: str = os.getenv("KAYAK_AUTH_TOKEN", "")
+
+        # Browser origins allowed to call the API. Credentialed wildcard CORS is both
+        # rejected by browsers and unsafe, so the default is an explicit local list.
+        self.CORS_ORIGINS: list[str] = _split_csv(
+            os.getenv(
+                "KAYAK_CORS_ORIGINS",
+                "http://localhost:3000,http://127.0.0.1:3000,"
+                "http://localhost:8000,http://127.0.0.1:8000",
+            )
+        )
+
+        # Agent execution limits
+        self.AGENT_MAX_ITERATIONS: int = int(
+            os.getenv("KAYAK_AGENT_MAX_ITERATIONS", "25")
+        )
+        self.AGENT_MAX_SUBAGENT_DEPTH: int = int(
+            os.getenv("KAYAK_AGENT_MAX_SUBAGENT_DEPTH", "3")
+        )
 
         # Storage Paths
         self.BASE_DIR: Path = BASE_DIR

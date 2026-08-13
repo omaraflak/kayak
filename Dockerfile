@@ -25,7 +25,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy Backend and Data
+# Copy Backend and seed data (secrets and runtime state are excluded via .dockerignore)
 COPY backend/ ./backend/
 COPY data/ ./data/
 
@@ -34,8 +34,11 @@ COPY --from=frontend-builder /frontend/dist ./frontend/dist
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
+# Binding to all interfaces is safe here because Docker isolates the container
+# network; publishing the port is an explicit decision made by docker-compose.
 ENV KAYAK_HOST=0.0.0.0
 ENV KAYAK_PORT=8000
+ENV KAYAK_IN_DOCKER=true
 
 EXPOSE 8000
 

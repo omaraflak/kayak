@@ -86,6 +86,7 @@ class Conversation(BaseModel):
     isolated_container: bool = False
     container_id: Optional[str] = None
     status: ConversationStatus = ConversationStatus.ACTIVE
+    parent_conversation_id: Optional[str] = None
     created_at: str
     updated_at: str
 

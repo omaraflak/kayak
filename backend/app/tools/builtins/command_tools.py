@@ -1,16 +1,29 @@
 import asyncio
 from pathlib import Path
 from typing import Optional
+from backend.app.agent.history import truncate_tool_result
 from backend.app.agent.sandbox import sandbox_manager
+
+# Upper bound on how long a foreground command may block an agent turn. Anything
+# longer belongs in start_background_task, which streams instead of blocking.
+MAX_COMMAND_TIMEOUT_SECONDS = 600
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 60
+
+
+def _clamp_timeout(timeout: Optional[int]) -> int:
+    """Clamps a model-supplied timeout into a range that cannot wedge a turn."""
+    if not timeout or timeout <= 0:
+        return DEFAULT_COMMAND_TIMEOUT_SECONDS
+    return min(int(timeout), MAX_COMMAND_TIMEOUT_SECONDS)
 
 
 def _format_process_output(stdout_str: str, stderr_str: str, exit_code: int) -> str:
     """Formats standard output, standard error, and exit code into a response string."""
     output = []
     if stdout_str:
-        output.append(stdout_str)
+        output.append(truncate_tool_result(stdout_str))
     if stderr_str:
-        output.append(f"STDERR:\n{stderr_str}")
+        output.append(f"STDERR:\n{truncate_tool_result(stderr_str)}")
     if exit_code != 0:
         output.append(f"\n[Exit code: {exit_code}]")
     return "\n".join(output) if output else "Command executed with no output."
@@ -26,8 +39,10 @@ async def run_command(
 
     Args:
         command: The shell command line string to execute.
-        timeout: Maximum execution time in seconds before terminating (default 60s).
+        timeout: Maximum execution time in seconds before terminating (default 60s, max 600s).
     """
+    timeout = _clamp_timeout(timeout)
+
     if container_id:
         try:
             return await sandbox_manager.exec_command(

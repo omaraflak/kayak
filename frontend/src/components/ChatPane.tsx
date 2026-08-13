@@ -3,9 +3,10 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Conversation, Message, VLLMDeploymentProgress } from '../types';
+import { Message } from '../types';
 import { api } from '../api/client';
-import { useSSE } from '../hooks/useSSE';
+import { useSSE, ToolApprovalRequest } from '../hooks/useSSE';
+import { useVLLMStatus, VLLM_LOADING_STATES } from '../context/VLLMStatusContext';
 import { ToolCallCard } from './ToolCallCard';
 import { ToolCallsAccordion } from './ToolCallsAccordion';
 import { ThinkingAccordion } from './ThinkingAccordion';
@@ -18,7 +19,10 @@ import {
   Square,
   Play,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  ShieldQuestion,
+  Check,
+  X
 } from 'lucide-react';
 import { useDialog } from '../context/DialogContext';
 
@@ -235,32 +239,15 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     Record<string, { name: string; args: string; output?: string; isError?: boolean }>
   >({});
 
+  const [pendingApprovals, setPendingApprovals] = useState<ToolApprovalRequest[]>([]);
+  const [streamWarning, setStreamWarning] = useState<string | null>(null);
+
   const isVllmAgent = Boolean(agentModel?.startsWith('vllm/'));
   const vllmModelId = isVllmAgent && agentModel ? agentModel.slice('vllm/'.length) : null;
-  const [vllmStatus, setVllmStatus] = useState<VLLMDeploymentProgress | null>(null);
+  const { status: vllmStatus, refresh: refreshVllmStatus } = useVLLMStatus();
   const [isStartingVllm, setIsStartingVllm] = useState(false);
 
-  useEffect(() => {
-    if (!isVllmAgent) return;
-    api.getVLLMStatus()
-      .then(setVllmStatus)
-      .catch(() => {});
-
-    const es = new EventSource('/api/vllm/events');
-    const handleStatus = (e: MessageEvent) => {
-      try {
-        const payload = JSON.parse(e.data);
-        if (payload.data) setVllmStatus(payload.data);
-      } catch {}
-    };
-    es.addEventListener('status', handleStatus);
-    es.addEventListener('update', handleStatus);
-    return () => {
-      es.close();
-    };
-  }, [isVllmAgent, agentModel]);
-
-  const loadingStates = ['pulling_image', 'starting_container', 'loading'];
+  const loadingStates = VLLM_LOADING_STATES;
   const isVllmModelReady = !isVllmAgent || (vllmStatus?.state === 'ready' && vllmStatus?.model_id === vllmModelId);
   const isVllmModelLoading = isVllmAgent && (isStartingVllm || (vllmStatus !== null && loadingStates.includes(vllmStatus.state) && (vllmStatus.model_id === vllmModelId || !vllmStatus.model_id)));
   const isVllmModelOffline = isVllmAgent && !isVllmModelReady && !isVllmModelLoading;
@@ -269,8 +256,8 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     if (!vllmModelId) return;
     setIsStartingVllm(true);
     try {
-      const st = await api.deployVLLMModel({ model_id: vllmModelId });
-      setVllmStatus(st);
+      await api.deployVLLMModel({ model_id: vllmModelId });
+      await refreshVllmStatus();
     } catch (err) {
       console.error('Failed to start vLLM model:', err);
       dialog.alert({
@@ -329,13 +316,10 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     }
     try {
       const data = await api.getConversation(conversationId);
-      setMessages((prev) => {
-        const dbMsgs = data.messages || [];
-        const pendingOptimistic = prev.filter(
-          (pm) => pm.id?.startsWith('optimistic_') && !dbMsgs.some((dm) => dm.role === 'user' && dm.content === pm.content)
-        );
-        return [...dbMsgs, ...pendingOptimistic];
-      });
+      // The database is authoritative here: a reload only happens after the server
+      // has persisted the turn, so any optimistic placeholder is already represented.
+      // Matching placeholders by content instead would drop a genuine repeat message.
+      setMessages(data.messages || []);
 
       if (data.conversation?.status === 'running') {
         setIsSending(true);
@@ -373,6 +357,8 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     setStreamingTokenText('');
     setStreamingThinkingText('');
     setActiveToolExecutions({});
+    setPendingApprovals([]);
+    setStreamWarning(null);
   }, [conversationId]);
 
   useEffect(() => {
@@ -433,7 +419,25 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
         },
       }));
     },
+    onToolApprovalRequired: (request) => {
+      setIsSending(true);
+      setPendingApprovals((prev) =>
+        prev.some((item) => item.id === request.id) ? prev : [...prev, request]
+      );
+    },
+    onWarning: (warning) => {
+      setStreamWarning(warning);
+    },
+    onMaxIterations: () => {
+      setStreamWarning(
+        'The agent hit the maximum number of tool-use steps for one turn and stopped early.'
+      );
+    },
+    onTitleUpdated: () => {
+      onRefreshConversations?.();
+    },
     onToolCallResult: (data) => {
+      setPendingApprovals((prev) => prev.filter((item) => item.id !== data.id));
       setActiveToolExecutions((prev) => {
         const existing = prev[data.id];
         const existingArgs = existing?.args || '';
@@ -454,6 +458,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       setStreamingTokenText('');
       setStreamingThinkingText('');
       setActiveToolExecutions({});
+      setPendingApprovals([]);
       loadConversationData();
       onRefreshConversations?.();
     },
@@ -462,15 +467,16 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       setStreamingTokenText('');
       setStreamingThinkingText('');
       setActiveToolExecutions({});
+      setPendingApprovals([]);
       loadConversationData();
       onRefreshConversations?.();
     },
     onUserMessage: (msg) => {
       setMessages((prev) => {
         if (prev.some((m) => m.id === msg.id)) return prev;
-        const optIndex = prev.findIndex(
-          (m) => m.id?.startsWith('optimistic_') && m.content === msg.content
-        );
+        // Placeholders are confirmed in the order they were sent, so the oldest
+        // outstanding one belongs to this echo regardless of its text.
+        const optIndex = prev.findIndex((m) => m.id?.startsWith('optimistic_'));
         if (optIndex !== -1) {
           const next = [...prev];
           next[optIndex] = msg;
@@ -545,6 +551,21 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       onRefreshConversations?.();
     } catch (err) {
       console.error('Failed to cancel conversation:', err);
+    }
+  };
+
+  const handleResolveApproval = async (callId: string, approved: boolean) => {
+    if (!conversationId) return;
+    setPendingApprovals((prev) => prev.filter((item) => item.id !== callId));
+    try {
+      await api.resolveToolApproval(conversationId, callId, approved);
+    } catch (err) {
+      console.error('Failed to submit tool approval:', err);
+      dialog.alert({
+        title: 'Approval Failed',
+        message: `Could not record your decision: ${err}`,
+        variant: 'danger',
+      });
     }
   };
 
@@ -781,6 +802,43 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                 </div>
               )}
 
+              {/* Tool calls held for explicit user approval */}
+              {pendingApprovals.map((approval) => (
+                <div
+                  key={approval.id}
+                  className="rounded-xl border border-amber-300 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/40 p-3.5 space-y-2.5"
+                >
+                  <div className="flex items-center gap-2 text-xs font-bold text-amber-900 dark:text-amber-100">
+                    <ShieldQuestion className="w-4 h-4 shrink-0" />
+                    <span>Approval required to run</span>
+                    <code className="font-mono px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/60 border border-amber-300 dark:border-amber-800">
+                      {approval.name}
+                    </code>
+                  </div>
+                  {approval.arguments && (
+                    <pre className="text-[11px] font-mono text-amber-900 dark:text-amber-100/90 bg-amber-100/70 dark:bg-amber-900/40 rounded-lg p-2.5 overflow-x-auto max-h-40">
+                      {approval.arguments}
+                    </pre>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleResolveApproval(approval.id, true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-md-primary text-md-on-primary hover:opacity-90 transition-opacity cursor-pointer"
+                    >
+                      <Check className="w-3.5 h-3.5 stroke-[3]" /> Approve
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleResolveApproval(approval.id, false)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-md-surface-container-high text-md-on-surface border border-md-outline-variant hover:opacity-90 transition-opacity cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5 stroke-[3]" /> Deny
+                    </button>
+                  </div>
+                </div>
+              ))}
+
               {/* Active Executing Tool Calls Live */}
               {Object.keys(activeToolExecutions).length > 0 && (
                 <div className="space-y-2 pt-1">
@@ -800,6 +858,25 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
           )}
         </div>
       </div>
+
+      {/* Degraded-run notice: a tool-less retry or an iteration ceiling changes what
+          the agent was actually able to do, so it is surfaced rather than logged. */}
+      {streamWarning && (
+        <div className="px-4 pt-3 shrink-0">
+          <div className={`${fullWidthInput ? 'w-full' : 'max-w-3xl mx-auto'} flex items-start gap-2 rounded-xl border border-amber-300 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/40 px-3.5 py-2.5`}>
+            <AlertCircle className="w-4 h-4 text-amber-700 dark:text-amber-300 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-900 dark:text-amber-100 leading-relaxed flex-1">{streamWarning}</p>
+            <button
+              type="button"
+              onClick={() => setStreamWarning(null)}
+              className="text-amber-700 dark:text-amber-300 hover:opacity-70 transition-opacity cursor-pointer"
+              title="Dismiss"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Input Composer - Constrained to max-w-3xl for standard chat, full width in studio mode */}
       <div className="p-4 border-t border-md-outline-variant bg-md-surface shrink-0 transition-colors">

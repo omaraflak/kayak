@@ -1,12 +1,22 @@
 import { useEffect, useRef } from 'react';
 
+export interface ToolApprovalRequest {
+  id: string;
+  name: string;
+  arguments: string;
+}
+
 export interface SSECallbacks {
   onToken?: (token: string) => void;
   onThinking?: (token: string) => void;
   onToolCallDelta?: (delta: { id: string; name?: string; arguments?: string }) => void;
   onToolCallExecuting?: (data: { id: string; name: string; arguments: string }) => void;
   onToolCallResult?: (data: { id: string; name: string; output: string; is_error: boolean }) => void;
+  onToolApprovalRequired?: (data: ToolApprovalRequest) => void;
   onTaskEvent?: (event: any) => void;
+  onTitleUpdated?: (title: string) => void;
+  onWarning?: (warning: string) => void;
+  onMaxIterations?: (data: { limit: number; content: string }) => void;
   onDone?: () => void;
   onCancelled?: () => void;
   onError?: (error: string) => void;
@@ -46,6 +56,13 @@ export function useSSE(conversationId: string | null, callbacks: SSECallbacks) {
           case 'tool_call_result':
             callbacksRef.current.onToolCallResult?.(data);
             break;
+          case 'tool_approval_required':
+            callbacksRef.current.onToolApprovalRequired?.({
+              id: data.id,
+              name: data.name,
+              arguments: data.arguments,
+            });
+            break;
           case 'task_started':
           case 'task_output':
           case 'task_finished':
@@ -55,6 +72,18 @@ export function useSSE(conversationId: string | null, callbacks: SSECallbacks) {
             break;
           case 'user_message':
             callbacksRef.current.onUserMessage?.(data.message);
+            break;
+          case 'title_updated':
+            callbacksRef.current.onTitleUpdated?.(data.title);
+            break;
+          case 'warning':
+            callbacksRef.current.onWarning?.(data.warning);
+            break;
+          case 'max_iterations':
+            callbacksRef.current.onMaxIterations?.({
+              limit: data.limit,
+              content: data.content,
+            });
             break;
           case 'done':
             callbacksRef.current.onDone?.();
@@ -74,8 +103,9 @@ export function useSSE(conversationId: string | null, callbacks: SSECallbacks) {
       }
     };
 
-    eventSource.onerror = (err) => {
-      // EventSource automatically attempts reconnection
+    eventSource.onerror = () => {
+      // EventSource reconnects on its own; the server replays the in-flight turn
+      // buffer on connect, so no recovery is needed here.
     };
 
     return () => {

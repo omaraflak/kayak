@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { VLLMDeploymentProgress } from '../types';
-import { api } from '../api/client';
+import { useVLLMStatus } from '../context/VLLMStatusContext';
 import { VLLMDeploymentModal } from './VLLMDeploymentModal';
 import { 
   Rocket, 
@@ -12,52 +11,17 @@ import {
 } from 'lucide-react';
 
 export const GlobalVLLMStatusWidget: React.FC = () => {
-  const [status, setStatus] = useState<VLLMDeploymentProgress | null>(null);
+  const { status, isBusy: isDeploymentBusy } = useVLLMStatus();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDismissed, setIsDismissed] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const startTimeRef = useRef<number | null>(null);
 
-  const fetchStatus = async () => {
-    try {
-      const data = await api.getVLLMStatus();
-      setStatus(data);
-    } catch (err) {
-      console.error('Failed to fetch global vLLM status:', err);
-    }
-  };
-
+  // Re-surface the widget whenever a new deployment starts, even if the user
+  // dismissed the previous one.
   useEffect(() => {
-    fetchStatus();
-
-    // SSE connection for persistent real-time status updates across the entire app
-    const eventSource = new EventSource('/api/vllm/events');
-
-    eventSource.addEventListener('status', (e: MessageEvent) => {
-      try {
-        const payload = JSON.parse(e.data);
-        if (payload.data) {
-          setStatus(payload.data);
-          if (['pulling_image', 'starting_container', 'loading'].includes(payload.data.state)) {
-            setIsDismissed(false);
-          }
-        }
-      } catch {}
-    });
-
-    eventSource.addEventListener('update', (e: MessageEvent) => {
-      try {
-        const payload = JSON.parse(e.data);
-        if (payload.data) {
-          setStatus(payload.data);
-        }
-      } catch {}
-    });
-
-    return () => {
-      eventSource.close();
-    };
-  }, []);
+    if (isDeploymentBusy) setIsDismissed(false);
+  }, [isDeploymentBusy]);
 
   const isLoading = status?.state === 'loading';
   const isPulling = status?.state === 'pulling_image';
@@ -170,10 +134,7 @@ export const GlobalVLLMStatusWidget: React.FC = () => {
       {/* Full Deployment and Terminal Logs Modal */}
       <VLLMDeploymentModal
         isOpen={isModalOpen}
-        onClose={() => {
-          setIsModalOpen(false);
-          fetchStatus();
-        }}
+        onClose={() => setIsModalOpen(false)}
         targetModelId={status?.model_id}
       />
     </>

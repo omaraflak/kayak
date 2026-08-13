@@ -14,33 +14,79 @@ import {
 } from '../types';
 
 const API_BASE = '/api';
+const TOKEN_STORAGE_KEY = 'kayak_auth_token';
+const TOKEN_HEADER = 'X-Kayak-Token';
+
+/** Reads the shared secret this browser was configured with, if any. */
+export function getStoredAuthToken(): string | null {
+  try {
+    return window.localStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Persists the shared secret for subsequent requests in this browser. */
+export function setStoredAuthToken(token: string | null): void {
+  try {
+    if (token) window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    else window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    /* private browsing modes can reject storage writes */
+  }
+}
+
+/** Error carrying the HTTP status, so callers can distinguish auth failures. */
+export class ApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+function withAuth(init?: RequestInit): RequestInit {
+  const token = getStoredAuthToken();
+  const headers = new Headers(init?.headers);
+  if (token) headers.set(TOKEN_HEADER, token);
+  // Credentials carry the session cookie, which is what lets EventSource streams
+  // authenticate: they cannot send custom headers.
+  return { ...init, headers, credentials: 'same-origin' };
+}
+
+async function assertOk(res: Response): Promise<void> {
+  if (res.ok) return;
+  const body = await res.text().catch(() => '');
+  throw new ApiError(res.status, `API error ${res.status}: ${body || res.statusText}`);
+}
 
 /** Fetches JSON from the API, throwing on non-OK responses. */
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`API error ${res.status}: ${body || res.statusText}`);
-  }
+  const res = await fetch(url, withAuth(init));
+  await assertOk(res);
   return res.json();
 }
 
 /** Shorthand for JSON POST/PUT requests. */
 function postJSON(url: string, data: unknown): Promise<Response> {
-  return fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
+  return fetch(
+    url,
+    withAuth({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+  );
 }
 
 async function fetchJSONPost<T>(url: string, data: unknown): Promise<T> {
   const res = await postJSON(url, data);
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`API error ${res.status}: ${body || res.statusText}`);
-  }
+  await assertOk(res);
   return res.json();
+}
+
+async function requestVoid(url: string, method: string, action: string): Promise<void> {
+  const res = await fetch(url, withAuth({ method }));
+  if (!res.ok) throw new ApiError(res.status, `Failed to ${action}: ${res.statusText}`);
 }
 
 export const api = {
@@ -54,16 +100,24 @@ export const api = {
   createConversation: (data: { title?: string; agent_id: string; isolated_container?: boolean; initial_message?: string }): Promise<Conversation> =>
     fetchJSONPost(`${API_BASE}/conversations`, data),
 
-  deleteConversation: async (id: string): Promise<void> => {
-    const res = await fetch(`${API_BASE}/conversations/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error(`Failed to delete conversation: ${res.statusText}`);
-  },
+  deleteConversation: (id: string): Promise<void> =>
+    requestVoid(`${API_BASE}/conversations/${id}`, 'DELETE', 'delete conversation'),
 
   cancelConversation: (id: string): Promise<{ status: string }> =>
     fetchJSON(`${API_BASE}/conversations/${id}/cancel`, { method: 'POST' }),
 
   sendMessage: (conversationId: string, content: string): Promise<Message> =>
     fetchJSONPost(`${API_BASE}/conversations/${conversationId}/messages`, { content }),
+
+  resolveToolApproval: (
+    conversationId: string,
+    callId: string,
+    approved: boolean
+  ): Promise<{ status: string }> =>
+    fetchJSONPost(
+      `${API_BASE}/conversations/${conversationId}/tool-approvals/${encodeURIComponent(callId)}`,
+      { approved }
+    ),
 
   // Agents
   listAgents: (): Promise<AgentConfig[]> =>
@@ -75,10 +129,8 @@ export const api = {
   saveAgent: (agent: AgentConfig): Promise<AgentConfig> =>
     fetchJSONPost(`${API_BASE}/agents`, agent),
 
-  deleteAgent: async (id: string): Promise<void> => {
-    const res = await fetch(`${API_BASE}/agents/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error(`Failed to delete agent: ${res.statusText}`);
-  },
+  deleteAgent: (id: string): Promise<void> =>
+    requestVoid(`${API_BASE}/agents/${id}`, 'DELETE', 'delete agent'),
 
   // Skills
   listSkills: (): Promise<Skill[]> =>
@@ -90,10 +142,8 @@ export const api = {
   saveSkill: (data: { name: string; description: string; instructions: string }): Promise<Skill> =>
     fetchJSONPost(`${API_BASE}/skills`, data),
 
-  deleteSkill: async (name: string): Promise<void> => {
-    const res = await fetch(`${API_BASE}/skills/${name}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error(`Failed to delete skill: ${res.statusText}`);
-  },
+  deleteSkill: (name: string): Promise<void> =>
+    requestVoid(`${API_BASE}/skills/${encodeURIComponent(name)}`, 'DELETE', 'delete skill'),
 
   // Tools
   listTools: (): Promise<ToolDefinition[]> =>
@@ -102,10 +152,8 @@ export const api = {
   reloadTools: (): Promise<{ status: string; total_tools: number }> =>
     fetchJSON(`${API_BASE}/tools/reload`, { method: 'POST' }),
 
-  deleteTool: async (name: string): Promise<void> => {
-    const res = await fetch(`${API_BASE}/tools/${name}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error(`Failed to delete tool: ${res.statusText}`);
-  },
+  deleteTool: (name: string): Promise<void> =>
+    requestVoid(`${API_BASE}/tools/${encodeURIComponent(name)}`, 'DELETE', 'delete tool'),
 
   // Tool Builder
   verifyTool: (data: { tool_name: string; tool_code: string; verify_code: string }): Promise<VerifyToolResponse> =>
@@ -120,13 +168,18 @@ export const api = {
     return fetchJSON(url);
   },
 
-  stopTask: async (taskId: string): Promise<void> => {
-    const res = await fetch(`${API_BASE}/tasks/${taskId}/stop`, { method: 'POST' });
-    if (!res.ok) throw new Error(`Failed to stop task: ${res.statusText}`);
-  },
+  stopTask: (taskId: string): Promise<void> =>
+    requestVoid(`${API_BASE}/tasks/${taskId}/stop`, 'POST', 'stop task'),
 
   sendTaskInput: (taskId: string, input: string): Promise<{ status: string }> =>
     fetchJSONPost(`${API_BASE}/tasks/${taskId}/input`, { input }),
+
+  // Auth (only enforced when the server has KAYAK_AUTH_TOKEN set)
+  getAuthStatus: (): Promise<{ auth_required: boolean; authenticated: boolean }> =>
+    fetchJSON(`${API_BASE}/auth/status`),
+
+  createAuthSession: (token: string): Promise<{ status: string }> =>
+    fetchJSONPost(`${API_BASE}/auth/session`, { token }),
 
   // Settings
   getSettings: (): Promise<AppSettings> =>

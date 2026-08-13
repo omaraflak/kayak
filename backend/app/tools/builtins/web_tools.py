@@ -1,7 +1,13 @@
 from typing import Optional
 from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
 import httpx
+
+try:
+    # duckduckgo-search was renamed to ddgs; keep the old import working so an
+    # existing environment does not break on upgrade.
+    from ddgs import DDGS
+except ImportError:  # pragma: no cover - depends on which package is installed
+    from duckduckgo_search import DDGS
 
 
 def _clean_html_text(html_content: str, max_length: int = 4000) -> str:
@@ -43,6 +49,12 @@ async def web_search(query: str, max_results: Optional[int] = 5) -> str:
 
         return "\n---\n".join(results)
     except Exception as e:
+        message = str(e).lower()
+        if "ratelimit" in message or "429" in message or "202" in message:
+            return (
+                "Error: The web search provider is rate limiting this host. Wait before"
+                " searching again, or use fetch_url with a known URL instead."
+            )
         return f"Error performing web search: {str(e)}"
 
 

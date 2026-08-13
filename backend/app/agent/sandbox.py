@@ -1,10 +1,24 @@
+"""Docker sandbox lifecycle and command execution.
+
+The docker SDK is entirely synchronous. Every call here is therefore dispatched to a
+worker thread: running one inline would block the event loop for the duration of the
+container operation, freezing SSE streams and every other conversation on the server
+while a single agent waits on a build or a test run.
+"""
+
+import asyncio
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
 import docker
 from docker.errors import NotFound
 from backend.app.config import settings
 from backend.app.docker_utils import DockerPathResolver
+
+T = TypeVar("T")
+
+# Exit status used by `timeout --signal=KILL` when it terminates the child.
+_TIMEOUT_EXIT_CODE = 137
 
 
 def _build_volume_mounts(workspace_dir: Path) -> Dict[str, Dict[str, str]]:
@@ -33,24 +47,32 @@ def _build_custom_tool_runner_script(
 ) -> str:
     """Builds a self-contained Python script to execute a custom tool inside the sandbox."""
     return f"""
+import inspect
 import json
 import sys
 
 # Define tool implementation
 {tool_code}
 
-# Target execution
-args = json.loads({repr(json.dumps(arguments))})
-fn = globals().get('execute') or globals().get('main') or globals().get({repr(tool_name)})
-if not fn:
-    # Try any function not starting with _
-    for k, v in list(globals().items()):
-        if callable(v) and not k.startswith('_') and k not in ['json', 'sys']:
-            fn = v
-            break
+
+def _resolve_entrypoint():
+    named = globals().get('execute') or globals().get('main') or globals().get({tool_name!r})
+    if callable(named):
+        return named
+    # Fall back to the first function *defined in this script*. Filtering on the
+    # defining module matters: a bare "first callable" scan picks up imported names
+    # such as Path or datetime and calls those instead of the tool.
+    for value in globals().values():
+        if inspect.isfunction(value) and value.__module__ == '__main__' and not value.__name__.startswith('_'):
+            return value
+    return None
+
+
+args = json.loads({json.dumps(arguments)!r})
+fn = _resolve_entrypoint()
 
 if not fn:
-    print(f"Error: Function for tool '{tool_name}' not found.")
+    print("Error: No callable entrypoint found for tool {tool_name!r}.")
     sys.exit(1)
 
 try:
@@ -69,6 +91,9 @@ class SandboxManager:
     def __init__(self):
         self._client: Optional[docker.DockerClient] = None
         self._docker_available: bool = False
+        # Containers started by this process, so shutdown can clean up after itself
+        # instead of leaving orphans running until the next manual docker prune.
+        self._owned_containers: Set[str] = set()
         self._init_client()
 
     def _init_client(self):
@@ -85,15 +110,44 @@ class SandboxManager:
     def is_available(self) -> bool:
         return self._docker_available
 
-    def _get_running_container(self, container_id: str) -> Any:
-        """Retrieves a Docker container and ensures it is in the running state."""
-        if not self._docker_available or not self._client:
-            raise RuntimeError("Docker is not available or Docker socket is not mounted.")
+    async def _run_blocking(self, func: Callable[[], T]) -> T:
+        """Runs a blocking docker SDK call on the default thread pool."""
+        return await asyncio.get_running_loop().run_in_executor(None, func)
 
-        container = self._client.containers.get(container_id)
+    def _require_client(self) -> docker.DockerClient:
+        """Returns the Docker client or explains why sandboxing is unavailable."""
+        if not self._docker_available or not self._client:
+            raise RuntimeError(
+                "Docker is not available or Docker socket is not mounted."
+            )
+        return self._client
+
+    def _get_running_container_sync(self, container_id: str) -> Any:
+        """Retrieves a Docker container and ensures it is in the running state."""
+        client = self._require_client()
+        container = client.containers.get(container_id)
         if container.status != "running":
             container.start()
         return container
+
+    @staticmethod
+    def _wrap_with_timeout(cmd: List[str], timeout: Optional[int]) -> List[str]:
+        """Prefixes a command with `timeout` so a hung process dies inside the container.
+
+        Cancelling the Python-side wait would only abandon the worker thread; the
+        process in the container has to be killed where it runs.
+        """
+        if not timeout or timeout <= 0:
+            return cmd
+        return ["timeout", "--signal=KILL", str(int(timeout))] + cmd
+
+    @staticmethod
+    def _decode_exec_output(exec_result: Any) -> tuple[str, str, int]:
+        """Normalizes a demuxed exec result into (stdout, stderr, exit_code)."""
+        stdout_bytes, stderr_bytes = exec_result.output
+        stdout_str = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
+        stderr_str = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
+        return stdout_str, stderr_str, exec_result.exit_code
 
     async def create_sandbox(
         self, conversation_id: str, workspace_dir: Path
@@ -107,61 +161,67 @@ class SandboxManager:
         Returns:
             str: Container ID.
         """
-        if not self._docker_available or not self._client:
-            raise RuntimeError(
-                "Docker is not available or Docker socket is not mounted."
-            )
-
+        client = self._require_client()
         container_name = f"kayak-sandbox-{conversation_id[:8]}"
-
-        try:
-            existing = self._client.containers.get(container_name)
-            if existing.status != "running":
-                existing.start()
-            return existing.id
-        except NotFound:
-            pass
-
-        image_name = settings.DOCKER_SANDBOX_IMAGE
-        try:
-            self._client.images.get(image_name)
-        except Exception:
-            image_name = "python:3.11-slim"
-
         volumes_map = _build_volume_mounts(workspace_dir)
 
-        container = self._client.containers.run(
-            image=image_name,
-            name=container_name,
-            command="tail -f /dev/null",  # Keep container alive
-            detach=True,
-            working_dir="/workspace",
-            volumes=volumes_map,
-            network_mode="bridge",
-            mem_limit="2g",
-            cpu_quota=100000,  # 1 CPU
-            remove=False,
-        )
+        def _create() -> str:
+            try:
+                existing = client.containers.get(container_name)
+                if existing.status != "running":
+                    existing.start()
+                return existing.id
+            except NotFound:
+                pass
 
-        return container.id
+            image_name = settings.DOCKER_SANDBOX_IMAGE
+            try:
+                client.images.get(image_name)
+            except Exception:
+                image_name = "python:3.11-slim"
+
+            container = client.containers.run(
+                image=image_name,
+                name=container_name,
+                command="tail -f /dev/null",  # Keep container alive
+                detach=True,
+                working_dir="/workspace",
+                volumes=volumes_map,
+                network_mode="bridge",
+                mem_limit="2g",
+                cpu_quota=100000,  # 1 CPU
+                remove=False,
+            )
+            return container.id
+
+        container_id = await self._run_blocking(_create)
+        self._owned_containers.add(container_id)
+        return container_id
 
     async def exec_command(
         self, container_id: str, command: str, timeout: Optional[int] = 60
     ) -> str:
-        """Executes a command inside the container synchronously."""
-        container = self._get_running_container(container_id)
+        """Executes a command inside the container and returns its combined output."""
+        effective_timeout = timeout or settings.SANDBOX_TIMEOUT_SECONDS
 
-        exec_result = container.exec_run(
-            cmd=["/bin/bash", "-c", command],
-            workdir="/workspace",
-            demux=True,
-        )
+        def _exec() -> tuple[str, str, int]:
+            container = self._get_running_container_sync(container_id)
+            exec_result = container.exec_run(
+                cmd=self._wrap_with_timeout(
+                    ["/bin/bash", "-c", command], effective_timeout
+                ),
+                workdir="/workspace",
+                demux=True,
+            )
+            return self._decode_exec_output(exec_result)
 
-        exit_code = exec_result.exit_code
-        stdout_bytes, stderr_bytes = exec_result.output
+        stdout_str, stderr_str, exit_code = await self._run_blocking(_exec)
 
-        stdout_str = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
-        stderr_str = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
+        if exit_code == _TIMEOUT_EXIT_CODE:
+            return (
+                f"Error: Command timed out after {effective_timeout} seconds and was"
+                " killed. Use start_background_task for long-running work."
+            )
 
         output = []
         if stdout_str:
@@ -177,20 +237,25 @@ class SandboxManager:
         self, container_id: str, python_code: str, timeout: Optional[int] = 60
     ) -> str:
         """Executes Python code directly inside the container."""
-        container = self._get_running_container(container_id)
+        effective_timeout = timeout or settings.SANDBOX_TIMEOUT_SECONDS
 
-        exec_result = container.exec_run(
-            cmd=["python3", "-c", python_code],
-            workdir="/workspace",
-            demux=True,
-        )
+        def _exec() -> tuple[str, str, int]:
+            container = self._get_running_container_sync(container_id)
+            exec_result = container.exec_run(
+                cmd=self._wrap_with_timeout(
+                    ["python3", "-c", python_code], effective_timeout
+                ),
+                workdir="/workspace",
+                demux=True,
+            )
+            return self._decode_exec_output(exec_result)
 
-        stdout_bytes, stderr_bytes = exec_result.output
-        stdout_str = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
-        stderr_str = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
+        stdout_str, stderr_str, exit_code = await self._run_blocking(_exec)
 
-        if exec_result.exit_code != 0 and stderr_str:
-            return f"Error ({exec_result.exit_code}):\n{stderr_str}"
+        if exit_code == _TIMEOUT_EXIT_CODE:
+            return f"Error: Execution timed out after {effective_timeout} seconds."
+        if exit_code != 0 and stderr_str:
+            return f"Error ({exit_code}):\n{stderr_str}"
         return stdout_str or stderr_str or "Execution completed with no output."
 
     async def exec_custom_tool(
@@ -210,24 +275,39 @@ class SandboxManager:
         self, container_id: str, command: str
     ) -> Any:
         """Executes a detached background command in the container."""
-        container = self._get_running_container(container_id)
-        return container.exec_run(
-            cmd=["/bin/bash", "-c", f"nohup {command} > /tmp/task.log 2>&1 &"],
-            workdir="/workspace",
-            detach=True,
-        )
+
+        def _exec() -> Any:
+            container = self._get_running_container_sync(container_id)
+            return container.exec_run(
+                cmd=["/bin/bash", "-c", f"nohup {command} > /tmp/task.log 2>&1 &"],
+                workdir="/workspace",
+                detach=True,
+            )
+
+        return await self._run_blocking(_exec)
 
     async def stop_and_remove_sandbox(self, container_id: str):
         """Stops and removes the container."""
         if not self._docker_available or not self._client:
             return
 
-        try:
-            container = self._client.containers.get(container_id)
-            container.stop(timeout=2)
-            container.remove(v=True, force=True)
-        except Exception:
-            pass
+        client = self._client
+
+        def _remove() -> None:
+            try:
+                container = client.containers.get(container_id)
+                container.stop(timeout=2)
+                container.remove(v=True, force=True)
+            except Exception:
+                pass
+
+        await self._run_blocking(_remove)
+        self._owned_containers.discard(container_id)
+
+    async def shutdown_all(self) -> None:
+        """Stops every sandbox container this process started."""
+        for container_id in list(self._owned_containers):
+            await self.stop_and_remove_sandbox(container_id)
 
 
 sandbox_manager = SandboxManager()

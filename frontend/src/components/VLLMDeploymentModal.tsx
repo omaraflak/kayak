@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { VLLMDeploymentProgress } from '../types';
 import { api } from '../api/client';
+import { useVLLMStatus } from '../context/VLLMStatusContext';
 import { 
   Rocket, 
   CheckCircle2, 
@@ -30,63 +30,10 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
   onModelReady,
   autoDeploy = false,
 }) => {
-  const [status, setStatus] = useState<VLLMDeploymentProgress | null>(null);
-  const [logs, setLogs] = useState<string[]>([]);
+  const { status, logs, refresh: fetchStatus } = useVLLMStatus();
   const [showLogs, setShowLogs] = useState<boolean>(true);
   const [isDeploying, setIsDeploying] = useState<boolean>(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
-
-  const fetchStatus = async () => {
-    try {
-      const data = await api.getVLLMStatus();
-      setStatus(data);
-      if (data.logs_tail) {
-        setLogs(data.logs_tail);
-      }
-    } catch (err) {
-      console.error('Failed to fetch vLLM status:', err);
-    }
-  };
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    fetchStatus();
-
-    // Connect to live SSE stream for real-time logs and download progress
-    const eventSource = new EventSource('/api/vllm/events');
-
-    eventSource.addEventListener('status', (e: MessageEvent) => {
-      try {
-        const payload = JSON.parse(e.data);
-        if (payload.data) {
-          setStatus(payload.data);
-        }
-      } catch {}
-    });
-
-    eventSource.addEventListener('log', (e: MessageEvent) => {
-      try {
-        const payload = JSON.parse(e.data);
-        if (payload.line) {
-          setLogs((prev) => [...prev.slice(-300), payload.line]);
-        }
-      } catch {}
-    });
-
-    eventSource.addEventListener('update', (e: MessageEvent) => {
-      try {
-        const payload = JSON.parse(e.data);
-        if (payload.data) {
-          setStatus(payload.data);
-        }
-      } catch {}
-    });
-
-    return () => {
-      eventSource.close();
-    };
-  }, [isOpen]);
 
   useEffect(() => {
     if (showLogs) {
@@ -104,12 +51,12 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
   const handleDeploy = async (modelId: string) => {
     setIsDeploying(true);
     try {
-      const data = await api.deployVLLMModel({
+      await api.deployVLLMModel({
         model_id: modelId,
         gpu_memory_utilization: 0.90,
         trust_remote_code: true,
       });
-      setStatus(data);
+      await fetchStatus();
     } catch (err) {
       console.error('Deployment request failed:', err);
     } finally {

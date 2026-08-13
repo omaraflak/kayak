@@ -4,6 +4,7 @@ import shutil
 from typing import Dict, List, Optional, Tuple
 import yaml
 from backend.app.config import settings
+from backend.app.fs_cache import DirectorySignature, directory_signature
 from backend.app.models import Skill
 
 
@@ -60,11 +61,12 @@ def _parse_skill_folder(folder: Path) -> Optional[Skill]:
             content=content, default_name=folder.name
         )
 
-        helpers = [
+        helpers = sorted(
             f.name
             for f in folder.iterdir()
             if f.name.lower() not in ["skill.md", ".ds_store"]
-        ]
+            and f.name != "__pycache__"
+        )
 
         return Skill(
             name=name,
@@ -82,25 +84,46 @@ class SkillRegistry:
 
     def __init__(self):
         self._skills: Dict[str, Skill] = {}
+        self._signature: DirectorySignature = ()
+        self._loaded: bool = False
+
+    def _current_signature(self) -> DirectorySignature:
+        """Fingerprints every skill markdown file to detect edits made outside the app."""
+        return directory_signature(
+            settings.SKILLS_DIR, patterns=("*/SKILL.md", "*/skill.md")
+        )
+
+    def _refresh_if_stale(self) -> None:
+        """Reparses skill files only when the skills directory has actually changed.
+
+        The system prompt reads skills on every agent iteration, so an unconditional
+        rescan means re-reading every skill on disk several times per model call.
+        """
+        signature = self._current_signature()
+        if self._loaded and signature == self._signature:
+            return
+        self.load_all_skills()
 
     def load_all_skills(self):
         """Scans data/skills/<name>/SKILL.md and loads them."""
         self._skills.clear()
         skills_dir = settings.SKILLS_DIR
+        self._loaded = True
+        self._signature = self._current_signature()
         if not skills_dir.exists():
             return
 
-        for folder in skills_dir.iterdir():
+        for folder in sorted(skills_dir.iterdir()):
             skill = _parse_skill_folder(folder)
             if skill:
                 self._skills[skill.name] = skill
 
     def list_skills(self) -> List[Skill]:
-        self.load_all_skills()
+        self._refresh_if_stale()
         return list(self._skills.values())
 
     def get_skill(self, name: str) -> Optional[Skill]:
-        self.load_all_skills()
+        self._refresh_if_stale()
         return self._skills.get(name)
 
     def save_skill(
@@ -123,6 +146,7 @@ class SkillRegistry:
             helper_files=[],
         )
         self._skills[clean_name] = skill
+        self._signature = self._current_signature()
         return skill
 
     def delete_skill(self, name: str) -> bool:
@@ -131,6 +155,7 @@ class SkillRegistry:
         if folder.exists():
             shutil.rmtree(folder, ignore_errors=True)
             self._skills.pop(clean_name, None)
+            self._signature = self._current_signature()
             return True
         return False
 
