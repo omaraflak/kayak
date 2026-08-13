@@ -1,15 +1,20 @@
 import asyncio
-import os
+import time
 from pathlib import Path
 import shutil
 import threading
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 import docker
 from docker.errors import NotFound, ImageNotFound
 import httpx
 from backend.app.config import settings
 from backend.app.docker_utils import DockerPathResolver
+from backend.app.vllm import cache as model_cache
+from backend.app.vllm.hardware import probe_host_capability
 from backend.app.vllm.models import (
+    CachedModel,
+    HostCapability,
+    ModelCacheInfo,
     VLLMDeployRequest,
     VLLMDeploymentProgress,
     VLLMServerState,
@@ -17,6 +22,12 @@ from backend.app.vllm.models import (
 
 GPU_IMAGE = "vllm/vllm-openai:latest"
 CPU_IMAGE = "vllm/vllm-openai-cpu:latest"
+
+# A first deployment downloads the image and then tens of gigabytes of weights, so the
+# health check has to be patient. Genuine failures are caught by watching the container
+# rather than by running out of attempts.
+HEALTH_TIMEOUT_SECONDS = 1800
+CONTAINER_CHECK_INTERVAL_SECONDS = 5.0
 
 _ACTIVE_STATES = frozenset({
     VLLMServerState.PULLING_IMAGE,
@@ -111,12 +122,15 @@ class VLLMManager:
         state: VLLMServerState,
         message: str,
         error: Optional[str] = None,
+        exit_code: Optional[int] = None,
     ):
         """Updates internal telemetry and broadcasts to frontend."""
         self._status.state = state
         self._status.message = message
         if error is not None:
             self._status.error = error
+        if exit_code is not None:
+            self._status.exit_code = exit_code
 
         self._broadcast({"type": "status", "data": self._status.model_dump()})
 
@@ -364,20 +378,87 @@ class VLLMManager:
                             loop.call_soon_threadsafe(self._add_log, clean)
             except Exception:
                 pass
+            finally:
+                # Clear the manager's handle so a later container gets a streamer.
+                # _ensure_log_streamer treats a non-None event as "already streaming",
+                # so leaving a finished stream's event in place would silence logs for
+                # every container discovered afterwards.
+                if self._log_stop_event is stop_event:
+                    self._log_stop_event = None
 
         thread = threading.Thread(target=_worker, daemon=True, name="vllm-log-streamer")
         thread.start()
 
-    async def _poll_health_endpoint(self, model_id: str, max_attempts: int = 300):
-        """Polls vLLM health endpoint until healthy or timeout.
+    async def _get_container(self) -> Optional[Any]:
+        """Fetches the vLLM container with fresh attributes, or None if it is gone."""
+        if not self._docker_available or not self._client:
+            return None
 
-        This is the sole mechanism for transitioning to READY state.
+        def _get() -> Optional[Any]:
+            try:
+                return self._client.containers.get(self.CONTAINER_NAME)
+            except Exception:
+                return None
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _get)
+
+    @staticmethod
+    def _read_exit(container: Any) -> Tuple[Optional[int], bool]:
+        """Returns the container's exit code and whether the kernel OOM-killed it."""
+        state = (getattr(container, "attrs", {}) or {}).get("State", {}) or {}
+        exit_code = state.get("ExitCode")
+        return (
+            exit_code if isinstance(exit_code, int) else None,
+            bool(state.get("OOMKilled")),
+        )
+
+    def _report_container_exit(self, exit_code: Optional[int], oom_killed: bool):
+        """Moves status to ERROR after the container stopped on its own.
+
+        vLLM most often dies because the model did not fit, and it says so on the way
+        out. Carrying the exit code and the last few log lines into the status means
+        the failure is legible without opening the log drawer.
+        """
+        if oom_killed:
+            detail = (
+                "The container was killed for exceeding available memory. Try a smaller "
+                "model, a lower --max-model-len, or a lower GPU memory fraction."
+            )
+        elif exit_code:
+            tail = " / ".join(self._log_history[-3:]) or "no output was captured"
+            detail = f"Container exited with code {exit_code}. Last output: {tail}"
+        else:
+            detail = "The container stopped before the server became reachable."
+
+        self._add_log(f"✗ vLLM container exited (code {exit_code}).")
+        self._update_status(
+            state=VLLMServerState.ERROR,
+            message=f"vLLM stopped while starting {self._status.model_id or 'the model'}",
+            error=detail,
+            exit_code=exit_code if exit_code is not None else -1,
+        )
+
+    async def _poll_health_endpoint(
+        self,
+        model_id: str,
+        timeout_seconds: int = HEALTH_TIMEOUT_SECONDS,
+    ):
+        """Waits for the vLLM endpoint to answer, or for the container to die trying.
+
+        This is the sole mechanism for transitioning to READY state. It bounds itself on
+        wall-clock time rather than on a number of attempts: each attempt probes up to
+        five URLs with a one-second timeout apiece, so an attempt budget of 300 could
+        represent anything from five to twenty-five minutes.
         """
         urls_to_try = self._get_endpoint_urls() + [
             f"http://host.docker.internal:{settings.VLLM_PORT}/health",
         ]
+        deadline = time.monotonic() + timeout_seconds
+        next_container_check = time.monotonic() + CONTAINER_CHECK_INTERVAL_SECONDS
+
         async with httpx.AsyncClient(timeout=1.0) as client:
-            for _ in range(max_attempts):
+            while time.monotonic() < deadline:
                 await asyncio.sleep(1.0)
 
                 # Bail if deployment was cancelled or errored
@@ -395,16 +476,32 @@ class VLLMManager:
                             self._update_status(
                                 state=VLLMServerState.READY,
                                 message=f"vLLM is serving {model_id} on port {settings.VLLM_PORT}",
+                                exit_code=None,
                             )
                             return
                     except Exception:
                         pass
 
-        # Exhausted all attempts
+                # A crashed container will never answer, so waiting out the full
+                # deadline would report a timeout for a failure that already happened.
+                if time.monotonic() >= next_container_check:
+                    next_container_check = time.monotonic() + CONTAINER_CHECK_INTERVAL_SECONDS
+                    container = await self._get_container()
+                    if container is None or container.status not in ("running", "created", "restarting"):
+                        exit_code, oom_killed = (
+                            self._read_exit(container) if container is not None else (None, False)
+                        )
+                        self._report_container_exit(exit_code, oom_killed)
+                        return
+
+        minutes = timeout_seconds // 60
         self._update_status(
             state=VLLMServerState.ERROR,
-            message=f"vLLM server did not become healthy after {max_attempts}s",
-            error="Health check timeout",
+            message=f"vLLM did not become reachable within {minutes} minutes",
+            error=(
+                "The container is still running but never answered on "
+                f"{settings.VLLM_API_BASE}. Check the container logs below."
+            ),
         )
 
     async def stop_server(self):
@@ -521,6 +618,22 @@ class VLLMManager:
 
             self._ensure_log_streamer(container)
 
+        elif container is not None and self._status.state in _ACTIVE_STATES:
+            # The container exists but is no longer running, while we still believe it
+            # is deploying or serving. Without this branch a crashed vLLM -- which is
+            # what running out of memory looks like -- leaves the UI on an indefinite
+            # "initializing" spinner, because the endpoint never answers and the
+            # container never reports itself as running again.
+            exit_code, oom_killed = self._read_exit(container)
+            if exit_code:
+                self._report_container_exit(exit_code, oom_killed)
+            else:
+                # Exit code zero is an orderly shutdown, not a failure.
+                self._status.state = VLLMServerState.STOPPED
+                self._status.message = "vLLM container stopped."
+                self._status.container_id = None
+                self._broadcast({"type": "status", "data": self._status.model_dump()})
+
         elif self._status.state == VLLMServerState.READY and not is_endpoint_alive:
             # Server was marked ready previously but is no longer responding
             self._status.state = VLLMServerState.STOPPED
@@ -553,6 +666,78 @@ class VLLMManager:
         if self._status.model_id and self._status.state == VLLMServerState.READY:
             return [{"id": self._status.model_id, "object": "model", "owned_by": "vllm"}]
         return []
+
+    @property
+    def cache_root(self) -> Path:
+        """Host directory mounted into the container as the Hugging Face cache."""
+        return settings.DATA_DIR / "huggingface_cache"
+
+    async def get_host_capability(self) -> HostCapability:
+        """Reports GPU inventory, Docker availability, and whether the image is pulled."""
+        image_present: Optional[bool] = None
+
+        if self._docker_available and self._client:
+            def _has_image() -> Optional[bool]:
+                for image_name in (GPU_IMAGE, CPU_IMAGE):
+                    try:
+                        self._client.images.get(image_name)
+                        return True
+                    except (ImageNotFound, NotFound):
+                        continue
+                    except Exception:
+                        return None
+                return False
+
+            loop = asyncio.get_running_loop()
+            image_present = await loop.run_in_executor(None, _has_image)
+
+        return await probe_host_capability(self._docker_available, image_present)
+
+    async def get_cache_info(self) -> ModelCacheInfo:
+        """Lists locally downloaded model weights and their size on disk."""
+        root = self.cache_root
+        loop = asyncio.get_running_loop()
+        # Walking a weight cache means stat-ing tens of thousands of files.
+        models: List[CachedModel] = await loop.run_in_executor(
+            None, model_cache.list_cached_models, root
+        )
+        return ModelCacheInfo(
+            path=str(root),
+            total_bytes=sum(model.size_bytes for model in models),
+            models=models,
+        )
+
+    def is_serving(self, repo_id: str) -> bool:
+        """Reports whether the given repository is the one currently being served."""
+        return bool(
+            self._status.model_id == repo_id
+            and self._status.state in _ACTIVE_STATES
+        )
+
+    async def delete_cached_model(self, repo_id: str) -> int:
+        """Removes a repository's weights from the local cache.
+
+        Args:
+            repo_id: Hugging Face repository id to evict.
+
+        Returns:
+            int: Bytes reclaimed.
+
+        Raises:
+            CachePathError: If the id does not name a directory inside the cache.
+            FileNotFoundError: If the repository is not cached.
+        """
+        target = model_cache.resolve_cache_entry(self.cache_root, repo_id)
+        if not target.is_dir():
+            raise FileNotFoundError(f"'{repo_id}' is not in the local cache.")
+
+        def _remove() -> int:
+            freed = model_cache.directory_size_bytes(target)
+            shutil.rmtree(target)
+            return freed
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _remove)
 
 
 # Singleton instance

@@ -18,10 +18,13 @@ class VLLMDeployRequest(BaseModel):
     """Request payload for deploying a model via local vLLM."""
     model_id: str = Field(..., description="Hugging Face repository ID or model name (e.g. 'Qwen/Qwen2.5-Coder-7B-Instruct')")
     gpu_memory_utilization: float = Field(0.90, ge=0.1, le=1.0, description="Fraction of GPU memory to reserve for model weights and KV cache")
-    max_model_len: Optional[int] = Field(None, description="Maximum sequence length (context window)")
+    max_model_len: Optional[int] = Field(None, ge=256, description="Maximum sequence length (context window)")
     enforce_eager: bool = Field(False, description="Disable CUDA graph capture for reduced memory usage")
     dtype: str = Field("auto", description="Data type for model weights ('auto', 'float16', 'bfloat16')")
-    trust_remote_code: bool = Field(True, description="Allow custom model architectures from Hugging Face")
+    # Defaults off: this flag makes vLLM import and execute Python published in the
+    # model repository, inside the container, with the Hugging Face token in its
+    # environment. It is occasionally required, but it is never a safe default.
+    trust_remote_code: bool = Field(False, description="Execute custom modelling code published in the model repository")
 
 
 class VLLMDeploymentProgress(BaseModel):
@@ -34,3 +37,37 @@ class VLLMDeploymentProgress(BaseModel):
     endpoint: str = "http://localhost:8001/v1"
     container_id: Optional[str] = None
     error: Optional[str] = None
+    #: Exit code of the container, when it has stopped on its own.
+    exit_code: Optional[int] = None
+
+
+class GPUDevice(BaseModel):
+    """A single accelerator visible to the host."""
+    name: str
+    total_memory_mb: int
+
+
+class HostCapability(BaseModel):
+    """What this machine can serve locally."""
+    docker_available: bool
+    gpus: List[GPUDevice] = []
+    total_vram_mb: int = 0
+    #: 'cuda' when the GPU image will be used, 'cpu' otherwise.
+    accelerator: str = "cpu"
+    #: Whether the vLLM image is already pulled, when it could be determined.
+    image_present: Optional[bool] = None
+
+
+class CachedModel(BaseModel):
+    """A model repository whose weights are already on this machine."""
+    repo_id: str
+    size_bytes: int
+    #: Directory mtime as a POSIX timestamp; a rough "last touched".
+    modified_at: float
+
+
+class ModelCacheInfo(BaseModel):
+    """The local weight cache, and where it lives."""
+    path: str
+    total_bytes: int
+    models: List[CachedModel] = []

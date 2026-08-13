@@ -473,7 +473,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
                   {/* Direct Response Text on Background without enclosing white card or icons */}
                   {turn.content && (
-                    <MarkdownContent className="text-md-on-surface text-[15px] leading-relaxed">
+                    <MarkdownContent size="comfortable" className="text-md-on-surface leading-relaxed">
                       {turn.content}
                     </MarkdownContent>
                   )}
@@ -521,7 +521,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
               {/* Streaming token text directly on background */}
               {streamingTokenText && (
-                <MarkdownContent className="text-md-on-surface text-[15px] leading-relaxed">
+                <MarkdownContent size="comfortable" className="text-md-on-surface leading-relaxed">
                   {streamingTokenText}
                 </MarkdownContent>
               )}

@@ -1,17 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { HuggingFaceModelSearchResult } from '../types';
 import { api } from '../api/client';
-import { 
-  Search, 
-  Loader2, 
-  Download, 
-  Heart, 
-  Rocket, 
-  Play, 
-  CheckCircle2, 
-  Check, 
-  Sparkles,
-  ExternalLink
+import { estimateModelSize, judgeFit } from './modelSizing';
+import {
+  Search,
+  Loader2,
+  Download,
+  Heart,
+  Rocket,
+  Play,
+  CheckCircle2,
+  Check,
+  AlertTriangle,
+  HardDrive,
+  ExternalLink,
 } from 'lucide-react';
 
 export interface HuggingFaceCatalogProps {
@@ -23,6 +25,10 @@ export interface HuggingFaceCatalogProps {
   activeVllmModelId?: string | null;
   isVllmLoading?: boolean;
   initialQuery?: string;
+  /** Repositories already downloaded, so the catalog can say what is free to start. */
+  cachedModelIds?: Set<string>;
+  /** Accelerator memory available, for flagging models that cannot fit. */
+  availableVramGB?: number;
 }
 
 export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
@@ -34,20 +40,29 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
   activeVllmModelId,
   isVllmLoading = false,
   initialQuery = 'qwen2.5-coder',
+  cachedModelIds,
+  availableVramGB = 0,
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>(initialQuery);
   const [results, setResults] = useState<HuggingFaceModelSearchResult[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [lastQuery, setLastQuery] = useState<string>(initialQuery);
 
   const handleSearch = async (queryToSearch: string) => {
     const trimmed = queryToSearch.trim();
     if (!trimmed || trimmed.length < 2) return;
     setIsLoading(true);
+    setSearchError(null);
+    setLastQuery(trimmed);
     try {
       const data = await api.searchHuggingFaceModels(trimmed);
       setResults(data);
     } catch (error) {
-      console.error('Failed to search Hugging Face Hub:', error);
+      // Reporting this as "no models found" would send the user off rewording a query
+      // that was never the problem.
+      setSearchError(error instanceof Error ? error.message : String(error));
+      setResults([]);
     } finally {
       setIsLoading(false);
     }
@@ -99,9 +114,23 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
           <Loader2 className="w-6 h-6 animate-spin text-md-primary" />
           <span>Querying Hugging Face text-generation repository catalog...</span>
         </div>
+      ) : searchError ? (
+        <div className="py-12 px-8 text-center bg-rose-50 dark:bg-rose-950/40 rounded-2xl border border-rose-300 dark:border-rose-800/80 space-y-3">
+          <AlertTriangle className="w-6 h-6 text-rose-700 dark:text-rose-300 mx-auto" />
+          <p className="text-xs text-rose-900 dark:text-rose-100 leading-relaxed max-w-md mx-auto">
+            {searchError}
+          </p>
+          <button
+            type="button"
+            onClick={() => handleSearch(lastQuery)}
+            className="px-4 py-1.5 rounded-xl bg-md-primary text-md-on-primary text-xs font-bold hover:opacity-90 transition-opacity cursor-pointer"
+          >
+            Try again
+          </button>
+        </div>
       ) : results.length === 0 ? (
         <div className="py-16 text-center text-md-on-surface-variant text-xs bg-md-surface-container-low rounded-2xl border border-md-outline-variant p-8">
-          No Hugging Face models found matching "{searchQuery}". Try a different keyword above.
+          No Hugging Face models found matching "{lastQuery}". Try a different keyword above.
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
@@ -109,6 +138,9 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
             const rawModelId = hfModel.id;
             const isCurrentlyServing = activeVllmModelId === rawModelId;
             const isCurrentlyLoading = isVllmLoading && activeVllmModelId === rawModelId;
+            const isCached = cachedModelIds?.has(rawModelId) ?? false;
+            const estimate = estimateModelSize(rawModelId);
+            const fit = judgeFit(estimate, availableVramGB);
 
             // Staging checks for 'select' mode
             const isHfInferenceStaged = selectedModelString === hfModel.model_string_hf && selectedHfMode === 'hf';
@@ -149,6 +181,40 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                     </div>
                   </div>
 
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {estimate && (
+                      <span
+                        className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border inline-flex items-center gap-1 ${
+                          fit === 'too-large'
+                            ? 'bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-200 border-rose-300 dark:border-rose-800/80'
+                            : fit === 'tight'
+                            ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 border-amber-300 dark:border-amber-800/80'
+                            : 'bg-md-surface-container-high text-md-on-surface-variant border-md-outline-variant'
+                        }`}
+                        title={
+                          fit === 'too-large'
+                            ? `Needs roughly ${estimate.requiredGB} GB; this machine has ${availableVramGB.toFixed(0)} GB of VRAM.`
+                            : fit === 'cpu-only'
+                            ? 'No GPU detected on this machine.'
+                            : `Roughly ${estimate.requiredGB} GB of memory to serve.`
+                        }
+                      >
+                        {(fit === 'too-large' || fit === 'tight') && (
+                          <AlertTriangle className="w-2.5 h-2.5" />
+                        )}
+                        ~{estimate.weightsGB} GB
+                      </span>
+                    )}
+                    {isCached && (
+                      <span
+                        className="text-[10px] font-semibold px-1.5 py-0.5 rounded border inline-flex items-center gap-1 bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 border-emerald-300 dark:border-emerald-800/80"
+                        title="Weights are already on this machine"
+                      >
+                        <HardDrive className="w-2.5 h-2.5" /> Downloaded
+                      </span>
+                    )}
+                  </div>
+
                   <div className="flex items-center justify-between text-[10px] text-md-on-surface-variant">
                     <span className="font-mono bg-md-surface-container-high px-1.5 py-0.5 rounded border border-md-outline-variant text-md-on-surface">
                       {hfModel.pipeline_tag || 'text-generation'}
@@ -169,9 +235,15 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                 <div className="pt-3 mt-3 border-t border-md-outline-variant">
                   {mode === 'deploy' ? (
                     /* Direct deploy action on Local Models page */
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-mono text-md-on-surface-variant">
-                        {isCurrentlyServing ? 'Active in vLLM' : 'vLLM Ready'}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-md-on-surface-variant">
+                        {isCurrentlyServing
+                          ? 'Serving now'
+                          : isVllmLoading
+                          ? 'Another model is starting'
+                          : isCached
+                          ? 'Starts without downloading'
+                          : 'Downloads on first start'}
                       </span>
 
                       {isCurrentlyServing ? (

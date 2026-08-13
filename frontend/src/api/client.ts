@@ -11,7 +11,9 @@ import {
   HuggingFaceModelSearchResult,
   ToolCategoryInfo,
   VLLMDeploymentProgress,
-  VLLMDeployRequest
+  VLLMDeployRequest,
+  HostCapability,
+  ModelCacheInfo
 } from '../types';
 
 const API_BASE = '/api';
@@ -54,10 +56,33 @@ function withAuth(init?: RequestInit): RequestInit {
   return { ...init, headers, credentials: 'same-origin' };
 }
 
+/**
+ * Extracts the human-readable part of an error response.
+ *
+ * FastAPI answers with `{"detail": ...}`, so showing the raw body put JSON braces in
+ * front of users for every failure the UI reports.
+ */
+function readErrorDetail(body: string): string | null {
+  if (!body) return null;
+  try {
+    const parsed = JSON.parse(body);
+    const detail = parsed?.detail;
+    if (typeof detail === 'string') return detail;
+    // Validation errors arrive as a list of {loc, msg, type} entries.
+    if (Array.isArray(detail)) {
+      const messages = detail.map((item) => item?.msg).filter(Boolean);
+      if (messages.length) return messages.join('; ');
+    }
+  } catch {
+    /* not JSON; fall through to the raw text */
+  }
+  return body;
+}
+
 async function assertOk(res: Response): Promise<void> {
   if (res.ok) return;
   const body = await res.text().catch(() => '');
-  throw new ApiError(res.status, `API error ${res.status}: ${body || res.statusText}`);
+  throw new ApiError(res.status, readErrorDetail(body) || res.statusText);
 }
 
 /** Fetches JSON from the API, throwing on non-OK responses. */
@@ -216,4 +241,15 @@ export const api = {
       return [];
     }
   },
+
+  getHostCapability: (): Promise<HostCapability> =>
+    fetchJSON(`${API_BASE}/vllm/hardware`),
+
+  getModelCache: (): Promise<ModelCacheInfo> =>
+    fetchJSON(`${API_BASE}/vllm/cache`),
+
+  deleteCachedModel: (repoId: string): Promise<{ status: string; repo_id: string; freed_bytes: number }> =>
+    fetchJSON(`${API_BASE}/vllm/cache/${repoId.split('/').map(encodeURIComponent).join('/')}`, {
+      method: 'DELETE',
+    }),
 };

@@ -1,10 +1,13 @@
 import asyncio
 import json
-from typing import Any, Dict
+from typing import Dict
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+from backend.app.vllm.cache import CachePathError
 from backend.app.vllm.manager import vllm_manager
 from backend.app.vllm.models import (
+    HostCapability,
+    ModelCacheInfo,
     VLLMDeployRequest,
     VLLMDeploymentProgress,
 )
@@ -53,6 +56,46 @@ async def stop_vllm_server() -> Dict[str, str]:
 async def get_vllm_served_models():
     """Returns the list of active models served by the running vLLM server."""
     return await vllm_manager.list_served_models()
+
+
+@router.get("/hardware", response_model=HostCapability)
+async def get_host_capability() -> HostCapability:
+    """Reports what this machine can serve: Docker, accelerators, and image state."""
+    return await vllm_manager.get_host_capability()
+
+
+@router.get("/cache", response_model=ModelCacheInfo)
+async def get_model_cache() -> ModelCacheInfo:
+    """Lists model weights already downloaded to this machine, with sizes."""
+    return await vllm_manager.get_cache_info()
+
+
+@router.delete("/cache/{repo_id:path}")
+async def delete_cached_model(repo_id: str) -> Dict[str, object]:
+    """Deletes one repository's downloaded weights.
+
+    Args:
+        repo_id: Hugging Face repository id, e.g. ``Qwen/Qwen2.5-Coder-7B-Instruct``.
+
+    Returns:
+        The number of bytes reclaimed.
+    """
+    if vllm_manager.is_serving(repo_id):
+        raise HTTPException(
+            status_code=409,
+            detail="This model is currently being served. Stop the server before deleting its weights.",
+        )
+
+    try:
+        freed = await vllm_manager.delete_cached_model(repo_id)
+    except CachePathError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"Could not delete weights: {error}")
+
+    return {"status": "deleted", "repo_id": repo_id, "freed_bytes": freed}
 
 
 @router.get("/events")

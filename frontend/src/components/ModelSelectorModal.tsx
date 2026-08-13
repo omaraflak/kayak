@@ -1,21 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { ProviderModels, ModelItem, HuggingFaceModelSearchResult, VLLMDeploymentProgress } from '../types';
+import { ProviderModels, HuggingFaceModelSearchResult } from '../types';
 import { api } from '../api/client';
+import { useVLLMStatus, VLLM_LOADING_STATES } from '../context/VLLMStatusContext';
 import { VLLMDeploymentModal } from './VLLMDeploymentModal';
 import { HuggingFaceCatalog } from './HuggingFaceCatalog';
-import { 
-  X, 
-  Search, 
-  Check, 
-  Sparkles, 
-  Cpu, 
-  Server, 
-  AlertCircle, 
-  CheckCircle2, 
-  Loader2, 
-  Download, 
-  Heart,
-  Rocket
+import {
+  X,
+  Search,
+  Check,
+  Cpu,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+  Rocket,
 } from 'lucide-react';
 
 interface ModelSelectorModalProps {
@@ -31,6 +28,9 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
   selectedModel,
   onSelectModel,
 }) => {
+  // Shared with the rest of the app: this modal used to fetch status once on open and
+  // never again, so its "container active" banner went stale the moment anything moved.
+  const { status: vllmStatus } = useVLLMStatus();
   const [providers, setProviders] = useState<ProviderModels[]>([]);
   const [activeTab, setActiveTab] = useState<string>('gemini');
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -41,21 +41,14 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
   const [candidateHfModel, setCandidateHfModel] = useState<HuggingFaceModelSearchResult | null>(null);
   const [candidateHfMode, setCandidateHfMode] = useState<'hf' | 'vllm' | null>(null);
 
-  // Hugging Face Live Hub Search State
-  const [hfSearchQuery, setHfSearchQuery] = useState<string>('qwen2.5-coder');
-  const [hfResults, setHfResults] = useState<HuggingFaceModelSearchResult[]>([]);
-  const [isSearchingHf, setIsSearchingHf] = useState<boolean>(false);
-
   // vLLM Deployment Modal State
   const [isVLLMDeployModalOpen, setIsVLLMDeployModalOpen] = useState<boolean>(false);
   const [vllmDeployTarget, setVllmDeployTarget] = useState<string | null>(null);
-  const [vllmStatus, setVllmStatus] = useState<VLLMDeploymentProgress | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setCandidateModel(selectedModel);
       loadModelProviders();
-      loadVLLMStatus();
 
       // Set active tab based on selected model
       if (selectedModel.startsWith('gemini/')) setActiveTab('gemini');
@@ -77,34 +70,6 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
       setIsLoading(false);
     }
   };
-
-  const loadVLLMStatus = async () => {
-    try {
-      const data = await api.getVLLMStatus();
-      setVllmStatus(data);
-    } catch (error) {
-      console.error('Failed to load vLLM status:', error);
-    }
-  };
-
-  const handleSearchHuggingFace = async (queryToSearch: string) => {
-    if (!queryToSearch.trim() || queryToSearch.trim().length < 2) return;
-    setIsSearchingHf(true);
-    try {
-      const results = await api.searchHuggingFaceModels(queryToSearch.trim());
-      setHfResults(results);
-    } catch (error) {
-      console.error('Failed to search Hugging Face:', error);
-    } finally {
-      setIsSearchingHf(false);
-    }
-  };
-
-  useEffect(() => {
-    if (activeTab === 'huggingface' && hfResults.length === 0) {
-      handleSearchHuggingFace(hfSearchQuery);
-    }
-  }, [activeTab]);
 
   if (!isOpen) return null;
 
@@ -333,7 +298,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                   }
                 }}
                 activeVllmModelId={vllmStatus?.model_id}
-                isVllmLoading={['pulling_image', 'starting_container', 'loading'].includes(vllmStatus?.state || '')}
+                isVllmLoading={VLLM_LOADING_STATES.includes(vllmStatus?.state || '')}
               />
             )}
           </div>
@@ -380,14 +345,9 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
         isOpen={isVLLMDeployModalOpen}
         onClose={() => {
           setIsVLLMDeployModalOpen(false);
-          loadVLLMStatus();
           loadModelProviders();
         }}
         targetModelId={vllmDeployTarget}
-        onModelReady={(modelString) => {
-          onSelectModel(modelString);
-          onClose();
-        }}
       />
     </>
   );

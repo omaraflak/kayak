@@ -180,22 +180,59 @@ export interface AppSettings {
   HUGGINGFACE_API_KEY_SET?: boolean;
 }
 
+export type VLLMServerState =
+  | 'idle'
+  | 'pulling_image'
+  | 'starting_container'
+  | 'loading'
+  | 'ready'
+  | 'error'
+  | 'stopped';
+
 export interface VLLMDeploymentProgress {
   model_id?: string | null;
-  state: 'idle' | 'pulling_image' | 'starting_container' | 'loading' | 'ready' | 'error' | 'stopped';
+  state: VLLMServerState;
   message: string;
   logs_tail: string[];
   port: number;
   endpoint: string;
   container_id?: string | null;
   error?: string | null;
+  /** Set when the container stopped on its own, so a crash reads as a crash. */
+  exit_code?: number | null;
 }
 
 export interface VLLMDeployRequest {
   model_id: string;
   gpu_memory_utilization?: number;
-  max_model_len?: number;
+  max_model_len?: number | null;
   enforce_eager?: boolean;
   dtype?: string;
+  /** Executes modelling code published in the model repository. Off by default. */
   trust_remote_code?: boolean;
+}
+
+export interface GPUDevice {
+  name: string;
+  total_memory_mb: number;
+}
+
+export interface HostCapability {
+  docker_available: boolean;
+  gpus: GPUDevice[];
+  total_vram_mb: number;
+  accelerator: 'cuda' | 'cpu';
+  image_present?: boolean | null;
+}
+
+export interface CachedModel {
+  repo_id: string;
+  size_bytes: number;
+  modified_at: number;
+}
+
+export interface ModelCacheInfo {
+  path: string;
+  total_bytes: number;
+  models: CachedModel[];
 }

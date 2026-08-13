@@ -1,12 +1,16 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 import httpx
 import litellm
 from pydantic import BaseModel
 from backend.app.config import settings
 
 router = APIRouter(prefix="/api/models", tags=["models"])
+
+# The Hub is occasionally slow under load; four seconds turned ordinary latency into
+# an empty result set.
+HUGGINGFACE_TIMEOUT_SECONDS = 10.0
 
 
 class ModelItem(BaseModel):
@@ -152,31 +156,70 @@ async def search_huggingface_models(
 ) -> List[HuggingFaceModelSearchResult]:
     """Queries the Hugging Face Hub API for open-weight LLM models matching search query."""
     results: List[HuggingFaceModelSearchResult] = []
-    url = f"https://huggingface.co/api/models?pipeline_tag=text-generation&search={query}&limit=16&sort=downloads&direction=-1"
+    url = "https://huggingface.co/api/models"
+    params = {
+        "pipeline_tag": "text-generation",
+        "search": query,
+        "limit": "16",
+        "sort": "downloads",
+        "direction": "-1",
+    }
 
     headers: Dict[str, str] = {}
     if settings.HUGGINGFACE_API_KEY:
         headers["Authorization"] = f"Bearer {settings.HUGGINGFACE_API_KEY}"
 
+    # A swallowed failure here is indistinguishable from a search that genuinely
+    # matched nothing, so the UI told users to try another keyword when the keyword
+    # was never the problem. Upstream trouble is reported as upstream trouble.
     try:
-        async with httpx.AsyncClient(timeout=4.0) as client:
-            response = await client.get(url, headers=headers)
-            if response.status_code == 200:
-                for item in response.json():
-                    model_id = item.get("id", "")
-                    if model_id:
-                        results.append(
-                            HuggingFaceModelSearchResult(
-                                id=model_id,
-                                name=model_id,
-                                downloads=item.get("downloads", 0),
-                                likes=item.get("likes", 0),
-                                pipeline_tag=item.get("pipeline_tag"),
-                                model_string_hf=f"huggingface/{model_id}",
-                                model_string_vllm=f"vllm/{model_id}",
-                            )
-                        )
-    except Exception as error:
-        print(f"Error querying Hugging Face API: {error}")
+        async with httpx.AsyncClient(timeout=HUGGINGFACE_TIMEOUT_SECONDS) as client:
+            response = await client.get(url, params=params, headers=headers)
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=504,
+            detail="Hugging Face Hub did not respond in time. Try again in a moment.",
+        )
+    except httpx.HTTPError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not reach Hugging Face Hub: {error}",
+        )
+
+    if response.status_code == 401:
+        raise HTTPException(
+            status_code=502,
+            detail="Hugging Face rejected the configured API key. Check it in Settings.",
+        )
+    if response.status_code == 429:
+        raise HTTPException(
+            status_code=502,
+            detail="Hugging Face Hub is rate limiting this machine. Add an API key in Settings or retry shortly.",
+        )
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Hugging Face Hub returned {response.status_code}.",
+        )
+
+    try:
+        payload = response.json()
+    except ValueError:
+        raise HTTPException(status_code=502, detail="Hugging Face Hub returned an unreadable response.")
+
+    for item in payload:
+        model_id = item.get("id", "")
+        if model_id:
+            results.append(
+                HuggingFaceModelSearchResult(
+                    id=model_id,
+                    name=model_id,
+                    downloads=item.get("downloads", 0),
+                    likes=item.get("likes", 0),
+                    pipeline_tag=item.get("pipeline_tag"),
+                    model_string_hf=f"huggingface/{model_id}",
+                    model_string_vllm=f"vllm/{model_id}",
+                )
+            )
 
     return results

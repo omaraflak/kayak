@@ -19,7 +19,6 @@ interface VLLMDeploymentModalProps {
   isOpen: boolean;
   onClose: () => void;
   targetModelId?: string | null;
-  onModelReady?: (modelString: string) => void;
   autoDeploy?: boolean;
 }
 
@@ -27,7 +26,6 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
   isOpen,
   onClose,
   targetModelId,
-  onModelReady,
   autoDeploy = false,
 }) => {
   const { status, logs, refresh: fetchStatus } = useVLLMStatus();
@@ -51,11 +49,9 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
   const handleDeploy = async (modelId: string) => {
     setIsDeploying(true);
     try {
-      await api.deployVLLMModel({
-        model_id: modelId,
-        gpu_memory_utilization: 0.90,
-        trust_remote_code: true,
-      });
+      // Deliberately bare: every tunable is a server-side default, so this path and the
+      // Local Models page cannot drift into launching the same model differently.
+      await api.deployVLLMModel({ model_id: modelId });
       await fetchStatus();
     } catch (err) {
       console.error('Deployment request failed:', err);
@@ -156,9 +152,11 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
                 <span className="font-mono text-md-on-surface">{status?.model_id || targetModelId || 'Select a model to deploy'}</span>
               </div>
               <div className="text-[11px] text-md-on-surface-variant flex items-center gap-2">
-                <span>Port: <code className="font-mono text-md-on-surface font-semibold">{status?.port || 8000}</code></span>
+                {/* No hardcoded fallback: this modal used to claim port 8000 while the
+                    rest of the app said 8001, which is the configured default. */}
+                <span>Port: <code className="font-mono text-md-on-surface font-semibold">{status?.port ?? '—'}</code></span>
                 <span>·</span>
-                <span>Endpoint: <code className="font-mono text-md-on-surface">{status?.endpoint || 'http://localhost:8000/v1'}</code></span>
+                <span>Endpoint: <code className="font-mono text-md-on-surface">{status?.endpoint || '—'}</code></span>
               </div>
             </div>
           </div>

@@ -19,17 +19,32 @@ import { CodeBlock } from './CodeBlock';
 
 type MarkdownVariant = 'surface' | 'on-primary';
 
+/**
+ * Body text scale. Every block element states its own size, so a font size set on
+ * the wrapping element has no effect -- callers that want larger prose pick a scale
+ * here instead.
+ */
+type MarkdownSize = 'default' | 'comfortable';
+
+const SIZE_SCALE: Record<MarkdownSize, { body: string; quote: string; code: string }> = {
+  default: { body: 'text-[15px]', quote: 'text-[14px]', code: 'text-[13px]' },
+  comfortable: { body: 'text-[16px]', quote: 'text-[15px]', code: 'text-[14px]' },
+};
+
 interface MarkdownContentProps {
   children: string;
   /** 'on-primary' inverts text colors for rendering inside a filled bubble. */
   variant?: MarkdownVariant;
+  /** 'comfortable' bumps the body scale for long-form reading in chat. */
+  size?: MarkdownSize;
   className?: string;
 }
 
-function buildComponents(variant: MarkdownVariant) {
+function buildComponents(variant: MarkdownVariant, size: MarkdownSize) {
   const onPrimary = variant === 'on-primary';
   const body = onPrimary ? 'text-md-on-primary' : 'text-md-on-surface';
   const muted = onPrimary ? 'text-md-on-primary/80' : 'text-md-on-surface-variant';
+  const scale = SIZE_SCALE[size];
 
   return {
     h1: ({ children, ...props }: any) => (
@@ -66,22 +81,22 @@ function buildComponents(variant: MarkdownVariant) {
       </h6>
     ),
     p: ({ children, ...props }: any) => (
-      <p className={`mb-3.5 last:mb-0 ${body} text-[15px] leading-relaxed font-normal`} {...props}>
+      <p className={`mb-3.5 last:mb-0 ${body} ${scale.body} leading-relaxed font-normal`} {...props}>
         {children}
       </p>
     ),
     ul: ({ children, ...props }: any) => (
-      <ul className={`list-disc pl-5 my-3 space-y-1.5 ${body} text-[15px] leading-relaxed`} {...props}>
+      <ul className={`list-disc pl-5 my-3 space-y-1.5 ${body} ${scale.body} leading-relaxed`} {...props}>
         {children}
       </ul>
     ),
     ol: ({ children, ...props }: any) => (
-      <ol className={`list-decimal pl-5 my-3 space-y-1.5 ${body} text-[15px] leading-relaxed`} {...props}>
+      <ol className={`list-decimal pl-5 my-3 space-y-1.5 ${body} ${scale.body} leading-relaxed`} {...props}>
         {children}
       </ol>
     ),
     li: ({ children, ...props }: any) => (
-      <li className={`leading-relaxed text-[15px] ${body} marker:text-md-on-surface-variant`} {...props}>
+      <li className={`leading-relaxed ${scale.body} ${body} marker:text-md-on-surface-variant`} {...props}>
         {children}
       </li>
     ),
@@ -108,7 +123,7 @@ function buildComponents(variant: MarkdownVariant) {
     hr: (props: any) => <hr className="my-5 border-md-outline-variant" {...props} />,
     blockquote: ({ children, ...props }: any) => (
       <blockquote
-        className={`border-l-[3px] border-md-primary pl-4 py-1.5 my-3.5 ${body} bg-md-primary-container/30 rounded-r-xl italic text-[14px] leading-relaxed`}
+        className={`border-l-[3px] border-md-primary pl-4 py-1.5 my-3.5 ${body} bg-md-primary-container/30 rounded-r-xl italic ${scale.quote} leading-relaxed`}
         {...props}
       >
         {children}
@@ -148,8 +163,8 @@ function buildComponents(variant: MarkdownVariant) {
           <code
             className={
               onPrimary
-                ? 'px-1.5 py-0.5 rounded bg-md-on-primary/20 border border-md-on-primary/30 text-md-on-primary font-mono text-[13px]'
-                : 'px-1.5 py-0.5 rounded-md bg-md-surface-container-high border border-md-outline-variant text-md-on-surface font-mono text-[13px]'
+                ? `px-1.5 py-0.5 rounded bg-md-on-primary/20 border border-md-on-primary/30 text-md-on-primary font-mono ${scale.code}`
+                : `px-1.5 py-0.5 rounded-md bg-md-surface-container-high border border-md-outline-variant text-md-on-surface font-mono ${scale.code}`
             }
             {...props}
           >
@@ -170,9 +185,10 @@ function buildComponents(variant: MarkdownVariant) {
 export const MarkdownContent: React.FC<MarkdownContentProps> = ({
   children,
   variant = 'surface',
+  size = 'default',
   className,
 }) => {
-  const components = useMemo(() => buildComponents(variant), [variant]);
+  const components = useMemo(() => buildComponents(variant, size), [variant, size]);
 
   return (
     <div className={className}>
