@@ -1,10 +1,13 @@
 import asyncio
 import json
+import logging
 from pathlib import Path
 import shutil
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from backend.app.agent.approvals import approval_registry
 from backend.app.agent.engine import agent_engine
 from backend.app.agent.sandbox import sandbox_manager
 from backend.app.agent.task_manager import task_manager
@@ -16,6 +19,7 @@ from backend.app.database import (
     delete_conversation,
     get_conversation,
     get_messages,
+    list_child_conversations,
     list_conversations,
     update_conversation,
 )
@@ -29,7 +33,13 @@ from backend.app.models import (
     SendMessageRequest,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
+
+# A slow or backgrounded browser tab must not grow its queue without bound. When the
+# queue overflows the client is dropped; it reconnects and reloads from the database.
+_EVENT_QUEUE_MAXSIZE = 1000
 
 # Active event queues per conversation for SSE broadcasting
 _conversation_event_queues: Dict[str, List[asyncio.Queue[Dict[str, Any]]]] = {}
@@ -40,12 +50,33 @@ _running_agent_tasks: Dict[str, asyncio.Task[Any]] = {}
 # In-progress turn buffers to replay full thoughts/tokens upon client reconnect
 _active_turn_buffers: Dict[str, Dict[str, Any]] = {}
 
+# Fire-and-forget tasks (title generation) held so they are not garbage collected.
+_side_tasks: Set[asyncio.Task[Any]] = set()
+
+
+class ToolApprovalRequest(BaseModel):
+    """Payload recording the user's decision on a gated tool call."""
+    approved: bool
+
+
+def _spawn_side_task(coro) -> asyncio.Task[Any]:
+    """Schedules a background coroutine and keeps a reference until it completes."""
+    task = asyncio.create_task(coro)
+    _side_tasks.add(task)
+    task.add_done_callback(_side_tasks.discard)
+    return task
+
 
 def _broadcast_event(conversation_id: str, event: Dict[str, Any]) -> None:
     """Pushes a real-time event to all listening SSE client queues for a conversation."""
-    if conversation_id in _conversation_event_queues:
-        for event_queue in _conversation_event_queues[conversation_id]:
+    for event_queue in list(_conversation_event_queues.get(conversation_id, [])):
+        try:
             event_queue.put_nowait(event)
+        except asyncio.QueueFull:
+            logger.warning(
+                "Dropping SSE listener for conversation %s: client is not draining events.",
+                conversation_id,
+            )
 
 
 # Public alias for external callers
@@ -68,7 +99,7 @@ async def _async_generate_and_update_title(conversation_id: str, prompt: str, mo
             await update_conversation(conversation_id, title=generated)
             _broadcast_event(conversation_id, {"type": "title_updated", "title": generated})
     except Exception:
-        pass
+        logger.debug("Title generation failed for %s", conversation_id, exc_info=True)
 
 
 async def _run_agent_turn(conversation_id: str, agent_id: str) -> None:
@@ -97,12 +128,42 @@ async def _run_agent_turn(conversation_id: str, agent_id: str) -> None:
     except asyncio.CancelledError:
         await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
         _broadcast_event(conversation_id, {"type": "cancelled"})
+        raise
     except Exception as error:
+        logger.exception("Agent turn failed for conversation %s", conversation_id)
         await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
         _broadcast_event(conversation_id, {"type": "error", "error": str(error)})
     finally:
         _active_turn_buffers.pop(conversation_id, None)
         _running_agent_tasks.pop(conversation_id, None)
+
+
+async def _cancel_running_turn(conversation_id: str) -> bool:
+    """Cancels an in-flight turn and waits for its cleanup to finish.
+
+    Awaiting the cancelled task matters: the engine writes placeholder results for
+    tool calls that never ran, and starting the next turn before that lands would
+    read a history with dangling tool calls.
+    """
+    # Unblock the engine if it is parked waiting on a tool approval.
+    approval_registry.cancel_conversation(conversation_id)
+
+    task = _running_agent_tasks.get(conversation_id)
+    if not task or task.done():
+        return False
+
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        pass
+    return True
+
+
+async def shutdown_active_turns() -> None:
+    """Cancels every in-flight agent turn during server shutdown."""
+    for conversation_id in list(_running_agent_tasks.keys()):
+        await _cancel_running_turn(conversation_id)
 
 
 @router.post("", response_model=Conversation)
@@ -120,7 +181,11 @@ async def create_new_conversation(request: CreateConversationRequest) -> Convers
     if not request.title and request.initial_message:
         agent_config = agent_manager.get_agent(request.agent_id)
         model_name = agent_config.model if agent_config else settings.DEFAULT_MODEL
-        asyncio.create_task(_async_generate_and_update_title(conversation.id, request.initial_message, model_name))
+        _spawn_side_task(
+            _async_generate_and_update_title(
+                conversation.id, request.initial_message, model_name
+            )
+        )
 
     workspace_directory = settings.WORKSPACES_DIR / conversation.id
 
@@ -133,7 +198,7 @@ async def create_new_conversation(request: CreateConversationRequest) -> Convers
             await update_conversation(conversation.id, container_id=container_id)
             conversation.container_id = container_id
         except Exception as error:
-            print(f"Warning: Failed to create Docker sandbox: {error}")
+            logger.warning("Failed to create Docker sandbox: %s", error)
 
     # If initial message provided, add and trigger agent
     if request.initial_message:
@@ -164,6 +229,28 @@ async def get_conversation_details(conversation_id: str) -> Dict[str, Any]:
     return {"conversation": conversation, "messages": messages}
 
 
+async def _remove_conversation_tree(conversation: Conversation) -> None:
+    """Deletes a conversation, its sub-agent conversations, containers, and workspaces."""
+    for child in await list_child_conversations(conversation.id):
+        await _remove_conversation_tree(child)
+
+    await _cancel_running_turn(conversation.id)
+
+    # Sub-agents share the parent's container, so only tear down a container that
+    # this conversation owns.
+    if conversation.container_id and not conversation.parent_conversation_id:
+        try:
+            await sandbox_manager.stop_and_remove_sandbox(conversation.container_id)
+        except Exception:
+            logger.debug("Sandbox teardown failed for %s", conversation.id, exc_info=True)
+
+    workspace_directory: Path = settings.WORKSPACES_DIR / conversation.id
+    if workspace_directory.exists():
+        shutil.rmtree(workspace_directory, ignore_errors=True)
+
+    await delete_conversation(conversation.id)
+
+
 @router.delete("/{conversation_id}")
 async def delete_existing_conversation(conversation_id: str) -> Dict[str, str]:
     """Deletes a conversation, cleans up its Docker container, and deletes workspace files."""
@@ -171,36 +258,38 @@ async def delete_existing_conversation(conversation_id: str) -> Dict[str, str]:
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    task = _running_agent_tasks.pop(conversation_id, None)
-    if task and not task.done():
-        task.cancel()
-
-    if conversation.container_id:
-        try:
-            await sandbox_manager.stop_and_remove_sandbox(conversation.container_id)
-        except Exception:
-            pass
-
-    workspace_directory = settings.WORKSPACES_DIR / conversation_id
-    if workspace_directory.exists():
-        shutil.rmtree(workspace_directory, ignore_errors=True)
-
-    await delete_conversation(conversation_id)
+    await _remove_conversation_tree(conversation)
     return {"status": "deleted"}
 
 
 @router.post("/{conversation_id}/cancel")
 async def cancel_agent_turn(conversation_id: str) -> Dict[str, str]:
     """Cancels an ongoing agent response turn for a conversation."""
-    task = _running_agent_tasks.get(conversation_id)
-    if task and not task.done():
-        task.cancel()
-        await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
-        _broadcast_event(conversation_id, {"type": "cancelled"})
+    was_running = await _cancel_running_turn(conversation_id)
+    await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
+
+    if was_running:
         return {"status": "cancelled"}
 
-    await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
+    _broadcast_event(conversation_id, {"type": "cancelled"})
     return {"status": "not_running"}
+
+
+@router.post("/{conversation_id}/tool-approvals/{call_id}")
+async def resolve_tool_approval(
+    conversation_id: str, call_id: str, request: ToolApprovalRequest
+) -> Dict[str, str]:
+    """Records the user's decision for a tool call gated by an `ask_user` permission.
+
+    Raises:
+        HTTPException: If no tool call with this id is awaiting a decision.
+    """
+    if not approval_registry.resolve(call_id, request.approved):
+        raise HTTPException(
+            status_code=404,
+            detail=f"No pending approval for tool call '{call_id}'.",
+        )
+    return {"status": "approved" if request.approved else "rejected"}
 
 
 @router.post("/{conversation_id}/messages", response_model=Message)
@@ -210,9 +299,9 @@ async def send_user_message(conversation_id: str, request: SendMessageRequest) -
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    existing_task = _running_agent_tasks.get(conversation_id)
-    if existing_task and not existing_task.done():
-        existing_task.cancel()
+    # Wait for the previous turn to finish unwinding before appending, so its cleanup
+    # writes land ahead of the new user message.
+    await _cancel_running_turn(conversation_id)
 
     message = await add_message(
         conversation_id=conversation_id,
@@ -241,13 +330,16 @@ async def stream_conversation_events(conversation_id: str, request: Request) -> 
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    event_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
-    if conversation_id not in _conversation_event_queues:
-        _conversation_event_queues[conversation_id] = []
-    _conversation_event_queues[conversation_id].append(event_queue)
+    event_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(
+        maxsize=_EVENT_QUEUE_MAXSIZE
+    )
+    _conversation_event_queues.setdefault(conversation_id, []).append(event_queue)
 
     def on_task_event(event: Dict[str, Any]) -> None:
-        event_queue.put_nowait(event)
+        try:
+            event_queue.put_nowait(event)
+        except asyncio.QueueFull:
+            pass
 
     task_manager.add_listener(conversation_id, on_task_event)
 
@@ -273,11 +365,11 @@ async def stream_conversation_events(conversation_id: str, request: Request) -> 
                     yield f"data: {json.dumps({'type': 'ping'})}\n\n"
         finally:
             task_manager.remove_listener(conversation_id, on_task_event)
-            if (
-                conversation_id in _conversation_event_queues
-                and event_queue in _conversation_event_queues[conversation_id]
-            ):
-                _conversation_event_queues[conversation_id].remove(event_queue)
+            listeners = _conversation_event_queues.get(conversation_id)
+            if listeners and event_queue in listeners:
+                listeners.remove(event_queue)
+            if listeners is not None and not listeners:
+                _conversation_event_queues.pop(conversation_id, None)
 
     return StreamingResponse(
         event_generator(),

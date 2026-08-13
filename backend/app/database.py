@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from typing import Any, Dict, List, Optional
 import uuid
@@ -14,6 +14,15 @@ from backend.app.models import (
     TaskStatus,
     TaskType,
 )
+
+
+def _utc_now_iso() -> str:
+    """Returns the current UTC time as a naive ISO-8601 string.
+
+    Timestamps are stored without an offset so that lexicographic ordering in SQL
+    matches chronological ordering across every row.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 
 @asynccontextmanager
@@ -41,10 +50,19 @@ async def init_db() -> None:
             isolated_container INTEGER DEFAULT 0,
             container_id TEXT,
             status TEXT DEFAULT 'active',
+            parent_conversation_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
         """)
+
+        # Migration: link sub-agent conversations back to the conversation that spawned them
+        try:
+            await db.execute(
+                "ALTER TABLE conversations ADD COLUMN parent_conversation_id TEXT;"
+            )
+        except Exception:
+            pass
 
         await db.execute("""
         CREATE TABLE IF NOT EXISTS messages (
@@ -86,12 +104,37 @@ async def init_db() -> None:
         """)
 
         await db.execute(
+            # rowid is implicit in every index entry, so ordering by
+            # (created_at, rowid) is still served by this index.
             "CREATE INDEX IF NOT EXISTS idx_messages_conversation ON"
             " messages(conversation_id, created_at);"
         )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_tasks_conversation ON"
             " tasks(conversation_id);"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_conversations_parent ON"
+            " conversations(parent_conversation_id);"
+        )
+        await db.commit()
+
+
+async def reconcile_interrupted_state() -> None:
+    """Clears state left behind by a server that stopped mid-turn.
+
+    A conversation whose turn was interrupted stays marked RUNNING forever, which
+    pins the composer into its "generating" state with no way out. The same applies
+    to background tasks whose owning process no longer exists.
+    """
+    async with get_db_connection() as db:
+        await db.execute(
+            "UPDATE conversations SET status = ? WHERE status = ?",
+            (ConversationStatus.ACTIVE.value, ConversationStatus.RUNNING.value),
+        )
+        await db.execute(
+            "UPDATE tasks SET status = ?, updated_at = ? WHERE status = ?",
+            (TaskStatus.FAILED.value, _utc_now_iso(), TaskStatus.RUNNING.value),
         )
         await db.commit()
 
@@ -108,6 +151,11 @@ def _row_to_conversation(row: aiosqlite.Row) -> Conversation:
         isolated_container=bool(row["isolated_container"]),
         container_id=row["container_id"],
         status=ConversationStatus(row["status"]),
+        parent_conversation_id=(
+            row["parent_conversation_id"]
+            if "parent_conversation_id" in row.keys()
+            else None
+        ),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -154,6 +202,8 @@ async def create_conversation(
     agent_id: str = "general",
     isolated_container: bool = False,
     conversation_id: Optional[str] = None,
+    container_id: Optional[str] = None,
+    parent_conversation_id: Optional[str] = None,
 ) -> Conversation:
     """Creates a new conversation record in the database.
 
@@ -162,21 +212,33 @@ async def create_conversation(
         agent_id: ID of the agent profile assigned to this conversation.
         isolated_container: Whether to run this conversation in an isolated Docker container.
         conversation_id: Optional predetermined UUID identifier.
+        container_id: Optional Docker container this conversation is bound to.
+        parent_conversation_id: Optional parent conversation, set for sub-agent sessions.
 
     Returns:
         Conversation: The newly created Conversation instance.
     """
     cid = conversation_id or str(uuid.uuid4())
-    now = datetime.utcnow().isoformat()
+    now = _utc_now_iso()
     status = ConversationStatus.ACTIVE
 
     async with get_db_connection() as db:
         await db.execute(
             """
-        INSERT INTO conversations (id, title, agent_id, isolated_container, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO conversations (id, title, agent_id, isolated_container, container_id, status, parent_conversation_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-            (cid, title, agent_id, 1 if isolated_container else 0, status.value, now, now),
+            (
+                cid,
+                title,
+                agent_id,
+                1 if isolated_container else 0,
+                container_id,
+                status.value,
+                parent_conversation_id,
+                now,
+                now,
+            ),
         )
         await db.commit()
 
@@ -188,8 +250,9 @@ async def create_conversation(
         title=title,
         agent_id=agent_id,
         isolated_container=isolated_container,
-        container_id=None,
+        container_id=container_id,
         status=status,
+        parent_conversation_id=parent_conversation_id,
         created_at=now,
         updated_at=now,
     )
@@ -242,7 +305,7 @@ async def update_conversation(
         status: Optional updated conversation status enum or string.
         container_id: Optional Docker container identifier.
     """
-    now = datetime.utcnow().isoformat()
+    now = _utc_now_iso()
     fields = ["updated_at = ?"]
     values: List[Any] = [now]
 
@@ -308,7 +371,7 @@ async def add_message(
         Message: The created Message record.
     """
     mid = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat()
+    now = _utc_now_iso()
     role_enum = role if isinstance(role, MessageRole) else MessageRole(role)
     tool_calls_json = json.dumps(tool_calls) if tool_calls else None
 
@@ -361,11 +424,29 @@ async def get_messages(conversation_id: str) -> List[Message]:
     async with get_db_connection() as db:
         cursor = await db.execute(
             "SELECT * FROM messages WHERE conversation_id = ? ORDER BY"
-            " created_at ASC",
+            " created_at ASC, rowid ASC",
             (conversation_id,),
         )
         rows = await cursor.fetchall()
         return [_row_to_message(row) for row in rows]
+
+
+async def list_child_conversations(conversation_id: str) -> List[Conversation]:
+    """Lists sub-agent conversations spawned by a conversation.
+
+    Args:
+        conversation_id: Identifier of the parent conversation.
+
+    Returns:
+        List[Conversation]: Direct children of the given conversation.
+    """
+    async with get_db_connection() as db:
+        cursor = await db.execute(
+            "SELECT * FROM conversations WHERE parent_conversation_id = ?",
+            (conversation_id,),
+        )
+        rows = await cursor.fetchall()
+        return [_row_to_conversation(row) for row in rows]
 
 
 # --- Task Operations ---
@@ -391,7 +472,7 @@ async def create_task(
         BackgroundTask: Created background task record.
     """
     tid = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat()
+    now = _utc_now_iso()
     type_enum = task_type if isinstance(task_type, TaskType) else TaskType(task_type)
     status_enum = TaskStatus.RUNNING
 
@@ -480,7 +561,7 @@ async def update_task(
         stderr: Optional full stderr replacement.
         pid: Optional process ID.
     """
-    now = datetime.utcnow().isoformat()
+    now = _utc_now_iso()
     fields = ["updated_at = ?"]
     values: List[Any] = [now]
 
@@ -521,7 +602,7 @@ async def append_task_output(
         stdout_chunk: Optional new text chunk from stdout.
         stderr_chunk: Optional new text chunk from stderr.
     """
-    now = datetime.utcnow().isoformat()
+    now = _utc_now_iso()
     async with get_db_connection() as db:
         if stdout_chunk:
             await db.execute(

@@ -21,6 +21,7 @@ TYPE_MAP = {
 # Context parameters injected at runtime, excluded from tool schemas
 _CONTEXT_PARAMS = frozenset({
     "context", "workspace_dir", "container_id", "conversation_id", "task_manager",
+    "agent_depth",
 })
 
 

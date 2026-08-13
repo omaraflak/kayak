@@ -19,6 +19,7 @@ export interface Conversation {
   isolated_container: boolean;
   container_id: string | null;
   status: ConversationStatus;
+  parent_conversation_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -140,6 +141,11 @@ export interface HuggingFaceModelSearchResult {
   model_string_vllm: string;
 }
 
+/**
+ * API keys arrive masked (a `••••••••` preview keeping only the last characters).
+ * Submitting a masked value back is treated by the server as "unchanged", so the
+ * form can round-trip without ever holding the real secret.
+ */
 export interface AppSettings {
   DEFAULT_MODEL: string;
   OPENAI_API_KEY: string;
@@ -148,6 +154,10 @@ export interface AppSettings {
   HUGGINGFACE_API_KEY?: string;
   VLLM_API_BASE: string;
   DOCKER_AVAILABLE: boolean;
+  OPENAI_API_KEY_SET?: boolean;
+  GEMINI_API_KEY_SET?: boolean;
+  ANTHROPIC_API_KEY_SET?: boolean;
+  HUGGINGFACE_API_KEY_SET?: boolean;
 }
 
 export interface VLLMDeploymentProgress {

@@ -1,10 +1,39 @@
+import logging
 import re
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 import litellm
 from backend.app.config import settings
 
+logger = logging.getLogger(__name__)
+
 # Configure LiteLLM settings
 litellm.drop_params = True  # Automatically drop unsupported parameters for providers
+
+# Settings attribute holding the API key for each LiteLLM provider prefix.
+_PROVIDER_KEY_SETTINGS: Dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "huggingface": "HUGGINGFACE_API_KEY",
+    "hf": "HUGGINGFACE_API_KEY",
+}
+
+# Substrings that identify a provider genuinely refusing tool calling, as opposed to
+# any other 400. Matching loosely here turns unrelated failures (a malformed history,
+# an exhausted context window, a bad key) into a silent downgrade to a tool-less agent.
+_TOOL_UNSUPPORTED_MARKERS: Tuple[str, ...] = (
+    "does not support tool",
+    "does not support function",
+    "tools are not supported",
+    "tool use is not supported",
+    "tool calling is not supported",
+    "function calling is not supported",
+    "unsupported parameter: 'tools'",
+    "unsupported value: 'tools'",
+    "unsupported parameter: 'tool_choice'",
+    "no endpoints found that support tool use",
+    "tools is not supported",
+)
 
 
 class ThinkingStreamParser:
@@ -79,6 +108,40 @@ def extract_thinking_and_content(raw_text: Optional[str]) -> Tuple[Optional[str]
     return None, raw_text
 
 
+def resolve_provider(model: str) -> Optional[str]:
+    """Identifies the provider for a model string.
+
+    An explicit ``provider/model`` prefix always wins. Matching on prefixes rather
+    than substrings keeps a locally served model whose name merely contains another
+    provider's name (``vllm/openai/gpt-oss-20b``) routed to the local endpoint.
+
+    Args:
+        model: LiteLLM model identifier.
+
+    Returns:
+        Optional[str]: Provider key, ``"vllm"`` for the local server, or None if unknown.
+    """
+    lowered = model.lower()
+
+    if lowered.startswith("vllm/") or lowered.startswith("openai/vllm/"):
+        return "vllm"
+
+    if "/" in model:
+        prefix = model.split("/", 1)[0].lower()
+        if prefix in _PROVIDER_KEY_SETTINGS:
+            return prefix
+        return None
+
+    # Bare model names without a provider prefix.
+    if lowered.startswith(("gpt-", "gpt3", "gpt4", "o1", "o3", "o4", "chatgpt")):
+        return "openai"
+    if lowered.startswith("claude"):
+        return "anthropic"
+    if lowered.startswith("gemini"):
+        return "gemini"
+    return None
+
+
 def _build_llm_kwargs(
     model: str,
     messages: List[Dict[str, Any]],
@@ -105,20 +168,21 @@ def _build_llm_kwargs(
         "stream": stream,
     }
 
-    # Pass API keys or custom endpoints based on model prefix
-    if settings.OPENAI_API_KEY and ("gpt" in model.lower() or "o1" in model.lower() or "o3" in model.lower()):
-        kwargs["api_key"] = settings.OPENAI_API_KEY
-    elif "gemini" in model.lower() and settings.GEMINI_API_KEY:
-        kwargs["api_key"] = settings.GEMINI_API_KEY
-    elif "claude" in model.lower() and settings.ANTHROPIC_API_KEY:
-        kwargs["api_key"] = settings.ANTHROPIC_API_KEY
-    elif ("huggingface" in model.lower() or model.startswith("hf/")) and settings.HUGGINGFACE_API_KEY:
-        kwargs["api_key"] = settings.HUGGINGFACE_API_KEY
-    elif model.startswith("vllm/") or model.startswith("openai/vllm"):
-        raw_model = model.replace("openai/vllm/", "").replace("vllm/", "")
+    provider = resolve_provider(model)
+
+    if provider == "vllm":
+        raw_model = model
+        for prefix in ("openai/vllm/", "vllm/"):
+            if raw_model.startswith(prefix):
+                raw_model = raw_model[len(prefix):]
+                break
         kwargs["model"] = f"openai/{raw_model}"
         kwargs["api_base"] = settings.VLLM_API_BASE
         kwargs["api_key"] = "EMPTY"
+    elif provider:
+        api_key = getattr(settings, _PROVIDER_KEY_SETTINGS[provider], "")
+        if api_key:
+            kwargs["api_key"] = api_key
 
     if tools:
         kwargs["tools"] = tools
@@ -135,10 +199,15 @@ def _strip_tools(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return fallback
 
 
-def _is_tool_error(error: Exception) -> bool:
-    """Checks whether an API error is likely caused by unsupported tool calling."""
+def _is_tool_unsupported_error(error: Exception) -> bool:
+    """Reports whether an API error specifically means the model cannot use tools.
+
+    Only a provider explicitly rejecting tool calling justifies retrying without
+    tools. Every other failure is surfaced, so that a broken request fails loudly
+    instead of degrading into an agent that silently has no tools.
+    """
     msg = str(error).lower()
-    return "tool" in msg or "400" in msg
+    return any(marker in msg for marker in _TOOL_UNSUPPORTED_MARKERS)
 
 
 async def _stream_response(kwargs: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
@@ -203,7 +272,19 @@ async def generate_completion_stream(
         async for event in _stream_response(kwargs):
             yield event
     except Exception as error:
-        if tools and _is_tool_error(error):
+        if tools and _is_tool_unsupported_error(error):
+            logger.warning(
+                "Model '%s' rejected tool calling; retrying without tools: %s",
+                model,
+                error,
+            )
+            yield {
+                "type": "warning",
+                "warning": (
+                    f"Model '{model}' does not support tool calling. Retrying without "
+                    "tools; this agent's tools are unavailable for this turn."
+                ),
+            }
             try:
                 async for event in _stream_response(_strip_tools(kwargs)):
                     yield event
@@ -265,7 +346,7 @@ async def generate_completion(
         response = await litellm.acompletion(**kwargs)
         return _parse_completion_response(response.choices[0].message)
     except Exception as error:
-        if tools and _is_tool_error(error):
+        if tools and _is_tool_unsupported_error(error):
             try:
                 response = await litellm.acompletion(**_strip_tools(kwargs))
                 result = _parse_completion_response(response.choices[0].message)

@@ -56,20 +56,14 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  // The conversation list is refreshed on navigation and whenever a turn reports a
+  // change over SSE (including LLM-generated titles), so no background poll is needed.
   useEffect(() => {
     window.addEventListener('popstate', handlePopState);
     loadInitialData();
 
-    const interval = setInterval(async () => {
-      try {
-        const convs = await api.listConversations();
-        setConversations(convs);
-      } catch {}
-    }, 5000);
-
     return () => {
       window.removeEventListener('popstate', handlePopState);
-      clearInterval(interval);
     };
   }, [handlePopState]);
 

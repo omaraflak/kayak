@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Conversation, AgentConfig, VLLMDeploymentProgress } from '../types';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Conversation, AgentConfig } from '../types';
 import { api } from '../api/client';
 import { ChatPane } from './ChatPane';
+import { useVLLMStatus, VLLM_LOADING_STATES } from '../context/VLLMStatusContext';
 import { 
   Bot, 
   Cpu, 
@@ -34,8 +35,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [draftUseContainer, setDraftUseContainer] = useState<boolean>(false);
   const [draftInput, setDraftInput] = useState<string>('');
   const [isCreating, setIsCreating] = useState<boolean>(false);
-  const [vllmStatus, setVllmStatus] = useState<VLLMDeploymentProgress | null>(null);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const { status: vllmStatus, refresh: refreshVllmStatus } = useVLLMStatus();
 
   const loadConversationData = async () => {
     if (!conversationId) {
@@ -60,43 +60,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   }, [agents]);
 
-  // Check if any agent uses a vLLM model
-  const hasAnyVllmAgent = agents.some((a) => a.model.startsWith('vllm/'));
-
-  // Subscribe to vLLM status via SSE when any agent uses vLLM
-  useEffect(() => {
-    if (!hasAnyVllmAgent) {
-      setVllmStatus(null);
-      return;
-    }
-
-    // Fetch initial status
-    api.getVLLMStatus()
-      .then((data) => setVllmStatus(data))
-      .catch((err) => console.error('Failed to fetch vLLM status:', err));
-
-    // SSE for real-time updates
-    const es = new EventSource('/api/vllm/events');
-    eventSourceRef.current = es;
-
-    const handleEvent = (e: MessageEvent) => {
-      try {
-        const payload = JSON.parse(e.data);
-        if (payload.data) {
-          setVllmStatus(payload.data);
-        }
-      } catch { /* ignore parse errors */ }
-    };
-
-    es.addEventListener('status', handleEvent);
-    es.addEventListener('update', handleEvent);
-
-    return () => {
-      es.close();
-      eventSourceRef.current = null;
-    };
-  }, [hasAnyVllmAgent]);
-
   // Helper: extract HF model id from an agent model string like "vllm/Org/Model"
   const getVllmModelId = useCallback((model: string): string | null => {
     if (!model.startsWith('vllm/')) return null;
@@ -110,7 +73,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Compute whether the selected agent's vLLM model is ready
   const selectedAgentVllmModelId = activeAgent ? getVllmModelId(activeAgent.model) : null;
   const isVllmAgent = selectedAgentVllmModelId !== null;
-  const loadingStates = ['pulling_image', 'starting_container', 'loading'];
+  const loadingStates = VLLM_LOADING_STATES;
   const isVllmModelReady =
     !isVllmAgent ||
     (vllmStatus?.state === 'ready' && vllmStatus?.model_id === selectedAgentVllmModelId);
@@ -124,10 +87,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const handleStartModel = useCallback(async (modelId: string) => {
     try {
       await api.deployVLLMModel({ model_id: modelId });
+      await refreshVllmStatus();
     } catch (err) {
       console.error('Failed to deploy vLLM model:', err);
     }
-  }, []);
+  }, [refreshVllmStatus]);
 
   // Helper: get vLLM badge info for a given agent
   const getVllmBadge = useCallback(
