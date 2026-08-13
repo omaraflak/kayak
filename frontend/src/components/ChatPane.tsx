@@ -1,8 +1,4 @@
 import React, { useState, useEffect, useRef } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
 import { Message } from '../types';
 import { api } from '../api/client';
 import { useSSE, ToolApprovalRequest } from '../hooks/useSSE';
@@ -10,7 +6,7 @@ import { useVLLMStatus, VLLM_LOADING_STATES } from '../context/VLLMStatusContext
 import { ToolCallCard } from './ToolCallCard';
 import { ToolCallsAccordion } from './ToolCallsAccordion';
 import { ThinkingAccordion } from './ThinkingAccordion';
-import { CodeBlock } from './CodeBlock';
+import { MarkdownContent } from './Markdown';
 import { 
   Send, 
   Bot, 
@@ -39,90 +35,7 @@ export interface ChatPaneProps {
   fullWidthInput?: boolean;
   onSendMessage?: (content: string) => Promise<string | void>;
   onConversationCreated?: (newId: string) => void;
-  onToolDraftDetected?: (tool: { name?: string; toolCode?: string; verifyCode?: string; verifyOutput?: string; isSuccess?: boolean }) => void;
-  onSkillDraftDetected?: (skill: { name?: string; description?: string; instructions?: string }) => void;
   onRefreshConversations?: () => void;
-}
-
-export function extractToolDraftFromText(text: string): {
-  name?: string;
-  toolCode?: string;
-  verifyCode?: string;
-} {
-  const result: { name?: string; toolCode?: string; verifyCode?: string } = {};
-
-  const codeBlockRegex = /```(?:python|py)?\n([\s\S]*?)(?:```|$)/g;
-  const blocks: string[] = [];
-  let match;
-  while ((match = codeBlockRegex.exec(text)) !== null) {
-    if (match[1] && match[1].trim()) {
-      blocks.push(match[1]);
-    }
-  }
-
-  for (const block of blocks) {
-    if (block.includes('assert ') || block.includes('def test_') || block.includes('verify.py')) {
-      result.verifyCode = block;
-    } else if (block.includes('def ') || block.includes('import ')) {
-      result.toolCode = block;
-      const fnMatch = /def\s+([a-zA-Z0-9_]+)\s*\(/.exec(block);
-      if (fnMatch && fnMatch[1] && !['test_', 'main', 'execute'].includes(fnMatch[1])) {
-        result.name = fnMatch[1];
-      }
-    }
-  }
-
-  const nameMatch = /(?:tool\s*name|tool_name)\s*[:=]\s*[`"']?([a-zA-Z0-9_-]+)[`"']?/i.exec(text);
-  if (nameMatch && nameMatch[1]) {
-    result.name = nameMatch[1];
-  }
-
-  return result;
-}
-
-export function extractSkillDraftFromText(text: string): {
-  name?: string;
-  description?: string;
-  instructions?: string;
-} {
-  const result: { name?: string; description?: string; instructions?: string } = {};
-
-  const fmMatch = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/m.exec(text);
-  if (fmMatch) {
-    const yaml = fmMatch[1];
-    result.instructions = text;
-    const nameMatch = /name:\s*([a-zA-Z0-9_-]+)/i.exec(yaml);
-    if (nameMatch) result.name = nameMatch[1];
-    const descMatch = /description:\s*([^\n]+)/i.exec(yaml);
-    if (descMatch) result.description = descMatch[1];
-    return result;
-  }
-
-  const mdBlockMatch = /```(?:markdown|md)?\n([\s\S]*?)(?:```|$)/.exec(text);
-  if (mdBlockMatch && mdBlockMatch[1] && (mdBlockMatch[1].includes('# ') || mdBlockMatch[1].includes('---'))) {
-    const content = mdBlockMatch[1];
-    result.instructions = content;
-    const nameMatch = /(?:name|skill_name)\s*[:=]\s*[`"']?([a-zA-Z0-9_-]+)[`"']?/i.exec(content) ||
-                      /(?:name|skill_name)\s*[:=]\s*[`"']?([a-zA-Z0-9_-]+)[`"']?/i.exec(text);
-    if (nameMatch) result.name = nameMatch[1];
-    const descMatch = /description:\s*([^\n]+)/i.exec(content);
-    if (descMatch) result.description = descMatch[1];
-    return result;
-  }
-
-  if (text.includes('# ')) {
-    const headingIndex = text.indexOf('# ');
-    const candidateInstructions = text.slice(headingIndex);
-    if (candidateInstructions.length > 30) {
-      result.instructions = candidateInstructions;
-      const headingMatch = /#\s+([^\n]+)/.exec(candidateInstructions);
-      if (headingMatch && headingMatch[1]) {
-        result.name = headingMatch[1].toLowerCase().replace(/[^a-z0-9_-]/g, '_');
-      }
-    }
-  }
-
-  return result;
 }
 
 interface GroupedTurn {
@@ -225,8 +138,6 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   fullWidthInput = false,
   onSendMessage,
   onConversationCreated,
-  onToolDraftDetected,
-  onSkillDraftDetected,
   onRefreshConversations,
 }) => {
   const dialog = useDialog();
@@ -281,33 +192,6 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     }
   };
 
-  const parseToolArguments = (name: string, argsStr: string, output?: string, isError?: boolean) => {
-    try {
-      const parsed = typeof argsStr === 'string' ? JSON.parse(argsStr) : argsStr;
-      if (name === 'verify_tool' || name === 'activate_tool') {
-        if (parsed.tool_name || parsed.tool_code || parsed.verify_code) {
-          onToolDraftDetected?.({
-            name: parsed.tool_name,
-            toolCode: parsed.tool_code,
-            verifyCode: parsed.verify_code,
-            verifyOutput: output,
-            isSuccess: output ? !isError && output.includes('Verification Passed') : undefined,
-          });
-        }
-      } else if (name === 'create_or_update_skill') {
-        if (parsed.name || parsed.instructions) {
-          onSkillDraftDetected?.({
-            name: parsed.name,
-            description: parsed.description,
-            instructions: parsed.instructions,
-          });
-        }
-      }
-    } catch {
-      // JSON arguments might still be streaming
-    }
-  };
-
   const loadConversationData = async () => {
     if (!conversationId) {
       setMessages([]);
@@ -325,28 +209,6 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
         setIsSending(true);
       }
 
-      // Scan existing messages for tool calls and text drafts
-      for (const msg of data.messages) {
-        if (msg.tool_calls) {
-          for (const tc of msg.tool_calls) {
-            parseToolArguments(tc.function.name, tc.function.arguments);
-          }
-        }
-        if (msg.role === 'assistant' && msg.content) {
-          if (onToolDraftDetected) {
-            const extracted = extractToolDraftFromText(msg.content);
-            if (extracted.toolCode || extracted.verifyCode || extracted.name) {
-              onToolDraftDetected(extracted);
-            }
-          }
-          if (onSkillDraftDetected) {
-            const extracted = extractSkillDraftFromText(msg.content);
-            if (extracted.instructions || extracted.name || extracted.description) {
-              onSkillDraftDetected(extracted);
-            }
-          }
-        }
-      }
     } catch (err) {
       console.error('Failed to load conversation messages:', err);
     }
@@ -372,22 +234,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     },
     onToken: (token) => {
       setIsSending(true);
-      setStreamingTokenText((prev) => {
-        const next = prev + token;
-        if (onToolDraftDetected) {
-          const extracted = extractToolDraftFromText(next);
-          if (extracted.toolCode || extracted.verifyCode || extracted.name) {
-            onToolDraftDetected(extracted);
-          }
-        }
-        if (onSkillDraftDetected) {
-          const extracted = extractSkillDraftFromText(next);
-          if (extracted.instructions || extracted.name || extracted.description) {
-            onSkillDraftDetected(extracted);
-          }
-        }
-        return next;
-      });
+      setStreamingTokenText((prev) => prev + token);
     },
     onToolCallDelta: (delta) => {
       setIsSending(true);
@@ -395,8 +242,6 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
         const existing = prev[delta.id] || { name: delta.name || '', args: '' };
         const combinedArgs = existing.args + (delta.arguments || '');
         const updatedName = delta.name || existing.name;
-
-        parseToolArguments(updatedName, combinedArgs);
 
         return {
           ...prev,
@@ -410,7 +255,6 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     },
     onToolCallExecuting: (data) => {
       setIsSending(true);
-      parseToolArguments(data.name, data.arguments);
       setActiveToolExecutions((prev) => ({
         ...prev,
         [data.id]: {
@@ -440,8 +284,6 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       setPendingApprovals((prev) => prev.filter((item) => item.id !== data.id));
       setActiveToolExecutions((prev) => {
         const existing = prev[data.id];
-        const existingArgs = existing?.args || '';
-        parseToolArguments(data.name, existingArgs, data.output, data.is_error);
         return {
           ...prev,
           [data.id]: {
@@ -576,108 +418,6 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     }
   };
 
-  // Markdown renderer for Assistant messages
-  const assistantMarkdownComponents = {
-    h1({ children, ...props }: any) {
-      return <h1 className="text-xl font-bold text-md-on-surface mt-6 mb-3 tracking-tight" {...props}>{children}</h1>;
-    },
-    h2({ children, ...props }: any) {
-      return <h2 className="text-lg font-bold text-md-on-surface mt-5 mb-2 tracking-tight" {...props}>{children}</h2>;
-    },
-    h3({ children, ...props }: any) {
-      return <h3 className="text-base font-semibold text-md-on-surface mt-4 mb-1.5" {...props}>{children}</h3>;
-    },
-    p({ children, ...props }: any) {
-      return <p className="mb-3.5 text-md-on-surface text-[15px] leading-relaxed font-normal" {...props}>{children}</p>;
-    },
-    ul({ children, ...props }: any) {
-      return <ul className="list-disc pl-5 my-3 space-y-1.5 text-md-on-surface text-[15px] leading-relaxed" {...props}>{children}</ul>;
-    },
-    ol({ children, ...props }: any) {
-      return <ol className="list-decimal pl-5 my-3 space-y-1.5 text-md-on-surface text-[15px] leading-relaxed" {...props}>{children}</ol>;
-    },
-    li({ children, ...props }: any) {
-      return <li className="leading-relaxed text-[15px] text-md-on-surface" {...props}>{children}</li>;
-    },
-    blockquote({ children, ...props }: any) {
-      return (
-        <blockquote className="border-l-3 border-md-primary pl-4 py-1.5 my-3.5 text-md-on-surface bg-md-primary-container/30 rounded-r-xl italic text-[14px] leading-relaxed" {...props}>
-          {children}
-        </blockquote>
-      );
-    },
-    table({ children, ...props }: any) {
-      return (
-        <div className="my-4 overflow-x-auto rounded-xl border border-md-outline-variant shadow-xs">
-          <table className="w-full text-left text-xs border-collapse" {...props}>
-            {children}
-          </table>
-        </div>
-      );
-    },
-    th({ children, ...props }: any) {
-      return <th className="bg-md-surface-container-high p-3 font-bold text-md-on-surface border-b border-md-outline-variant" {...props}>{children}</th>;
-    },
-    td({ children, ...props }: any) {
-      return <td className="p-3 border-b border-md-outline-variant text-md-on-surface" {...props}>{children}</td>;
-    },
-    code({ node, inline, className, children, ...props }: any) {
-      const match = /language-(\w+)/.exec(className || '');
-      const codeStr = String(children).replace(/\n$/, '');
-      if (!inline && (match || codeStr.includes('\n'))) {
-        return (
-          <div className="my-3.5">
-            <CodeBlock
-              language={match ? match[1] : 'text'}
-              code={codeStr}
-            />
-          </div>
-        );
-      }
-      return (
-        <code className="px-1.5 py-0.5 rounded-md bg-md-surface-container-high border border-md-outline-variant text-md-on-surface font-mono text-[13px]" {...props}>
-          {children}
-        </code>
-      );
-    }
-  };
-
-  // Markdown renderer for User message bubble
-  const userMarkdownComponents = {
-    h1({ children, ...props }: any) {
-      return <h1 className="text-lg font-bold text-md-on-primary my-2" {...props}>{children}</h1>;
-    },
-    h2({ children, ...props }: any) {
-      return <h2 className="text-base font-bold text-md-on-primary my-1.5" {...props}>{children}</h2>;
-    },
-    h3({ children, ...props }: any) {
-      return <h3 className="text-sm font-bold text-md-on-primary my-1" {...props}>{children}</h3>;
-    },
-    p({ children, ...props }: any) {
-      return <p className="text-md-on-primary text-[15px] leading-relaxed mb-2 last:mb-0 font-normal" {...props}>{children}</p>;
-    },
-    ul({ children, ...props }: any) {
-      return <ul className="list-disc pl-5 my-2 text-md-on-primary text-[15px] space-y-1" {...props}>{children}</ul>;
-    },
-    ol({ children, ...props }: any) {
-      return <ol className="list-decimal pl-5 my-2 text-md-on-primary text-[15px] space-y-1" {...props}>{children}</ol>;
-    },
-    li({ children, ...props }: any) {
-      return <li className="text-md-on-primary leading-relaxed text-[15px]" {...props}>{children}</li>;
-    },
-    strong({ children, ...props }: any) {
-      return <strong className="font-bold text-md-on-primary" {...props}>{children}</strong>;
-    },
-    code({ node, inline, className, children, ...props }: any) {
-      const codeStr = String(children).replace(/\n$/, '');
-      return (
-        <code className="px-1.5 py-0.5 rounded bg-md-on-primary/20 border border-md-on-primary/30 text-md-on-primary font-mono text-[13px]" {...props}>
-          {codeStr}
-        </code>
-      );
-    }
-  };
-
   const groupedTurns = groupMessagesIntoTurns(messages);
 
   return (
@@ -715,13 +455,9 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
               return (
                 <div key={turn.id} className="flex justify-end pt-2">
                   <div className="max-w-2xl bg-md-primary text-md-on-primary rounded-2xl rounded-tr-xs px-5 py-3 text-[15px] shadow-xs leading-relaxed">
-                    <ReactMarkdown 
-                      remarkPlugins={[remarkGfm, remarkMath]} 
-                      rehypePlugins={[rehypeKatex]}
-                      components={userMarkdownComponents}
-                    >
+                    <MarkdownContent variant="on-primary">
                       {turn.content || ''}
-                    </ReactMarkdown>
+                    </MarkdownContent>
                   </div>
                 </div>
               );
@@ -737,15 +473,9 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
                   {/* Direct Response Text on Background without enclosing white card or icons */}
                   {turn.content && (
-                    <div className="text-md-on-surface text-[15px] leading-relaxed">
-                      <ReactMarkdown 
-                        remarkPlugins={[remarkGfm, remarkMath]} 
-                        rehypePlugins={[rehypeKatex]}
-                        components={assistantMarkdownComponents}
-                      >
-                        {turn.content}
-                      </ReactMarkdown>
-                    </div>
+                    <MarkdownContent className="text-md-on-surface text-[15px] leading-relaxed">
+                      {turn.content}
+                    </MarkdownContent>
                   )}
 
                   {/* Collapsible Dropdown Button for Tool Calls */}
@@ -791,15 +521,9 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
               {/* Streaming token text directly on background */}
               {streamingTokenText && (
-                <div className="text-md-on-surface text-[15px] leading-relaxed">
-                  <ReactMarkdown 
-                    remarkPlugins={[remarkGfm, remarkMath]} 
-                    rehypePlugins={[rehypeKatex]}
-                    components={assistantMarkdownComponents}
-                  >
-                    {streamingTokenText}
-                  </ReactMarkdown>
-                </div>
+                <MarkdownContent className="text-md-on-surface text-[15px] leading-relaxed">
+                  {streamingTokenText}
+                </MarkdownContent>
               )}
 
               {/* Tool calls held for explicit user approval */}

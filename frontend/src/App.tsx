@@ -21,6 +21,8 @@ export const App: React.FC = () => {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [currentTab, setCurrentTab] = useState<NavigationTab>(initialRoute.tab);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(initialRoute.itemId || null);
+  // Agent preselected in the composer when arriving from a "chat with this agent" link.
+  const [draftAgentId, setDraftAgentId] = useState<string | null>(null);
 
   const loadInitialData = async () => {
     try {
@@ -82,6 +84,14 @@ export const App: React.FC = () => {
     navigateTo('chat', id);
   };
 
+  /** Opens a fresh conversation composer with a specific agent preselected. */
+  const handleStartAgentChat = (agentId: string) => {
+    setDraftAgentId(agentId);
+    setActiveConversationId(null);
+    setCurrentTab('chat');
+    navigateTo('chat', null);
+  };
+
   const handleCreateConversation = async (data: {
     title?: string;
     agent_id: string;
@@ -91,6 +101,7 @@ export const App: React.FC = () => {
     try {
       const newConv = await api.createConversation(data);
       setConversations((prev) => [newConv, ...prev]);
+      setDraftAgentId(null);
       setActiveConversationId(newConv.id);
       setCurrentTab('chat');
       navigateTo('chat', newConv.id);
@@ -138,6 +149,7 @@ export const App: React.FC = () => {
           <ChatView 
             conversationId={activeConversationId} 
             agents={agents}
+            initialDraftAgentId={draftAgentId}
             onCreateConversation={handleCreateConversation}
             onRefreshConversations={loadInitialData}
           />
@@ -156,7 +168,7 @@ export const App: React.FC = () => {
           <SkillsView 
             selectedId={selectedItemId}
             onSelectId={(id) => handleSelectItem('skills', id)}
-            onRefreshConversations={loadInitialData} 
+            onStartAgentChat={handleStartAgentChat}
           />
         )}
 
@@ -164,7 +176,7 @@ export const App: React.FC = () => {
           <ToolsView 
             selectedId={selectedItemId}
             onSelectId={(id) => handleSelectItem('tools', id)}
-            onRefreshConversations={loadInitialData} 
+            onStartAgentChat={handleStartAgentChat}
           />
         )}
 

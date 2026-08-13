@@ -1,13 +1,12 @@
 from fastapi import APIRouter, HTTPException
-from backend.app.config import settings
 from backend.app.models import (
     ActivateToolRequest,
     ToolDefinition,
     VerifyToolRequest,
     VerifyToolResponse,
 )
-from backend.app.tools.registry import tool_registry
-from backend.app.tools.verifier import clean_tool_identifier, run_tool_verification
+from backend.app.tools.activation import activate_verified_tool
+from backend.app.tools.verifier import run_tool_verification
 
 router = APIRouter(prefix="/api/tool-builder", tags=["tool-builder"])
 
@@ -38,7 +37,10 @@ async def verify_tool_code(request: VerifyToolRequest) -> VerifyToolResponse:
 
 @router.post("/activate", response_model=ToolDefinition)
 async def activate_tool(request: ActivateToolRequest) -> ToolDefinition:
-    """Saves the verified tool code into data/tools/<name>/ and activates it in the runtime registry.
+    """Verifies the tool code and, if its tests pass, installs and registers it.
+
+    Verification is re-run here rather than trusted from a prior call, so that this
+    endpoint holds the same invariant no matter who calls it.
 
     Args:
         request: ActivateToolRequest with tool files and name.
@@ -47,25 +49,15 @@ async def activate_tool(request: ActivateToolRequest) -> ToolDefinition:
         The newly activated ToolDefinition record.
 
     Raises:
-        HTTPException: If tool files could not be registered.
+        HTTPException: If verification fails or the tool could not be registered.
     """
-    clean_name = clean_tool_identifier(request.tool_name)
-    tool_directory = settings.TOOLS_DIR / clean_name
-    tool_directory.mkdir(parents=True, exist_ok=True)
-
-    (tool_directory / "tool.py").write_text(request.tool_code, encoding="utf-8")
-    (tool_directory / "verify.py").write_text(request.verify_code, encoding="utf-8")
-
-    # Reload registry
-    tool_registry.load_custom_tools()
-
-    # Retrieve activated tool definition
-    all_tools = tool_registry.list_all_tools()
-    for tool in all_tools:
-        if tool.name == clean_name:
-            return tool
-
-    raise HTTPException(
-        status_code=500,
-        detail="Tool files saved but failed to load in registry.",
+    result = await activate_verified_tool(
+        tool_name=request.tool_name,
+        tool_code=request.tool_code,
+        verify_code=request.verify_code,
     )
+
+    if not result.success or not result.definition:
+        raise HTTPException(status_code=422, detail=result.message)
+
+    return result.definition

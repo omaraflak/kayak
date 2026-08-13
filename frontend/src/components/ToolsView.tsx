@@ -1,26 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { ToolDefinition } from '../types';
 import { api } from '../api/client';
-import { Wrench, Plus, RefreshCw, Trash2, ShieldCheck, FileCode } from 'lucide-react';
-import { ToolBuilder } from './ToolBuilder';
+import { Wrench, Plus, RefreshCw, Trash2, ShieldCheck, FileCode, Pencil } from 'lucide-react';
+import { ToolEditor } from './ToolEditor';
 import { CodeBlock } from './CodeBlock';
 import { useDialog } from '../context/DialogContext';
 
 interface ToolsViewProps {
   selectedId?: string | null;
   onSelectId?: (name: string | null) => void;
-  onRefreshConversations?: () => void;
+  onStartAgentChat?: (agentId: string) => void;
 }
 
-export const ToolsView: React.FC<ToolsViewProps> = ({ 
-  selectedId, 
-  onSelectId, 
-  onRefreshConversations 
+export const ToolsView: React.FC<ToolsViewProps> = ({
+  selectedId,
+  onSelectId,
+  onStartAgentChat,
 }) => {
   const dialog = useDialog();
   const [tools, setTools] = useState<ToolDefinition[]>([]);
   const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
 
   const loadTools = async () => {
@@ -49,6 +50,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
         const found = tools.find((t) => t.name === selectedId);
         if (found) {
           setIsCreating(false);
+          if (found.name !== selectedTool?.name) setIsEditing(false);
           setSelectedTool(found);
         }
       }
@@ -106,6 +108,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
             <button
               onClick={() => {
                 setIsCreating(true);
+                setIsEditing(false);
                 setSelectedTool(null);
                 onSelectId?.('new');
               }}
@@ -120,7 +123,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
         <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
           {tools.length === 0 ? (
             <div className="text-center py-10 px-4 text-md-on-surface-variant text-xs">
-              No registered tools found.<br />Click + New to build a tool.
+              No registered tools found.<br />Click + New to write one, or ask the Tool Architect agent in a chat.
             </div>
           ) : (
             tools.map((tool) => {
@@ -130,6 +133,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
                   key={tool.name}
                   onClick={() => {
                     setIsCreating(false);
+                    setIsEditing(false);
                     setSelectedTool(tool);
                     onSelectId?.(tool.name);
                   }}
@@ -159,15 +163,25 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
         </div>
       </div>
 
-      {/* Main Workspace Pane: Creation Studio vs Inspector */}
-      {isCreating ? (
+      {/* Main Workspace Pane: Editor (create or edit) vs read-only Inspector */}
+      {isCreating || isEditing ? (
         <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden bg-md-surface">
-          <ToolBuilder
-            onToolActivated={() => {
-              loadTools();
+          <ToolEditor
+            tool={isCreating ? null : selectedTool}
+            onStartAgentChat={onStartAgentChat}
+            onSaved={async (savedName) => {
               setIsCreating(false);
+              setIsEditing(false);
+              const refreshed = await api.listTools();
+              setTools(refreshed);
+              setSelectedTool(refreshed.find((t) => t.name === savedName) ?? null);
+              onSelectId?.(savedName);
             }}
-            onRefreshConversations={onRefreshConversations}
+            onCancel={() => {
+              setIsCreating(false);
+              setIsEditing(false);
+              onSelectId?.(selectedTool?.name ?? null);
+            }}
           />
         </div>
       ) : (
@@ -195,13 +209,22 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
             </div>
 
             {selectedTool && !selectedTool.is_builtin && (
-              <button
-                onClick={() => handleDelete(selectedTool.name)}
-                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-md-error bg-md-error-container hover:opacity-90 border border-md-outline-variant transition-opacity flex items-center gap-1.5 cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete Tool</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="px-3.5 py-2 rounded-xl text-xs font-semibold text-md-on-primary bg-md-primary hover:opacity-90 transition-opacity flex items-center gap-1.5 shadow-xs cursor-pointer"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  <span>Edit Tool</span>
+                </button>
+                <button
+                  onClick={() => handleDelete(selectedTool.name)}
+                  className="px-3.5 py-2 rounded-xl text-xs font-semibold text-md-error bg-md-error-container hover:opacity-90 border border-md-outline-variant transition-opacity flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Tool</span>
+                </button>
+              </div>
             )}
           </div>
 

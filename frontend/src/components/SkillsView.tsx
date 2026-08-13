@@ -1,49 +1,35 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
+import React, { useState, useEffect } from 'react';
 import { Skill } from '../types';
 import { api } from '../api/client';
-import { CodeBlock } from './CodeBlock';
-import { ChatPane } from './ChatPane';
-import { 
-  Sparkles, 
-  Plus,
-  Trash2, 
-  Save, 
-  FileCode, 
-  Eye, 
-  RotateCcw,
-  FileText
-} from 'lucide-react';
+import { MarkdownContent } from './Markdown';
+import { SkillEditor } from './SkillEditor';
+import { Sparkles, Plus, RefreshCw, Trash2, Pencil, FileText, Paperclip } from 'lucide-react';
 import { useDialog } from '../context/DialogContext';
+
+/**
+ * Skills library: browse and read installed skills, edit them, or create one.
+ *
+ * Deliberately structured like ToolsView -- same sidebar, same header, same
+ * view-then-edit flow -- so the two management surfaces are learned once.
+ */
 
 interface SkillsViewProps {
   selectedId?: string | null;
   onSelectId?: (name: string | null) => void;
-  onRefreshConversations?: () => void;
+  onStartAgentChat?: (agentId: string) => void;
 }
 
-export const SkillsView: React.FC<SkillsViewProps> = ({ 
-  selectedId, 
-  onSelectId, 
-  onRefreshConversations 
+export const SkillsView: React.FC<SkillsViewProps> = ({
+  selectedId,
+  onSelectId,
+  onStartAgentChat,
 }) => {
   const dialog = useDialog();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [isCreating, setIsCreating] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-
-  // Skill Architect Chat State
-  const [conversationId, setConversationId] = useState<string | null>(null);
-
-  // Form State
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [instructions, setInstructions] = useState('');
-  const [activeEditorTab, setActiveEditorTab] = useState<'editor' | 'preview'>('editor');
+  const [isEditing, setIsEditing] = useState(false);
+  const [isReloading, setIsReloading] = useState(false);
 
   const loadSkills = async () => {
     try {
@@ -66,15 +52,13 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
     if (selectedId) {
       if (selectedId === 'new') {
         setIsCreating(true);
+        setIsEditing(false);
         setSelectedSkill(null);
-        setName('');
-        setDescription('');
-        setInstructions('# Skill Title\n\nDetailed instructions for the agent...\n');
-        setConversationId(null);
       } else {
         const found = skills.find((s) => s.name === selectedId);
         if (found) {
           setIsCreating(false);
+          if (found.name !== selectedSkill?.name) setIsEditing(false);
           setSelectedSkill(found);
         }
       }
@@ -84,81 +68,12 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
     }
   }, [selectedId, skills]);
 
-  useEffect(() => {
-    if (selectedSkill && !isCreating) {
-      setName(selectedSkill.name);
-      setDescription(selectedSkill.description);
-      setInstructions(selectedSkill.instructions);
-    }
-  }, [selectedSkill, isCreating]);
-
-  const handleSkillDraftDetected = (draft: {
-    name?: string;
-    description?: string;
-    instructions?: string;
-  }) => {
-    if (draft.name && !name) {
-      setName(draft.name);
-    } else if (draft.name && name !== draft.name) {
-      setName(draft.name);
-    }
-    if (draft.description) {
-      setDescription(draft.description);
-    }
-    if (draft.instructions) {
-      setInstructions(draft.instructions);
-    }
-  };
-
-  const isDirty = useMemo(() => {
-    if (isCreating) return name.trim().length > 0 || instructions.trim().length > 0;
-    if (!selectedSkill) return false;
-    return (
-      name !== selectedSkill.name ||
-      description !== selectedSkill.description ||
-      instructions !== selectedSkill.instructions
-    );
-  }, [isCreating, selectedSkill, name, description, instructions]);
-
-  const handleStartCreate = () => {
-    setIsCreating(true);
-    setSelectedSkill(null);
-    setName('');
-    setDescription('');
-    setInstructions('# New Skill Instructions\n\n1. Step one...\n2. Step two...');
-  };
-
-  const handleReset = () => {
-    if (selectedSkill) {
-      setName(selectedSkill.name);
-      setDescription(selectedSkill.description);
-      setInstructions(selectedSkill.instructions);
-    } else if (isCreating) {
-      setName('');
-      setDescription('');
-      setInstructions('# New Skill Instructions\n\n1. Step one...\n2. Step two...');
-    }
-  };
-
-  const handleSave = async (event?: React.FormEvent) => {
-    if (event) event.preventDefault();
-    if (!isDirty || !name.trim() || isSaving) return;
-
-    setIsSaving(true);
+  const handleReload = async () => {
+    setIsReloading(true);
     try {
-      const cleanName = name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
-      const saved = await api.saveSkill({
-        name: cleanName,
-        description: description.trim(),
-        instructions,
-      });
-      setIsCreating(false);
       await loadSkills();
-      setSelectedSkill(saved);
-    } catch (error) {
-      console.error('Failed to save skill:', error);
     } finally {
-      setIsSaving(false);
+      setIsReloading(false);
     }
   };
 
@@ -173,56 +88,52 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
       await api.deleteSkill(skillName);
       await loadSkills();
       setSelectedSkill(null);
-    }
-  };
-
-  const markdownComponents = {
-    code({ node, inline, className, children, ...props }: any) {
-      const match = /language-(\w+)/.exec(className || '');
-      const codeStr = String(children).replace(/\n$/, '');
-      if (!inline && (match || codeStr.includes('\n'))) {
-        return (
-          <CodeBlock
-            language={match ? match[1] : 'markdown'}
-            code={codeStr}
-          />
-        );
-      }
-      return (
-        <code className="px-1.5 py-0.5 rounded bg-md-surface-container-high border border-md-outline-variant text-md-on-surface font-mono text-[11px]" {...props}>
-          {children}
-        </code>
-      );
+      onSelectId?.(null);
     }
   };
 
   return (
     <div className="flex-1 flex h-full min-h-0 bg-md-surface overflow-hidden transition-colors">
-      {/* Skills List Sidebar with + New Button */}
+      {/* Skills List Sidebar */}
       <div className="w-80 border-r border-md-outline-variant bg-md-surface-container-low flex flex-col shrink-0 transition-colors">
         <div className="p-4 border-b border-md-outline-variant flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <Sparkles className="w-4 h-4 text-md-primary" />
             <h2 className="font-bold text-xs text-md-on-surface uppercase tracking-wider">
-              Skills Directory
+              Skills ({skills.length})
             </h2>
           </div>
-          <button
-            onClick={() => {
-              handleStartCreate();
-              onSelectId?.('new');
-            }}
-            className="p-1.5 rounded-lg bg-md-primary text-md-on-primary hover:opacity-90 text-xs flex items-center gap-1 font-semibold transition-opacity shadow-xs cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>New</span>
-          </button>
+
+          <div className="flex items-center space-x-1.5">
+            <button
+              onClick={handleReload}
+              disabled={isReloading}
+              className="p-1.5 rounded-lg text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors cursor-pointer"
+              title="Reload skills from disk"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isReloading ? 'animate-spin' : ''}`} />
+            </button>
+            <button
+              onClick={() => {
+                setIsCreating(true);
+                setIsEditing(false);
+                setSelectedSkill(null);
+                onSelectId?.('new');
+              }}
+              className="p-1.5 rounded-lg bg-md-primary text-md-on-primary hover:opacity-90 text-xs flex items-center gap-1 font-semibold transition-opacity shadow-xs cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>New</span>
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
           {skills.length === 0 ? (
-            <div className="text-center py-10 px-4 text-md-on-surface-variant text-xs">
-              No skills found in <code className="font-mono">data/skills</code>.<br />Click + New to create one.
+            <div className="text-center py-10 px-4 text-md-on-surface-variant text-xs leading-relaxed">
+              No skills found in <code className="font-mono">data/skills</code>.
+              <br />
+              Click + New to write one, or ask the Skill Architect agent in a chat.
             </div>
           ) : (
             skills.map((skill) => {
@@ -232,6 +143,7 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
                   key={skill.name}
                   onClick={() => {
                     setIsCreating(false);
+                    setIsEditing(false);
                     setSelectedSkill(skill);
                     onSelectId?.(skill.name);
                   }}
@@ -242,10 +154,12 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
                   }`}
                 >
                   <div className="flex items-center justify-between mb-1">
-                    <span className="font-semibold text-xs text-md-on-surface">{skill.name}</span>
+                    <span className="font-semibold text-xs font-mono text-md-on-surface truncate">
+                      {skill.name}
+                    </span>
                     {skill.helper_files.length > 0 && (
-                      <span className="text-[10px] text-md-on-surface-variant font-mono">
-                        {skill.helper_files.length} helper{skill.helper_files.length > 1 ? 's' : ''}
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-mono border bg-md-surface-container-high text-md-on-surface-variant border-md-outline-variant shrink-0">
+                        {skill.helper_files.length} file{skill.helper_files.length > 1 ? 's' : ''}
                       </span>
                     )}
                   </div>
@@ -259,171 +173,108 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
         </div>
       </div>
 
-      {/* Main Workspace Pane: Top Header + Split (Chat 50% | Editor 50%) */}
-      <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden bg-md-surface">
-        {/* Top Header Rigidly Docked */}
-        <div className="h-16 border-b border-md-outline-variant px-8 flex items-center justify-between bg-md-surface-container-low shrink-0 transition-colors">
-          <div className="flex items-center space-x-3">
-            <Sparkles className="w-5 h-5 text-md-primary" />
-            <div>
-              <h1 className="text-sm font-bold text-md-on-surface flex items-center gap-2">
-                <span>{isCreating ? 'Create New Skill' : `Skill: ${name || 'Untitled'}`}</span>
-                {isDirty && !isCreating && (
-                  <span className="text-[10px] font-medium text-amber-800 dark:text-amber-200 bg-amber-100 dark:bg-amber-950/80 border border-amber-300 dark:border-amber-800/80 px-2 py-0.5 rounded-full flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                    Unsaved changes
+      {/* Main Workspace Pane: Editor (create or edit) vs read-only Viewer */}
+      {isCreating || isEditing ? (
+        <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden bg-md-surface">
+          <SkillEditor
+            skill={isCreating ? null : selectedSkill}
+            onStartAgentChat={onStartAgentChat}
+            onSaved={async (savedName) => {
+              setIsCreating(false);
+              setIsEditing(false);
+              const refreshed = await api.listSkills();
+              setSkills(refreshed);
+              setSelectedSkill(refreshed.find((s) => s.name === savedName) ?? null);
+              onSelectId?.(savedName);
+            }}
+            onCancel={() => {
+              setIsCreating(false);
+              setIsEditing(false);
+              onSelectId?.(selectedSkill?.name ?? null);
+            }}
+          />
+        </div>
+      ) : (
+        <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden bg-md-surface">
+          {/* Top Header rigidly docked at top */}
+          <div className="h-16 border-b border-md-outline-variant px-8 flex items-center justify-between bg-md-surface-container-low shrink-0 transition-colors">
+            <div className="min-w-0">
+              <div className="flex items-center space-x-2.5">
+                <h1 className="text-base font-bold font-mono text-md-on-surface truncate">
+                  {selectedSkill ? selectedSkill.name : 'Select Skill'}
+                </h1>
+                {selectedSkill && (
+                  <span className="text-xs px-2.5 py-0.5 rounded-full font-medium border bg-md-tertiary-container text-md-on-tertiary-container border-md-outline-variant shrink-0">
+                    Markdown Skill
                   </span>
                 )}
-              </h1>
-              <p className="text-[11px] text-md-on-surface-variant mt-0.5">
-                Directory: <code className="font-mono text-md-on-surface bg-md-surface-container-high px-1.5 py-0.5 rounded border border-md-outline-variant">data/skills/{name || '...'}/SKILL.md</code>
+              </div>
+              <p className="text-xs text-md-on-surface-variant mt-0.5 truncate">
+                {selectedSkill?.description || 'Select a skill to read its instructions.'}
               </p>
             </div>
+
+            {selectedSkill && (
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="px-3.5 py-2 rounded-xl text-xs font-semibold text-md-on-primary bg-md-primary hover:opacity-90 transition-opacity flex items-center gap-1.5 shadow-xs cursor-pointer"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  <span>Edit Skill</span>
+                </button>
+                <button
+                  onClick={() => handleDelete(selectedSkill.name)}
+                  className="px-3.5 py-2 rounded-xl text-xs font-semibold text-md-error bg-md-error-container hover:opacity-90 border border-md-outline-variant transition-opacity flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Skill</span>
+                </button>
+              </div>
+            )}
           </div>
 
-          <div className="flex items-center space-x-3">
-            {isDirty && !isCreating && (
-              <button
-                type="button"
-                onClick={handleReset}
-                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-md-on-surface hover:bg-md-surface-container-high flex items-center gap-1.5 transition-colors border border-md-outline-variant cursor-pointer"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Discard</span>
-              </button>
-            )}
+          {/* Scrollable Skill Details */}
+          <div className="flex-1 overflow-y-auto p-8 w-full space-y-6 bg-md-surface">
+            {selectedSkill ? (
+              <div className="max-w-5xl mx-auto space-y-6 pb-12">
+                <div className="space-y-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-md-on-surface flex items-center gap-1.5">
+                    <FileText className="w-4 h-4 text-md-primary" /> Instructions (SKILL.md)
+                  </h3>
+                  <div className="bg-md-surface-container-lowest p-6 rounded-xl border border-md-outline-variant">
+                    <MarkdownContent>
+                      {selectedSkill.instructions || '*This skill has no instructions yet.*'}
+                    </MarkdownContent>
+                  </div>
+                </div>
 
-            {!isCreating && selectedSkill && (
-              <button
-                onClick={() => handleDelete(selectedSkill.name)}
-                className="p-2 rounded-xl text-md-error bg-md-error-container hover:opacity-90 border border-md-outline-variant transition-opacity cursor-pointer"
-                title="Delete Skill"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
+                {selectedSkill.helper_files.length > 0 && (
+                  <div className="space-y-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-md-on-surface flex items-center gap-1.5">
+                      <Paperclip className="w-4 h-4 text-md-primary" /> Helper Files
+                    </h3>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedSkill.helper_files.map((file) => (
+                        <span
+                          key={file}
+                          className="text-[11px] font-mono px-2.5 py-1 rounded-lg bg-md-surface-container-high text-md-on-surface border border-md-outline-variant"
+                        >
+                          {file}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-center py-20 text-md-on-surface-variant text-sm">
+                Select a skill from the list to read its instructions.
+              </div>
             )}
-
-            <button
-              onClick={() => handleSave()}
-              disabled={!isDirty || !name.trim() || isSaving}
-              className="px-5 py-2.5 rounded-xl text-xs font-bold text-md-on-primary bg-md-primary hover:opacity-90 disabled:opacity-40 disabled:hover:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm transition-opacity focus:ring-2 focus:ring-md-primary cursor-pointer"
-            >
-              <Save className="w-4 h-4" />
-              <span>{isSaving ? 'Saving...' : 'Save Skill'}</span>
-            </button>
           </div>
         </div>
-
-        {/* Split View (50% AI Architect Chat | 50% Manual Editor & Preview) */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* Left Column: Skill Architect Chat Assistant */}
-          <div className="w-1/2 border-r border-md-outline-variant bg-md-surface flex flex-col overflow-hidden transition-colors">
-            <ChatPane
-              conversationId={conversationId}
-              agentId="skill_architect"
-              agentName="Skill Architect"
-              agentModel="gemini/gemini-3.6-flash"
-              headerTitle="Skill Architect Assistant"
-              headerBadge="Autonomous Synthesis"
-              headerSubtitle="Describe the skill or workflow to teach your agents. Instructions and descriptions will sync directly to the live editor."
-              placeholder="e.g. Write a skill for writing SQL queries and running schema migrations..."
-              fullWidthInput={true}
-              onConversationCreated={(newId) => setConversationId(newId)}
-              onSkillDraftDetected={handleSkillDraftDetected}
-              onRefreshConversations={onRefreshConversations}
-            />
-          </div>
-
-          {/* Right Column: Skill Metadata & Instructions Editor / Preview (50%) */}
-          <div className="w-1/2 flex flex-col bg-md-surface-container-low overflow-hidden transition-colors">
-            {/* Metadata Bar */}
-            <div className="p-4 border-b border-md-outline-variant bg-md-surface-container-low space-y-3 shrink-0">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[11px] font-semibold text-md-on-surface mb-1">
-                    Skill Directory Name
-                  </label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(event) => setName(event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '_'))}
-                    placeholder="e.g. data_analyzer"
-                    className="w-full bg-md-surface-container-lowest border border-md-outline-variant rounded-xl px-3 py-1.5 text-xs text-md-on-surface font-mono focus:outline-none focus:border-md-primary focus:ring-1 focus:ring-md-primary transition-colors"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-md-on-surface mb-1">
-                    Description / Purpose
-                  </label>
-                  <input
-                    type="text"
-                    value={description}
-                    onChange={(event) => setDescription(event.target.value)}
-                    placeholder="Brief description of when this skill triggers..."
-                    className="w-full bg-md-surface-container-lowest border border-md-outline-variant rounded-xl px-3 py-1.5 text-xs text-md-on-surface focus:outline-none focus:border-md-primary focus:ring-1 focus:ring-md-primary transition-colors"
-                  />
-                </div>
-              </div>
-
-              {/* Tab Selector */}
-              <div className="flex items-center justify-between pt-1">
-                <span className="text-[11px] font-bold text-md-on-surface-variant uppercase tracking-wider flex items-center gap-1.5">
-                  <FileText className="w-3.5 h-3.5 text-md-primary" /> SKILL.md Content
-                </span>
-
-                <div className="flex bg-md-surface-container-high border border-md-outline-variant rounded-lg p-0.5 text-xs">
-                  <button
-                    onClick={() => setActiveEditorTab('editor')}
-                    className={`px-3 py-1 rounded-md font-medium text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
-                      activeEditorTab === 'editor' 
-                        ? 'bg-md-primary text-md-on-primary font-semibold shadow-xs' 
-                        : 'text-md-on-surface-variant hover:text-md-on-surface'
-                    }`}
-                  >
-                    <FileCode className="w-3.5 h-3.5" />
-                    <span>Markdown Editor</span>
-                  </button>
-                  <button
-                    onClick={() => setActiveEditorTab('preview')}
-                    className={`px-3 py-1 rounded-md font-medium text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
-                      activeEditorTab === 'preview' 
-                        ? 'bg-md-primary text-md-on-primary font-semibold shadow-xs' 
-                        : 'text-md-on-surface-variant hover:text-md-on-surface'
-                    }`}
-                  >
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>Live Preview</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Content Area */}
-            <div className="flex-1 overflow-y-auto p-4 bg-md-surface transition-colors">
-              {activeEditorTab === 'editor' ? (
-                <textarea
-                  value={instructions}
-                  onChange={(event) => setInstructions(event.target.value)}
-                  placeholder="# Skill Instructions&#10;&#10;Detailed workflows, parameters, and constraints will sync here from the agent or you can type directly..."
-                  spellCheck={false}
-                  className="w-full h-full min-h-[450px] bg-md-surface-container-lowest border border-md-outline-variant rounded-xl p-4 font-mono text-[12px] text-md-on-surface placeholder:text-md-on-surface-variant/70 focus:outline-none focus:border-md-primary focus:ring-1 focus:ring-md-primary resize-none leading-relaxed transition-colors"
-                />
-              ) : (
-                <div className="prose prose-zinc dark:prose-invert max-w-none text-xs leading-relaxed bg-md-surface-container-lowest p-6 rounded-xl border border-md-outline-variant text-md-on-surface">
-                  <ReactMarkdown 
-                    remarkPlugins={[remarkGfm, remarkMath]} 
-                    rehypePlugins={[rehypeKatex]}
-                    components={markdownComponents}
-                  >
-                    {instructions || '*No instructions written yet.*'}
-                  </ReactMarkdown>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 };

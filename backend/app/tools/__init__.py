@@ -22,6 +22,7 @@ from backend.app.tools.builtins.task_tools import (
 )
 from backend.app.tools.builtins.tool_management_tools import (
     activate_tool,
+    get_tool_source,
     verify_tool,
 )
 from backend.app.tools.builtins.web_tools import fetch_url, web_search
@@ -44,6 +45,7 @@ tool_registry.register_builtin(fetch_url)
 tool_registry.register_builtin(load_skill)
 tool_registry.register_builtin(verify_tool)
 tool_registry.register_builtin(activate_tool)
+tool_registry.register_builtin(get_tool_source)
 tool_registry.register_builtin(create_or_update_skill)
 tool_registry.register_builtin(list_available_skills)
 

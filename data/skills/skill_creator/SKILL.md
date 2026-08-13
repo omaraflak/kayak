@@ -37,4 +37,5 @@ Clear overview of the capability or workflow.
 ## Best Practices for Authoring Skills
 1. **Concise & Actionable**: Agents consume skills into their context window. Avoid fluff; provide clear, direct imperatives.
 2. **Include Concrete Examples**: Code snippets, CLI invocations, or expected schemas help models reproduce workflows accurately.
-3. **Live Studio Sync**: Call `create_or_update_skill(name=..., description=..., instructions=...)` to draft and sync the skill directly into the user's live Studio Editor so the user can review, edit, and click "Save Skill".
+3. **Saving**: Call `create_or_update_skill(name=..., description=..., instructions=...)` to write the skill to disk. It takes effect immediately, and the user can review or hand-edit it afterwards under the Skills tab.
+4. **Editing an Existing Skill**: Call `load_skill(skill_name)` first and revise what it returns. Rewriting from memory silently discards any edits the user has made since the skill was created.

@@ -18,6 +18,8 @@ import {
 interface ChatViewProps {
   conversationId: string | null;
   agents: AgentConfig[];
+  /** Agent to preselect in the composer when starting a new conversation. */
+  initialDraftAgentId?: string | null;
   onCreateConversation: (data: { title?: string; agent_id: string; isolated_container: boolean; initial_message?: string }) => void;
   onRefreshConversations?: () => void;
 }
@@ -25,13 +27,16 @@ interface ChatViewProps {
 export const ChatView: React.FC<ChatViewProps> = ({ 
   conversationId, 
   agents,
+  initialDraftAgentId,
   onCreateConversation,
   onRefreshConversations
 }) => {
   const [conversation, setConversation] = useState<Conversation | null>(null);
 
   // Draft mode state (when conversationId is null)
-  const [draftAgentId, setDraftAgentId] = useState<string>(agents[0]?.id || 'general');
+  const [draftAgentId, setDraftAgentId] = useState<string>(
+    initialDraftAgentId || agents[0]?.id || 'general'
+  );
   const [draftUseContainer, setDraftUseContainer] = useState<boolean>(false);
   const [draftInput, setDraftInput] = useState<string>('');
   const [isCreating, setIsCreating] = useState<boolean>(false);
@@ -59,6 +64,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
       setDraftAgentId(agents[0].id);
     }
   }, [agents]);
+
+  // Arriving from a "chat with this agent" link preselects that agent.
+  useEffect(() => {
+    if (initialDraftAgentId) setDraftAgentId(initialDraftAgentId);
+  }, [initialDraftAgentId]);
 
   // Helper: extract HF model id from an agent model string like "vllm/Org/Model"
   const getVllmModelId = useCallback((model: string): string | null => {

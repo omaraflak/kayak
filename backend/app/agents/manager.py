@@ -62,6 +62,7 @@ DEFAULT_AGENTS: List[AgentConfig] = [
         allowed_tools=[
             "verify_tool",
             "activate_tool",
+            "get_tool_source",
             "read_file",
             "write_file",
             "edit_file",
