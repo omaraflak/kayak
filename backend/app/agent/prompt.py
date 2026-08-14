@@ -16,7 +16,11 @@ def build_system_prompt(
     # 1. Base Agent Persona & System Prompt
     parts.append(agent_config.system_prompt.strip())
 
-    # 2. Environment & Execution Context
+    # 2. Environment & Execution Context. These facts exist because their absence
+    # was expensive: an agent once spent a third of its step budget scanning the
+    # filesystem for uploads, timing out apt-get, and re-loading data in fresh
+    # processes -- all avoidable with the lines below.
+    allowed_tools = set(agent_config.allowed_tools)
     parts.append("\n## Environment Context")
     if container_id:
         parts.append(
@@ -25,11 +29,31 @@ def build_system_prompt(
         parts.append(
             "- Workspace: Mounted at `/workspace` with full root shell execution permissions."
         )
+        parts.append(
+            "- Files the user uploads are in the workspace root. Look there first"
+            + (" (`list_directory` or `find_files`)." if "find_files" in allowed_tools else ".")
+        )
+        parts.append(
+            "- Missing Python packages: install with `pip install <packages>` (one call,"
+            " all packages). Do not use apt-get; it is slow enough to time out."
+        )
     else:
         ws_str = str(workspace_dir.resolve()) if workspace_dir else "Local"
         parts.append(f"- Workspace Directory: `{ws_str}`")
         parts.append(
             "- Mode: Host execution mode. Relative file paths are resolved relative to this workspace directory."
+        )
+    if "run_command" in allowed_tools:
+        parts.append(
+            "- Every `run_command` call is a fresh shell: variables and working"
+            " directory do not persist between calls, only files do. The default"
+            " timeout is 60s; pass `timeout` (up to 600) for slower commands."
+        )
+    if "run_python" in allowed_tools:
+        parts.append(
+            "- `run_python` is one persistent Python session: variables, imports, and"
+            " loaded data stay alive across calls. Use it for iterative work instead"
+            " of `python3 -c` one-liners, and load expensive data only once."
         )
 
     # 3. Preloaded Skills (Full instructions)

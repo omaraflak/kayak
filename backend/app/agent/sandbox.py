@@ -9,9 +9,16 @@ while a single agent waits on a build or a test run.
 import asyncio
 import json
 from pathlib import Path
+import time
 from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
 import docker
 from docker.errors import NotFound
+from backend.app.agent.python_repl import (
+    PYTHON_REPL_DRIVER,
+    demux_docker_frames,
+    format_execution_result,
+    scan_for_response,
+)
 from backend.app.config import settings
 from backend.app.docker_utils import DockerPathResolver
 
@@ -19,6 +26,20 @@ T = TypeVar("T")
 
 # Exit status used by `timeout --signal=KILL` when it terminates the child.
 _TIMEOUT_EXIT_CODE = 137
+
+#: Interactive shell setup for the user-facing terminal: a colored prompt and
+#: color-enabled core utilities, which the slim images do not configure.
+_SHELL_RCFILE = """\
+export TERM=xterm-256color
+alias ls='ls --color=auto'
+alias grep='grep --color=auto'
+PS1='\\[\\e[1;36m\\]container\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]$ '
+"""
+
+
+def _shell_quote(text: str) -> str:
+    """Single-quotes a string for safe embedding in a POSIX shell command."""
+    return "'" + text.replace("'", "'\\''") + "'"
 
 
 def _build_volume_mounts(workspace_dir: Path) -> Dict[str, Dict[str, str]]:
@@ -130,6 +151,77 @@ class SandboxShell:
             pass
 
 
+class PythonSession:
+    """A persistent Python interpreter running inside a sandbox container.
+
+    Wraps the stdin/stdout socket of the REPL driver exec. Everything here
+    blocks and must run on a worker thread.
+    """
+
+    def __init__(self, raw_socket: Any):
+        self._sock = raw_socket._sock if hasattr(raw_socket, "_sock") else raw_socket
+        self._raw = b""
+        self._text = ""
+        self.dead = False
+
+    def execute(self, code: str, timeout: int) -> str:
+        """Runs code in the shared interpreter and returns its output.
+
+        Raises:
+            TimeoutError: If no response arrives in time. The session must be
+                discarded afterwards: the interpreter is still busy, and a later
+                request would receive this one's answer.
+            ConnectionError: If the interpreter process has exited.
+        """
+        request = json.dumps({"code": code}) + "\n"
+        try:
+            self._sock.sendall(request.encode("utf-8"))
+        except OSError as error:
+            self.dead = True
+            raise ConnectionError(str(error))
+
+        deadline = time.monotonic() + timeout
+        leaked = ""
+        while True:
+            response, newly_leaked, self._text = scan_for_response(self._text)
+            leaked += newly_leaked
+            if response is not None:
+                return format_execution_result(leaked, response)
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.dead = True
+                raise TimeoutError(f"no response after {timeout} seconds")
+
+            self._sock.settimeout(remaining)
+            try:
+                chunk = self._sock.recv(65536)
+            except TimeoutError:
+                self.dead = True
+                raise
+            except OSError as error:
+                self.dead = True
+                raise ConnectionError(str(error))
+            if not chunk:
+                self.dead = True
+                raise ConnectionError("the interpreter process exited")
+
+            self._raw += chunk
+            payload, self._raw = demux_docker_frames(self._raw)
+            self._text += payload.decode("utf-8", errors="replace")
+
+    def close(self) -> None:
+        try:
+            self._sock.shutdown(2)  # SHUT_RDWR
+        except OSError:
+            pass
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+        self.dead = True
+
+
 class SandboxManager:
     """Manages Docker sandbox containers for isolated agent execution."""
 
@@ -139,6 +231,8 @@ class SandboxManager:
         # Containers started by this process, so shutdown can clean up after itself
         # instead of leaving orphans running until the next manual docker prune.
         self._owned_containers: Set[str] = set()
+        # One persistent Python interpreter per container, created on first use.
+        self._python_sessions: Dict[str, PythonSession] = {}
         self._init_client()
 
     def _init_client(self):
@@ -368,10 +462,19 @@ class SandboxManager:
         client = self._require_client()
 
         def _open() -> SandboxShell:
-            self._get_running_container_sync(container_id)
+            container = self._get_running_container_sync(container_id)
+            # The slim base images ship a colorless bash: no prompt colors, no
+            # `ls` colors. A tiny rcfile turns both on for the user's terminal.
+            container.exec_run(
+                cmd=[
+                    "/bin/sh",
+                    "-c",
+                    f"printf %s {_shell_quote(_SHELL_RCFILE)} > /tmp/.kayak_bashrc",
+                ]
+            )
             exec_id = client.api.exec_create(
                 container_id,
-                cmd=["/bin/bash", "-l"],
+                cmd=["/bin/bash", "--rcfile", "/tmp/.kayak_bashrc", "-i"],
                 stdin=True,
                 stdout=True,
                 stderr=True,
@@ -387,8 +490,75 @@ class SandboxManager:
 
         return await self._run_blocking(_open)
 
+    def _discard_python_session(self, container_id: str) -> None:
+        session = self._python_sessions.pop(container_id, None)
+        if session:
+            session.close()
+
+    def _open_python_session_sync(self, container_id: str) -> PythonSession:
+        """Starts the REPL driver in the container and connects to it."""
+        client = self._require_client()
+        container = self._get_running_container_sync(container_id)
+
+        # The driver is written into the container rather than mounted, so it
+        # works no matter which image the sandbox uses.
+        container.exec_run(
+            cmd=[
+                "python3",
+                "-c",
+                f"open('/tmp/.kayak_repl.py', 'w').write({PYTHON_REPL_DRIVER!r})",
+            ]
+        )
+
+        exec_id = client.api.exec_create(
+            container_id,
+            cmd=["python3", "-u", "/tmp/.kayak_repl.py"],
+            stdin=True,
+            stdout=True,
+            stderr=True,
+            tty=False,
+            workdir="/workspace",
+        )["Id"]
+        raw_socket = client.api.exec_start(exec_id, socket=True, tty=False)
+        return PythonSession(raw_socket)
+
+    async def run_python_code(
+        self, container_id: str, code: str, timeout: int = 60
+    ) -> str:
+        """Runs Python in the container's persistent interpreter session.
+
+        Variables, imports, and loaded data survive between calls -- the point
+        is that expensive setup is paid once, not on every step. A timeout
+        kills the session (the interpreter is still busy and cannot be reused),
+        and the next call transparently starts a fresh one.
+        """
+        session = self._python_sessions.get(container_id)
+        if session is None or session.dead:
+            self._discard_python_session(container_id)
+            session = await self._run_blocking(
+                lambda: self._open_python_session_sync(container_id)
+            )
+            self._python_sessions[container_id] = session
+
+        try:
+            return await self._run_blocking(lambda: session.execute(code, timeout))
+        except TimeoutError:
+            self._discard_python_session(container_id)
+            return (
+                f"Error: Execution timed out after {timeout} seconds and the Python"
+                " session was restarted; its variables are lost. Re-run your setup,"
+                " and put long-running work in a script via start_background_task."
+            )
+        except ConnectionError as error:
+            self._discard_python_session(container_id)
+            return (
+                f"Error: The Python session ended unexpectedly ({error}). A fresh"
+                " session will start on your next call; its variables are lost."
+            )
+
     async def stop_and_remove_sandbox(self, container_id: str):
         """Stops and removes the container."""
+        self._discard_python_session(container_id)
         if not self._docker_available or not self._client:
             return
 

@@ -84,6 +84,56 @@ export function workspaceRelativePath(src: string | null | undefined): string | 
   return path || null;
 }
 
+/** Prism grammar for a file, so previews get the same highlighting as chat code. */
+const PRISM_BY_EXTENSION: Record<string, string> = {
+  py: 'python',
+  js: 'javascript',
+  jsx: 'javascript',
+  mjs: 'javascript',
+  ts: 'typescript',
+  tsx: 'typescript',
+  json: 'json',
+  md: 'markdown',
+  markdown: 'markdown',
+  html: 'markup',
+  htm: 'markup',
+  xml: 'markup',
+  svg: 'markup',
+  css: 'css',
+  sh: 'bash',
+  bash: 'bash',
+  zsh: 'bash',
+  yml: 'yaml',
+  yaml: 'yaml',
+  sql: 'sql',
+};
+
+export function prismLanguageForFile(name: string): string {
+  const base = name.toLowerCase().split('/').pop() || '';
+  const extension = base.includes('.') ? base.split('.').pop() || '' : '';
+  return PRISM_BY_EXTENSION[extension] || 'text';
+}
+
+/** Width bounds for the container side panel. */
+export const PANEL_MIN_WIDTH = 300;
+export const PANEL_MAX_WIDTH = 800;
+export const PANEL_DEFAULT_WIDTH = 400;
+
+/** Clamps a panel width into its usable range. */
+export function clampPanelWidth(width: number): number {
+  return Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, width));
+}
+
+/**
+ * Restores a persisted panel width, falling back to the default when the
+ * stored value is missing or nonsense (corrupt storage, older formats).
+ */
+export function restorePanelWidth(raw: string | null): number {
+  const parsed = Number(raw);
+  if (!raw || !Number.isFinite(parsed) || parsed <= 0) return PANEL_DEFAULT_WIDTH;
+  return clampPanelWidth(parsed);
+}
+
 /** Tools whose calls leave a file behind that is worth surfacing in the chat. */
 const FILE_WRITING_TOOLS = new Set(['write_file', 'edit_file']);
 

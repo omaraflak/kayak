@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PANEL_DEFAULT_WIDTH,
+  PANEL_MAX_WIDTH,
+  PANEL_MIN_WIDTH,
   breadcrumbs,
+  clampPanelWidth,
   extractWrittenFiles,
   fileKind,
   formatFileSize,
   joinPath,
   parentPath,
+  prismLanguageForFile,
+  restorePanelWidth,
   workspaceRelativePath,
 } from './workspaceFiles';
 import { TurnToolCall } from './conversationTurns';
@@ -83,6 +89,41 @@ describe('workspaceRelativePath', () => {
     expect(workspaceRelativePath('')).toBeNull();
     expect(workspaceRelativePath('#section')).toBeNull();
     expect(workspaceRelativePath(undefined)).toBeNull();
+  });
+});
+
+describe('prismLanguageForFile', () => {
+  it('maps common code files to their grammar', () => {
+    expect(prismLanguageForFile('main.py')).toBe('python');
+    expect(prismLanguageForFile('app.tsx')).toBe('typescript');
+    expect(prismLanguageForFile('index.HTML')).toBe('markup');
+    expect(prismLanguageForFile('notes.md')).toBe('markdown');
+    expect(prismLanguageForFile('deploy.sh')).toBe('bash');
+  });
+
+  it('falls back to plain text for everything else', () => {
+    expect(prismLanguageForFile('data.csv')).toBe('text');
+    expect(prismLanguageForFile('README')).toBe('text');
+  });
+
+  it('uses only the basename of a nested path', () => {
+    expect(prismLanguageForFile('src/deep/module.py')).toBe('python');
+  });
+});
+
+describe('panel width persistence', () => {
+  it('clamps dragging into the usable range', () => {
+    expect(clampPanelWidth(50)).toBe(PANEL_MIN_WIDTH);
+    expect(clampPanelWidth(5000)).toBe(PANEL_MAX_WIDTH);
+    expect(clampPanelWidth(500)).toBe(500);
+  });
+
+  it('restores a stored width and survives garbage', () => {
+    expect(restorePanelWidth('520')).toBe(520);
+    expect(restorePanelWidth(null)).toBe(PANEL_DEFAULT_WIDTH);
+    expect(restorePanelWidth('not-a-number')).toBe(PANEL_DEFAULT_WIDTH);
+    expect(restorePanelWidth('-40')).toBe(PANEL_DEFAULT_WIDTH);
+    expect(restorePanelWidth('99999')).toBe(PANEL_MAX_WIDTH);
   });
 });
 

@@ -27,6 +27,8 @@ DEFAULT_AGENTS: List[AgentConfig] = [
         temperature=0.2,
         system_prompt=(
             "You are Kayak's Autonomous Coding Engineer. You have full access to workspace file operations, command line tools, and background task management.\n"
+            "Work efficiently -- tool calls are a budget: locate inputs with list_directory or find_files, explore and prototype in run_python where state persists between calls, "
+            "and write the final deliverable as a script file early, then iterate on it with edit_file.\n"
             "Always inspect directory structure and files before making edits. Use precise search-and-replace for file edits. Test your changes by running commands or automated test suites.\n"
             "If a task is long-running (such as starting a server or long build), use start_background_task and monitor it."
         ),
@@ -35,7 +37,9 @@ DEFAULT_AGENTS: List[AgentConfig] = [
             "write_file",
             "edit_file",
             "list_directory",
+            "find_files",
             "run_command",
+            "run_python",
             "start_background_task",
             "get_task_status",
             "send_task_input",
@@ -47,7 +51,7 @@ DEFAULT_AGENTS: List[AgentConfig] = [
         ],
         allowed_skills=["coding_best_practices", "test_driven_development"],
         preloaded_skills=["coding_best_practices"],
-        tool_permissions={"run_command": "auto_approve"},
+        tool_permissions={"run_command": "auto_approve", "run_python": "auto_approve"},
     ),
     AgentConfig(
         id="tool_architect",

@@ -1,10 +1,12 @@
 from backend.app.tools.builtins.command_tools import run_command
 from backend.app.tools.builtins.file_tools import (
     edit_file,
+    find_files,
     list_directory,
     read_file,
     write_file,
 )
+from backend.app.tools.builtins.python_tools import run_python
 from backend.app.tools.builtins.skill_management_tools import (
     create_or_update_skill,
     list_available_skills,
@@ -33,7 +35,9 @@ tool_registry.register_builtin(read_file)
 tool_registry.register_builtin(write_file)
 tool_registry.register_builtin(edit_file)
 tool_registry.register_builtin(list_directory)
+tool_registry.register_builtin(find_files)
 tool_registry.register_builtin(run_command)
+tool_registry.register_builtin(run_python)
 tool_registry.register_builtin(start_background_task)
 tool_registry.register_builtin(get_task_status)
 tool_registry.register_builtin(send_task_input)

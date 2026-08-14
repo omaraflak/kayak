@@ -1,13 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { WorkspaceFileEntry } from '../types';
 import { api } from '../api/client';
+import { CodeBlock } from './CodeBlock';
 import { ContainerTerminal } from './ContainerTerminal';
 import {
   breadcrumbs,
+  clampPanelWidth,
   fileKind,
   formatFileSize,
   joinPath,
   parentPath,
+  prismLanguageForFile,
+  restorePanelWidth,
 } from './workspaceFiles';
 import {
   ArrowLeft,
@@ -36,6 +40,8 @@ export type WorkspaceTab = 'files' | 'terminal';
 
 /** Largest file the text preview will fetch; anything bigger is download-only. */
 const MAX_TEXT_PREVIEW_BYTES = 512 * 1024;
+
+const PANEL_WIDTH_STORAGE_KEY = 'kayak_container_panel_width';
 
 interface WorkspacePanelProps {
   conversationId: string;
@@ -80,6 +86,38 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  // Width is draggable and remembered across sessions.
+  const [panelWidth, setPanelWidth] = useState(() =>
+    restorePanelWidth(window.localStorage.getItem(PANEL_WIDTH_STORAGE_KEY))
+  );
+
+  const handleResizeStart = (event: React.PointerEvent) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = panelWidth;
+    let width = startWidth;
+
+    // Without this, dragging sweeps a text selection across the page.
+    document.body.style.userSelect = 'none';
+
+    const onMove = (move: PointerEvent) => {
+      // The handle is on the left edge, so dragging left grows the panel.
+      width = clampPanelWidth(startWidth + (startX - move.clientX));
+      setPanelWidth(width);
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      document.body.style.userSelect = '';
+      try {
+        window.localStorage.setItem(PANEL_WIDTH_STORAGE_KEY, String(width));
+      } catch {
+        /* private browsing modes can reject storage writes */
+      }
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp, { once: true });
+  };
 
   const refreshListing = useCallback(async () => {
     try {
@@ -161,7 +199,18 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   const previewUrl = preview ? api.workspaceFileUrl(conversationId, preview) : '';
 
   return (
-    <aside className="w-[400px] shrink-0 border-l border-md-outline-variant bg-md-surface flex flex-col h-full min-h-0 transition-colors">
+    <aside
+      style={{ width: panelWidth }}
+      className="relative shrink-0 border-l border-md-outline-variant bg-md-surface flex flex-col h-full min-h-0 transition-colors"
+    >
+      {/* Drag handle on the leading edge: a wide hit area with a thin visual. */}
+      <div
+        onPointerDown={handleResizeStart}
+        className="group absolute left-0 inset-y-0 w-2.5 -ml-1.5 cursor-col-resize z-10 flex justify-end"
+        title="Drag to resize"
+      >
+        <div className="w-1 h-full group-hover:bg-md-primary/40 group-active:bg-md-primary/60 transition-colors" />
+      </div>
       {/* Tab bar */}
       <div className="h-12 px-3 border-b border-md-outline-variant flex items-center justify-between shrink-0 bg-md-surface-container-low">
         <div className="flex items-center gap-1">
@@ -351,9 +400,13 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
               ) : previewError ? (
                 <p className="p-4 text-[11px] text-md-error leading-relaxed">{previewError}</p>
               ) : (
-                <pre className="p-3 text-[11px] font-mono text-md-on-surface whitespace-pre-wrap break-words leading-relaxed">
-                  {previewText}
-                </pre>
+                <div className="p-2 [&_pre]:whitespace-pre-wrap [&_pre]:break-words">
+                  <CodeBlock
+                    code={previewText || ''}
+                    language={prismLanguageForFile(preview)}
+                    showHeader={false}
+                  />
+                </div>
               ))}
             {previewKind === 'binary' && (
               <div className="p-6 text-center space-y-2">

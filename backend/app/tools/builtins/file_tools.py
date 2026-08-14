@@ -6,6 +6,8 @@ and sandbox implementations therefore resolve symlinks and reject anything landi
 outside the workspace, rather than trusting a relative-looking path to stay put.
 """
 
+import fnmatch
+import os
 from pathlib import Path
 from typing import List, Optional
 from backend.app.agent.sandbox import sandbox_manager
@@ -122,6 +124,69 @@ def _format_dir_entries(items: List[Path], path_str: str) -> str:
     if truncated:
         output.append(f"... [{len(items) - MAX_DIR_ENTRIES} more entries omitted]")
     return "\n".join(output)
+
+
+MAX_FIND_RESULTS = 200
+
+
+def iter_matching_files(root: Path, pattern: str) -> List[str]:
+    """Recursively finds files matching a glob pattern, case-insensitively.
+
+    Case-insensitivity is the point: the coding agent once burned four tool
+    calls scanning the entire filesystem for `*.jpg` while the user's uploads
+    sat in the workspace as `*.JPG`.
+
+    The pattern is matched against the bare file name, or against the full
+    workspace-relative path when it contains a slash.
+
+    Returns:
+        List[str]: Sorted workspace-relative paths of every match.
+    """
+    lowered = pattern.lower()
+    match_full_path = "/" in lowered
+    matches: List[str] = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            relative = str((Path(dirpath) / name).relative_to(root))
+            candidate = relative.lower() if match_full_path else name.lower()
+            if fnmatch.fnmatchcase(candidate, lowered):
+                matches.append(relative)
+    return sorted(matches)
+
+
+@tool_metadata(category=ToolCategory.FILESYSTEM, risk=ToolRisk.LOW)
+async def find_files(
+    pattern: str,
+    path: Optional[str] = ".",
+    workspace_dir: Optional[Path] = None,
+    container_id: Optional[str] = None,
+) -> str:
+    """Recursively finds workspace files whose names match a glob pattern, ignoring case.
+
+    Prefer this over `find` or `ls` chains: it searches the whole workspace tree in one
+    call and `*.jpg` also matches `.JPG`. Files the user uploads are in the workspace.
+
+    Args:
+        pattern: Glob pattern, e.g. '*.py' or 'data/*.csv'. Case-insensitive.
+        path: Directory to search from, relative to the workspace root.
+    """
+    try:
+        root = resolve_workspace_path(path or ".", workspace_dir)
+    except PathOutsideWorkspaceError as e:
+        return str(e)
+
+    if not root.is_dir():
+        return f"Error: Directory '{path}' does not exist."
+
+    matches = iter_matching_files(root, pattern)
+    if not matches:
+        return f"No files matching '{pattern}' under '{path or '.'}'."
+
+    shown = matches[:MAX_FIND_RESULTS]
+    lines = list(shown)
+    if len(matches) > MAX_FIND_RESULTS:
+        lines.append(f"... [{len(matches) - MAX_FIND_RESULTS} more matches omitted]")
+    return "\n".join(lines)
 
 
 @tool_metadata(category=ToolCategory.FILESYSTEM, risk=ToolRisk.LOW)

@@ -193,14 +193,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high border-transparent'
                 }`}
               >
-                <div className="flex items-center space-x-2.5 truncate min-w-0 pr-2">
-                  <div className="shrink-0">
-                    {conversation.isolated_container ? (
-                      <span className="text-xs" title="Isolated Docker Sandbox">🐳</span>
-                    ) : (
-                      <Cpu className={`w-3.5 h-3.5 ${isActive ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
-                    )}
-                  </div>
+                <div className="flex items-center truncate min-w-0 pr-2">
                   <div className="truncate">
                     <div className="truncate text-xs font-semibold text-md-on-surface">{conversation.title}</div>
                     <div className="text-[10px] text-md-on-surface-variant flex items-center gap-1.5 mt-0.5 font-mono">
