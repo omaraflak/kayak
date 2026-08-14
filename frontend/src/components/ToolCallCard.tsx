@@ -18,7 +18,7 @@ import { CodeBlock } from './CodeBlock';
 
 interface ToolCallCardProps {
   name: string;
-  argumentsStr: string;
+  argumentsStr?: string;
   output?: string;
   isExecuting?: boolean;
   isError?: boolean;
@@ -26,12 +26,15 @@ interface ToolCallCardProps {
 
 export const ToolCallCard: React.FC<ToolCallCardProps> = ({
   name,
-  argumentsStr,
+  argumentsStr: rawArguments,
   output,
   isExecuting = false,
   isError = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  // Defensive: an event that arrives without arguments must degrade to an empty
+  // preview, not crash the transcript. One undefined here blanked the whole page.
+  const argumentsStr = rawArguments ?? '';
 
   const getToolIcon = (toolName: string) => {
     switch (toolName) {

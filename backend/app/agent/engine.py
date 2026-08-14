@@ -103,6 +103,9 @@ async def _resolve_session_context(
         "container_id": effective_container_id,
         "task_manager": task_manager,
         "agent_depth": depth,
+        # Which profile is running this turn, so tools like spawn_subagent can
+        # enforce per-agent policy rather than trusting the model's own claims.
+        "caller_agent_id": agent_config.id,
     }
 
     session = _SessionContext(

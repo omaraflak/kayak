@@ -17,9 +17,17 @@ import {
   isPersistedTurn,
   lastAssistantTurnIndex,
 } from './conversationTurns';
+import { extractWrittenFiles, workspaceRelativePath } from './workspaceFiles';
+import {
+  ActiveToolCalls,
+  applyToolDelta,
+  applyToolExecuting,
+  applyToolResult,
+} from './toolCallStream';
 import {
   Send,
   Bot,
+  FileText,
   Loader2,
   Sparkles,
   Square,
@@ -66,6 +74,8 @@ export interface ChatPaneProps {
    * this the sidebar could never show activity while it was actually happening.
    */
   onActivityChange?: (isActive: boolean) => void;
+  /** Opens a workspace file in the side-panel preview (from a chip in the chat). */
+  onOpenFile?: (path: string) => void;
 }
 
 export const ChatPane: React.FC<ChatPaneProps> = ({
@@ -85,6 +95,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   onConversationUpdated,
   onOpenConversation,
   onActivityChange,
+  onOpenFile,
 }) => {
   const dialog = useDialog();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -92,9 +103,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [streamingTokenText, setStreamingTokenText] = useState('');
   const [streamingThinkingText, setStreamingThinkingText] = useState('');
-  const [activeToolExecutions, setActiveToolExecutions] = useState<
-    Record<string, { name: string; args: string; output?: string; isError?: boolean }>
-  >({});
+  const [activeToolExecutions, setActiveToolExecutions] = useState<ActiveToolCalls>({});
 
   const [pendingApprovals, setPendingApprovals] = useState<ToolApprovalRequest[]>([]);
   const [streamWarning, setStreamWarning] = useState<string | null>(null);
@@ -205,30 +214,11 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     },
     onToolCallDelta: (delta) => {
       setIsSending(true);
-      setActiveToolExecutions((prev) => {
-        const existing = prev[delta.id] || { name: delta.name || '', args: '' };
-        const combinedArgs = existing.args + (delta.arguments || '');
-        const updatedName = delta.name || existing.name;
-
-        return {
-          ...prev,
-          [delta.id]: {
-            ...existing,
-            name: updatedName,
-            args: combinedArgs,
-          },
-        };
-      });
+      setActiveToolExecutions((prev) => applyToolDelta(prev, delta));
     },
     onToolCallExecuting: (data) => {
       setIsSending(true);
-      setActiveToolExecutions((prev) => ({
-        ...prev,
-        [data.id]: {
-          name: data.name,
-          args: data.arguments,
-        },
-      }));
+      setActiveToolExecutions((prev) => applyToolExecuting(prev, data));
     },
     onToolApprovalRequired: (request) => {
       setIsSending(true);
@@ -250,18 +240,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     },
     onToolCallResult: (data) => {
       setPendingApprovals((prev) => prev.filter((item) => item.id !== data.id));
-      setActiveToolExecutions((prev) => {
-        const existing = prev[data.id];
-        return {
-          ...prev,
-          [data.id]: {
-            ...existing,
-            name: data.name,
-            output: data.output,
-            isError: data.is_error,
-          },
-        };
-      });
+      setActiveToolExecutions((prev) => applyToolResult(prev, data));
     },
     onDone: () => {
       resetStreamState();
@@ -453,6 +432,17 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     }
   };
 
+  // Workspace-relative paths in the transcript (plot.png, /workspace/plot.png)
+  // only render if they are resolved to the endpoint that actually serves them.
+  const resolveFileUrl = useCallback(
+    (url: string) => {
+      if (!conversationId) return url;
+      const relative = workspaceRelativePath(url);
+      return relative ? api.workspaceFileUrl(conversationId, relative) : url;
+    },
+    [conversationId]
+  );
+
   // Regrouping walks the whole history; without memoization it ran on every streamed
   // token as well as every render.
   const groupedTurns = useMemo(() => groupMessagesIntoTurns(messages), [messages]);
@@ -524,7 +514,11 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
                   {/* Direct Response Text on Background without enclosing white card or icons */}
                   {turn.content && (
-                    <MarkdownContent size="comfortable" className="text-md-on-surface leading-relaxed">
+                    <MarkdownContent
+                      size="comfortable"
+                      className="text-md-on-surface leading-relaxed"
+                      resolveUrl={resolveFileUrl}
+                    >
                       {turn.content}
                     </MarkdownContent>
                   )}
@@ -533,6 +527,29 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                   {turn.toolCalls.length > 0 && (
                     <ToolCallsAccordion toolCalls={turn.toolCalls} />
                   )}
+
+                  {/* Files this turn created or modified, opened in the side panel. */}
+                  {onOpenFile &&
+                    (() => {
+                      const writtenFiles = extractWrittenFiles(turn.toolCalls);
+                      if (writtenFiles.length === 0) return null;
+                      return (
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          {writtenFiles.map((path) => (
+                            <button
+                              key={path}
+                              type="button"
+                              onClick={() => onOpenFile(path)}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono bg-md-surface-container-high text-md-on-surface border border-md-outline-variant hover:border-md-primary hover:text-md-primary transition-colors cursor-pointer"
+                              title={`Open ${path}`}
+                            >
+                              <FileText className="w-3 h-3 shrink-0" />
+                              {path.split('/').pop()}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
 
                   {/* Revealed on hover: rewrite history from this point, or fork it. */}
                   {isPersistedTurn(turn) && !isStreamingTurn && (
@@ -618,7 +635,11 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
                 {/* Streaming token text directly on background */}
                 {streamingTokenText && (
-                  <MarkdownContent size="comfortable" className="text-md-on-surface leading-relaxed">
+                  <MarkdownContent
+                    size="comfortable"
+                    className="text-md-on-surface leading-relaxed"
+                    resolveUrl={resolveFileUrl}
+                  >
                     {streamingTokenText}
                   </MarkdownContent>
                 )}

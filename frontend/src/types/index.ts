@@ -80,6 +80,24 @@ export interface AgentConfig {
   allowed_skills: string[];
   preloaded_skills: string[];
   tool_permissions: Record<string, ToolPermission>;
+  /**
+   * Agent profiles this agent may start as sub-agents. Null/undefined means only
+   * its own profile — wider delegation must be granted explicitly.
+   */
+  allowed_subagents?: string[] | null;
+}
+
+/** One entry of a conversation workspace directory. */
+export interface WorkspaceFileEntry {
+  name: string;
+  is_dir: boolean;
+  size: number;
+  modified_at: string;
+}
+
+export interface WorkspaceDirectoryListing {
+  path: string;
+  entries: WorkspaceFileEntry[];
 }
 
 export interface Skill {

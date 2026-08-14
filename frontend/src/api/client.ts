@@ -14,7 +14,8 @@ import {
   VLLMDeployRequest,
   HostCapability,
   ModelCacheInfo,
-  SettingsUpdate
+  SettingsUpdate,
+  WorkspaceDirectoryListing
 } from '../types';
 
 const API_BASE = '/api';
@@ -124,7 +125,7 @@ export const api = {
   getConversation: (id: string): Promise<{ conversation: Conversation; messages: Message[] }> =>
     fetchJSON(`${API_BASE}/conversations/${id}`),
 
-  createConversation: (data: { title?: string; agent_id: string; isolated_container?: boolean; initial_message?: string }): Promise<Conversation> =>
+  createConversation: (data: { title?: string; agent_id: string; initial_message?: string }): Promise<Conversation> =>
     fetchJSONPost(`${API_BASE}/conversations`, data),
 
   deleteConversation: (id: string): Promise<void> =>
@@ -150,6 +151,42 @@ export const api = {
 
   sendMessage: (conversationId: string, content: string): Promise<Message> =>
     fetchJSONPost(`${API_BASE}/conversations/${conversationId}/messages`, { content }),
+
+  // Conversation workspace: filesystem, uploads, and container terminal
+  listWorkspaceFiles: (conversationId: string, path = '.'): Promise<WorkspaceDirectoryListing> =>
+    fetchJSON(
+      `${API_BASE}/conversations/${conversationId}/fs?path=${encodeURIComponent(path)}`
+    ),
+
+  /** URL serving a workspace file's raw bytes, for previews and downloads. */
+  workspaceFileUrl: (conversationId: string, path: string): string =>
+    `${API_BASE}/conversations/${conversationId}/fs/file?path=${encodeURIComponent(path)}`,
+
+  /** Fetches a workspace file as text, for the text preview. */
+  readWorkspaceFileText: async (conversationId: string, path: string): Promise<string> => {
+    const res = await fetch(api.workspaceFileUrl(conversationId, path), withAuth());
+    await assertOk(res);
+    return res.text();
+  },
+
+  /**
+   * Uploads files into the workspace. Each entry's `path` is the destination
+   * relative to the workspace root, which is how folder uploads keep their shape.
+   */
+  uploadWorkspaceFiles: (
+    conversationId: string,
+    entries: Array<{ file: File; path: string }>
+  ): Promise<{ status: string; count: number }> => {
+    const form = new FormData();
+    for (const entry of entries) form.append('files', entry.file, entry.path);
+    return fetch(
+      `${API_BASE}/conversations/${conversationId}/fs/upload`,
+      withAuth({ method: 'POST', body: form })
+    ).then(async (res) => {
+      await assertOk(res);
+      return res.json();
+    });
+  },
 
   resolveToolApproval: (
     conversationId: string,

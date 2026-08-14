@@ -121,6 +121,44 @@ async def _async_generate_and_update_title(conversation_id: str, prompt: str, mo
         logger.debug("Title generation failed for %s", conversation_id, exc_info=True)
 
 
+async def _ensure_sandbox(conversation: Conversation) -> str:
+    """Makes sure the conversation's Docker container exists and is running.
+
+    Every conversation executes its tools inside a container; there is no host
+    fallback. The container can be missing even for an old conversation -- Docker
+    restarted, a manual prune, or a conversation created before containers became
+    mandatory -- so this runs before every turn, not only at creation.
+
+    A recorded container is revived rather than replaced: sub-agent conversations
+    share their parent's container, and replacing it would split them apart.
+
+    Raises:
+        RuntimeError: If Docker is unavailable or the container cannot start.
+    """
+    if conversation.container_id and await sandbox_manager.ensure_running(
+        conversation.container_id
+    ):
+        return conversation.container_id
+
+    container_id = await sandbox_manager.create_sandbox(
+        conversation_id=conversation.id,
+        workspace_dir=settings.WORKSPACES_DIR / conversation.id,
+    )
+    if container_id != conversation.container_id:
+        await update_conversation(conversation.id, container_id=container_id)
+        conversation.container_id = container_id
+    return container_id
+
+
+# Public alias for other routers (the workspace filesystem/terminal endpoints).
+ensure_sandbox = _ensure_sandbox
+
+SANDBOX_UNAVAILABLE_DETAIL = (
+    "Could not start this conversation's isolated container. Kayak runs every"
+    " agent inside Docker, so Docker must be installed and running."
+)
+
+
 def _record_in_turn_buffer(buffer: Dict[str, Any], event: Dict[str, Any]) -> None:
     """Accumulates an event into the replay buffer for the in-flight turn.
 
@@ -148,6 +186,21 @@ async def _run_agent_turn(conversation_id: str, agent_id: str) -> None:
     try:
         conversation = await get_conversation(conversation_id)
         if not conversation:
+            return
+
+        try:
+            await _ensure_sandbox(conversation)
+        except Exception as error:
+            logger.warning(
+                "Could not provide a sandbox for conversation %s: %s",
+                conversation_id,
+                error,
+            )
+            await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
+            _broadcast_event(
+                conversation_id,
+                {"type": "error", "error": f"{SANDBOX_UNAVAILABLE_DETAIL} ({error})"},
+            )
             return
 
         workspace_directory = settings.WORKSPACES_DIR / conversation_id
@@ -211,14 +264,29 @@ async def shutdown_active_turns() -> None:
 
 @router.post("", response_model=Conversation)
 async def create_new_conversation(request: CreateConversationRequest) -> Conversation:
-    """Creates a new conversation record immediately and optionally initializes an isolated Docker sandbox."""
+    """Creates a new conversation bound to its own isolated Docker container.
+
+    Raises:
+        HTTPException: 503 when the container cannot be started. Failing here is
+            deliberate: falling back to running tools on the host would silently
+            drop the isolation the platform promises.
+    """
     title = request.title or _clean_initial_title(request.initial_message)
 
     conversation = await create_conversation(
         title=title or "New Conversation",
         agent_id=request.agent_id,
-        isolated_container=request.isolated_container,
+        isolated_container=True,
     )
+
+    try:
+        await _ensure_sandbox(conversation)
+    except Exception as error:
+        logger.warning("Failed to create Docker sandbox: %s", error)
+        await delete_conversation(conversation.id)
+        raise HTTPException(
+            status_code=503, detail=f"{SANDBOX_UNAVAILABLE_DETAIL} ({error})"
+        )
 
     # Launch background LLM title generation without blocking UI response. It runs on
     # the conversation's own model, so no title is written if that cannot be resolved.
@@ -229,19 +297,6 @@ async def create_new_conversation(request: CreateConversationRequest) -> Convers
                 conversation.id, request.initial_message, title_model
             )
         )
-
-    workspace_directory = settings.WORKSPACES_DIR / conversation.id
-
-    # If isolated container requested, spin up Docker sandbox
-    if request.isolated_container:
-        try:
-            container_id = await sandbox_manager.create_sandbox(
-                conversation_id=conversation.id, workspace_dir=workspace_directory
-            )
-            await update_conversation(conversation.id, container_id=container_id)
-            conversation.container_id = container_id
-        except Exception as error:
-            logger.warning("Failed to create Docker sandbox: %s", error)
 
     # If initial message provided, add and trigger agent
     if request.initial_message:
@@ -453,7 +508,7 @@ async def branch_from_message(
     branch = await create_conversation(
         title=source.title,
         agent_id=source.agent_id,
-        isolated_container=source.isolated_container,
+        isolated_container=True,
         branched_from_conversation_id=source.id,
         branched_from_message_id=request.message_id,
     )
@@ -467,16 +522,14 @@ async def branch_from_message(
     # would be reasoning about a workspace that does not exist.
     await _copy_workspace(conversation_id, branch.id)
 
-    if source.isolated_container:
-        try:
-            container_id = await sandbox_manager.create_sandbox(
-                conversation_id=branch.id,
-                workspace_dir=settings.WORKSPACES_DIR / branch.id,
-            )
-            await update_conversation(branch.id, container_id=container_id)
-            branch.container_id = container_id
-        except Exception as error:
-            logger.warning("Failed to create sandbox for branch %s: %s", branch.id, error)
+    try:
+        await _ensure_sandbox(branch)
+    except Exception as error:
+        logger.warning("Failed to create sandbox for branch %s: %s", branch.id, error)
+        await delete_conversation(branch.id)
+        raise HTTPException(
+            status_code=503, detail=f"{SANDBOX_UNAVAILABLE_DETAIL} ({error})"
+        )
 
     return branch
 

@@ -154,7 +154,6 @@ export const App: React.FC = () => {
   const handleCreateConversation = async (data: {
     title?: string;
     agent_id: string;
-    isolated_container: boolean;
     initial_message?: string;
   }) => {
     try {
@@ -165,7 +164,15 @@ export const App: React.FC = () => {
       setCurrentTab('chat');
       navigateTo('chat', newConv.id);
     } catch (err) {
-      console.error('Failed to create conversation:', err);
+      // Creation genuinely fails now when Docker is down -- every conversation
+      // needs its container -- so the reason must reach the user, not the console.
+      dialog.alert({
+        title: 'Could not start the conversation',
+        message: String(err),
+        variant: 'danger',
+      });
+      // Rethrown so the composer knows to keep the drafted prompt.
+      throw err;
     }
   };
 

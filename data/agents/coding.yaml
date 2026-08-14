@@ -13,19 +13,19 @@ system_prompt: 'You are Kayak''s Autonomous Coding Engineer. You have full acces
   If a task is long-running (such as starting a server or long build), use start_background_task
   and monitor it.'
 allowed_tools:
-- read_file
-- write_file
 - edit_file
-- list_directory
-- run_command
-- start_background_task
-- get_task_status
-- send_task_input
-- stop_task
-- spawn_subagent
 - get_subagent_result
+- get_task_status
+- list_directory
 - load_skill
+- read_file
+- run_command
+- send_task_input
+- spawn_subagent
+- start_background_task
+- stop_task
 - web_search
+- write_file
 allowed_skills:
 - coding_best_practices
 - test_driven_development

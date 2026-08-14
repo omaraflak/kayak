@@ -85,6 +85,51 @@ except Exception as e:
 """
 
 
+class SandboxShell:
+    """An interactive TTY shell running inside a sandbox container.
+
+    Wraps the raw hijacked socket from a `docker exec`. Every method blocks and
+    must be called from a worker thread, never the event loop.
+    """
+
+    def __init__(self, client: docker.DockerClient, exec_id: str, raw_socket: Any):
+        self._client = client
+        self._exec_id = exec_id
+        # docker-py hands back a SocketIO wrapper; the underlying socket is what
+        # supports both directions of the conversation.
+        self._sock = raw_socket._sock if hasattr(raw_socket, "_sock") else raw_socket
+
+    def read(self, max_bytes: int = 4096) -> bytes:
+        """Reads terminal output; empty bytes means the shell exited."""
+        try:
+            return self._sock.recv(max_bytes)
+        except OSError:
+            return b""
+
+    def write(self, data: bytes) -> None:
+        """Sends keystrokes to the shell."""
+        self._sock.sendall(data)
+
+    def resize(self, rows: int, cols: int) -> None:
+        """Matches the PTY size to the client's terminal."""
+        try:
+            self._client.api.exec_resize(self._exec_id, height=rows, width=cols)
+        except Exception:
+            # A resize that races the shell exiting is not worth surfacing.
+            pass
+
+    def close(self) -> None:
+        """Tears the socket down, which also unblocks any pending read."""
+        try:
+            self._sock.shutdown(2)  # SHUT_RDWR
+        except OSError:
+            pass
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+
+
 class SandboxManager:
     """Manages Docker sandbox containers for isolated agent execution."""
 
@@ -198,6 +243,34 @@ class SandboxManager:
         self._owned_containers.add(container_id)
         return container_id
 
+    async def ensure_running(self, container_id: str) -> bool:
+        """Starts an existing container if it is stopped.
+
+        Used to revive a conversation's recorded container rather than replacing
+        it: sub-agent conversations share their parent's container, so creating a
+        fresh one per conversation id would silently split them apart.
+
+        Returns:
+            bool: True if the container exists and is now running.
+        """
+        if not self._docker_available or not self._client:
+            return False
+
+        def _start() -> bool:
+            try:
+                self._get_running_container_sync(container_id)
+                return True
+            except NotFound:
+                return False
+
+        try:
+            running = await self._run_blocking(_start)
+        except Exception:
+            return False
+        if running:
+            self._owned_containers.add(container_id)
+        return running
+
     async def exec_command(
         self, container_id: str, command: str, timeout: Optional[int] = 60
     ) -> str:
@@ -285,6 +358,34 @@ class SandboxManager:
             )
 
         return await self._run_blocking(_exec)
+
+    async def open_shell(self, container_id: str) -> SandboxShell:
+        """Opens an interactive bash session with a real PTY inside the container.
+
+        Returns:
+            SandboxShell: Blocking handle for the shell's socket.
+        """
+        client = self._require_client()
+
+        def _open() -> SandboxShell:
+            self._get_running_container_sync(container_id)
+            exec_id = client.api.exec_create(
+                container_id,
+                cmd=["/bin/bash", "-l"],
+                stdin=True,
+                stdout=True,
+                stderr=True,
+                tty=True,
+                workdir="/workspace",
+                environment=["TERM=xterm-256color"],
+            )["Id"]
+            # tty must be set on start as well as create: without it Docker
+            # multiplexes the stream and prefixes every chunk with an 8-byte
+            # header, which a terminal renders as stray characters.
+            raw_socket = client.api.exec_start(exec_id, socket=True, tty=True)
+            return SandboxShell(client, exec_id, raw_socket)
+
+        return await self._run_blocking(_open)
 
     async def stop_and_remove_sandbox(self, container_id: str):
         """Stops and removes the container."""

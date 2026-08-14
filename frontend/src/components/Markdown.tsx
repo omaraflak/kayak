@@ -37,10 +37,22 @@ interface MarkdownContentProps {
   variant?: MarkdownVariant;
   /** 'comfortable' bumps the body scale for long-form reading in chat. */
   size?: MarkdownSize;
+  /**
+   * Rewrites image and link URLs before rendering. Chat uses this to resolve
+   * workspace-relative paths (`plot.png`, `/workspace/plot.png`) to the API
+   * endpoint that serves them; without it such images are broken.
+   */
+  resolveUrl?: (url: string) => string;
   className?: string;
 }
 
-function buildComponents(variant: MarkdownVariant, size: MarkdownSize) {
+function buildComponents(
+  variant: MarkdownVariant,
+  size: MarkdownSize,
+  resolveUrl?: (url: string) => string
+) {
+  const resolve = (url: unknown): string | undefined =>
+    typeof url === 'string' && resolveUrl ? resolveUrl(url) : (url as string | undefined);
   const onPrimary = variant === 'on-primary';
   const body = onPrimary ? 'text-md-on-primary' : 'text-md-on-surface';
   const muted = onPrimary ? 'text-md-on-primary/80' : 'text-md-on-surface-variant';
@@ -110,11 +122,12 @@ function buildComponents(variant: MarkdownVariant, size: MarkdownSize) {
         {children}
       </em>
     ),
-    a: ({ children, ...props }: any) => (
+    a: ({ children, href, ...props }: any) => (
       <a
         className={`${onPrimary ? 'text-md-on-primary' : 'text-md-primary'} underline underline-offset-2 hover:opacity-80 transition-opacity`}
         target="_blank"
         rel="noopener noreferrer"
+        href={resolve(href)}
         {...props}
       >
         {children}
@@ -149,8 +162,12 @@ function buildComponents(variant: MarkdownVariant, size: MarkdownSize) {
         {children}
       </td>
     ),
-    img: ({ ...props }: any) => (
-      <img className="my-3 max-w-full rounded-xl border border-md-outline-variant" {...props} />
+    img: ({ src, ...props }: any) => (
+      <img
+        className="my-3 max-w-full rounded-xl border border-md-outline-variant"
+        src={resolve(src)}
+        {...props}
+      />
     ),
     code({ inline, className, children, ...props }: any) {
       const match = /language-(\w+)/.exec(className || '');
@@ -186,9 +203,13 @@ export const MarkdownContent: React.FC<MarkdownContentProps> = ({
   children,
   variant = 'surface',
   size = 'default',
+  resolveUrl,
   className,
 }) => {
-  const components = useMemo(() => buildComponents(variant, size), [variant, size]);
+  const components = useMemo(
+    () => buildComponents(variant, size, resolveUrl),
+    [variant, size, resolveUrl]
+  );
 
   return (
     <div className={className}>

@@ -5,7 +5,7 @@ import { CapabilityPicker } from './CapabilityPicker';
 import { ToolAccess, deriveToolAccess, serializeToolAccess } from './agentAccess';
 import { ModelSelectorModal } from './ModelSelectorModal';
 import { getProviderIcon } from './agentDisplay';
-import { Bot, Cpu, Loader2, RotateCcw, Save, Sliders, Sparkles } from 'lucide-react';
+import { Bot, Check, Cpu, Loader2, Network, RotateCcw, Save, Sliders, Sparkles } from 'lucide-react';
 import { useDialog } from '../context/DialogContext';
 
 /**
@@ -57,6 +57,10 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
   const [toolAccess, setToolAccess] = useState<Record<string, ToolAccess>>({});
   const [preloadedSkills, setPreloadedSkills] = useState<string[]>([]);
   const [allowedSkills, setAllowedSkills] = useState<string[]>([]);
+  // Sub-agent policy. "Itself" is tracked separately from other profiles because a
+  // new agent's id is still being typed while this is edited.
+  const [allowSelfSubagent, setAllowSelfSubagent] = useState(true);
+  const [otherSubagents, setOtherSubagents] = useState<string[]>([]);
 
   // Tools and skills are re-read when the editor opens: they change from other tabs
   // and from agents installing them, and a stale list would silently drop grants.
@@ -86,6 +90,14 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
     setSystemPrompt(seed?.system_prompt ?? '');
     setPreloadedSkills(seed?.preloaded_skills ?? []);
     setAllowedSkills(seed?.allowed_skills ?? []);
+    // Null means the default policy: only the agent's own profile.
+    const seedSubagents = seed?.allowed_subagents ?? null;
+    setAllowSelfSubagent(seedSubagents === null || (!!seed && seedSubagents.includes(seed.id)));
+    setOtherSubagents(
+      seedSubagents === null
+        ? []
+        : seedSubagents.filter((subagentId) => subagentId !== seed?.id)
+    );
     setError(null);
   }, [agent, duplicateOf, seed]);
 
@@ -112,6 +124,13 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
     setSystemPrompt(seed.system_prompt);
     setPreloadedSkills(seed.preloaded_skills ?? []);
     setAllowedSkills(seed.allowed_skills ?? []);
+    const seedSubagents = seed.allowed_subagents ?? null;
+    setAllowSelfSubagent(seedSubagents === null || seedSubagents.includes(seed.id));
+    setOtherSubagents(
+      seedSubagents === null
+        ? []
+        : seedSubagents.filter((subagentId) => subagentId !== seed.id)
+    );
     setToolAccess(deriveToolAccess(seed, tools));
     setError(null);
   };
@@ -122,8 +141,9 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
     setError(null);
     try {
       const { allowed_tools, tool_permissions } = serializeToolAccess(toolAccess);
+      const finalId = id.trim();
       const payload: AgentConfig = {
-        id: id.trim(),
+        id: finalId,
         name: name.trim(),
         description: description.trim(),
         model,
@@ -135,6 +155,10 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
         allowed_skills: allowedSkills,
         preloaded_skills: preloadedSkills,
         tool_permissions,
+        allowed_subagents: [
+          ...(allowSelfSubagent ? [finalId] : []),
+          ...otherSubagents.filter((subagentId) => subagentId !== finalId),
+        ],
       };
       await api.saveAgent(payload);
       onSaved(payload.id);
@@ -429,6 +453,71 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
                   No skills installed yet.
                 </p>
               )}
+            </div>
+          </section>
+
+          {/* Sub-agent policy */}
+          <section className="space-y-2">
+            <label className="text-xs font-bold uppercase tracking-wider text-md-on-surface flex items-center gap-1.5">
+              <Network className="w-3.5 h-3.5 text-md-primary" /> Sub-agents
+            </label>
+            <p className="text-[11px] text-md-on-surface-variant leading-relaxed">
+              Profiles this agent may start with <code className="font-mono">spawn_subagent</code>.
+              By default an agent may only start its own profile — otherwise it could
+              sidestep its restrictions by delegating to a more permissive agent.
+            </p>
+
+            <div className="space-y-2">
+              {[
+                {
+                  key: '__self__',
+                  title: `${name.trim() || 'This agent'} (itself)`,
+                  subtitle: 'Delegate focused sub-tasks to a copy of this profile.',
+                  checked: allowSelfSubagent,
+                  toggle: () => setAllowSelfSubagent((previous) => !previous),
+                },
+                ...existingAgents
+                  .filter((candidate) => candidate.id !== (agent?.id ?? id.trim()))
+                  .map((candidate) => ({
+                    key: candidate.id,
+                    title: `${candidate.name} (${candidate.id})`,
+                    subtitle: candidate.description,
+                    checked: otherSubagents.includes(candidate.id),
+                    toggle: () =>
+                      setOtherSubagents((previous) =>
+                        previous.includes(candidate.id)
+                          ? previous.filter((existing) => existing !== candidate.id)
+                          : [...previous, candidate.id]
+                      ),
+                  })),
+              ].map((row) => (
+                <button
+                  key={row.key}
+                  type="button"
+                  onClick={row.toggle}
+                  className={`w-full p-3 rounded-xl border flex items-center justify-between gap-4 transition-colors text-left cursor-pointer ${
+                    row.checked
+                      ? 'bg-md-primary-container/40 border-md-primary/50'
+                      : 'bg-md-surface border-md-outline-variant hover:border-md-outline'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="font-semibold text-xs text-md-on-surface">{row.title}</div>
+                    <p className="text-[11px] text-md-on-surface-variant mt-0.5 line-clamp-2 leading-normal">
+                      {row.subtitle}
+                    </p>
+                  </div>
+                  <span
+                    className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${
+                      row.checked
+                        ? 'bg-md-primary border-md-primary text-md-on-primary'
+                        : 'border-md-outline-variant text-transparent'
+                    }`}
+                  >
+                    <Check className="w-3.5 h-3.5 stroke-[3]" />
+                  </span>
+                </button>
+              ))}
             </div>
           </section>
         </div>

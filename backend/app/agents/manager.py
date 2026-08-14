@@ -101,6 +101,18 @@ DEFAULT_AGENTS: List[AgentConfig] = [
 ]
 
 
+def allowed_subagent_ids(agent: AgentConfig) -> List[str]:
+    """Returns the agent profile ids this agent may start as sub-agents.
+
+    An unset list means the agent may only delegate to its own profile. Anything
+    wider must be granted explicitly: otherwise a restricted agent could simply
+    spawn a more permissive profile and act through it.
+    """
+    if agent.allowed_subagents is None:
+        return [agent.id]
+    return list(agent.allowed_subagents)
+
+
 def _clean_agent_id(raw_id: str) -> str:
     """Sanitizes an agent identifier to safe filesystem/URL characters."""
     return re.sub(r"[^a-zA-Z0-9_-]", "_", raw_id.lower().strip())

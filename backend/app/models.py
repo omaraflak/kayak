@@ -119,10 +119,13 @@ class Conversation(BaseModel):
 
 
 class CreateConversationRequest(BaseModel):
-    """Request body for instantiating a new conversation session."""
+    """Request body for instantiating a new conversation session.
+
+    There is deliberately no isolation flag any more: every conversation runs its
+    tools inside a dedicated Docker container.
+    """
     title: Optional[str] = None
     agent_id: str = "general"
-    isolated_container: bool = False
     initial_message: Optional[str] = None
 
 
@@ -143,6 +146,10 @@ class AgentConfig(BaseModel):
     allowed_skills: List[str] = Field(default_factory=list)
     preloaded_skills: List[str] = Field(default_factory=list)
     tool_permissions: Dict[str, ToolPermission] = Field(default_factory=dict)
+    #: Agent profiles this agent may start as sub-agents. None (the default) means
+    #: only its own profile: an agent must be granted other profiles explicitly,
+    #: otherwise spawning a more permissive agent would bypass its own limits.
+    allowed_subagents: Optional[List[str]] = None
 
 
 class Skill(BaseModel):

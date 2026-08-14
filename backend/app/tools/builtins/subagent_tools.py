@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
 from backend.app.agent.task_manager import task_manager
+from backend.app.agents.manager import agent_manager, allowed_subagent_ids
 from backend.app.config import settings
 from backend.app.database import (
     add_message,
@@ -112,11 +113,12 @@ async def spawn_subagent(
     workspace_dir: Optional[Path] = None,
     container_id: Optional[str] = None,
     agent_depth: int = 0,
+    caller_agent_id: Optional[str] = None,
 ) -> str:
     """Spawns an autonomous sub-agent to handle a focused sub-task.
 
     Args:
-        agent_id: The ID of the agent configuration profile to use (e.g. 'coding', 'general', 'tool_architect').
+        agent_id: The ID of the agent configuration profile to use. You may only use profiles your own configuration allows.
         prompt: The specific task or prompt instruction for the sub-agent.
         wait_for_completion: If True, waits for the sub-agent to finish and returns the answer. If False, runs in background and returns task ID.
     """
@@ -130,6 +132,22 @@ async def spawn_subagent(
             f"Error: Maximum sub-agent nesting depth ({settings.AGENT_MAX_SUBAGENT_DEPTH})"
             " reached. Complete this work yourself rather than delegating further."
         )
+
+    # The allowlist is what keeps delegation from being an escape hatch: an agent
+    # restricted to safe tools must not be able to act through a profile that has
+    # dangerous ones. The caller's id comes from the engine, not from the model.
+    caller_config = agent_manager.get_agent(caller_agent_id) if caller_agent_id else None
+    if caller_config is not None:
+        allowed = allowed_subagent_ids(caller_config)
+        if agent_id not in allowed:
+            allowed_list = ", ".join(sorted(allowed)) if allowed else "none"
+            return (
+                f"Error: Your profile '{caller_config.id}' is not allowed to start"
+                f" '{agent_id}' sub-agents. Allowed profiles: {allowed_list}."
+            )
+
+    if not agent_manager.get_agent(agent_id):
+        return f"Error: Agent profile '{agent_id}' does not exist."
 
     title = f"SubAgent: {prompt[:30]}..."
 

@@ -3,12 +3,15 @@ import { Conversation, AgentConfig } from '../types';
 import { api } from '../api/client';
 import { ChatPane } from './ChatPane';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
+import { WorkspacePanel } from './WorkspacePanel';
 import { useVLLMStatus, VLLM_LOADING_STATES } from '../context/VLLMStatusContext';
 import { parseVllmModelId, useVllmModel } from '../hooks/useVllmModel';
 import {
   Bot,
-  Cpu,
   Check,
+  ChevronLeft,
+  ChevronRight,
+  Container,
   Sparkles,
   Send,
   Loader2,
@@ -23,7 +26,7 @@ interface ChatViewProps {
   agents: AgentConfig[];
   /** Agent to preselect in the composer when starting a new conversation. */
   initialDraftAgentId?: string | null;
-  onCreateConversation: (data: { title?: string; agent_id: string; isolated_container: boolean; initial_message?: string }) => void;
+  onCreateConversation: (data: { title?: string; agent_id: string; initial_message?: string }) => void;
   onRefreshConversations?: () => void;
   /** Opens an existing conversation, e.g. a branch or the conversation it came from. */
   onOpenConversation?: (conversation: Conversation) => void;
@@ -48,10 +51,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [draftAgentId, setDraftAgentId] = useState<string>(
     initialDraftAgentId || agents[0]?.id || 'general'
   );
-  const [draftUseContainer, setDraftUseContainer] = useState<boolean>(false);
   const [draftInput, setDraftInput] = useState<string>('');
   const [isCreating, setIsCreating] = useState<boolean>(false);
   const { status: vllmStatus } = useVLLMStatus();
+
+  // Workspace side panel (container filesystem + terminal) for the open conversation.
+  const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
+  // Wrapped in an object so re-clicking the same file after closing its preview
+  // still triggers the panel: a bare string would compare equal and do nothing.
+  const [workspacePreview, setWorkspacePreview] = useState<{ path: string } | null>(null);
+
+  // A different conversation means a different container; its panel state is stale.
+  useEffect(() => {
+    setIsWorkspaceOpen(false);
+    setWorkspacePreview(null);
+  }, [conversationId]);
+
+  const handleOpenFile = useCallback((path: string) => {
+    setIsWorkspaceOpen(true);
+    setWorkspacePreview({ path });
+  }, []);
 
   const loadConversationData = useCallback(async () => {
     if (!conversationId) {
@@ -129,10 +148,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
     try {
       await onCreateConversation({
         agent_id: draftAgentId,
-        isolated_container: draftUseContainer,
         initial_message: text,
       });
       setDraftInput('');
+    } catch {
+      // The shell already showed why; keeping the draft lets the user retry
+      // (e.g. after starting Docker) without retyping.
     } finally {
       setIsCreating(false);
     }
@@ -147,17 +168,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
             {conversationId ? (conversation?.title || 'Conversation') : 'New Conversation'}
           </h2>
 
-          {conversationId ? (
-            conversation?.isolated_container ? (
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-200 border border-blue-300 dark:border-blue-800/80 shrink-0">
-                <span>🐳</span> Docker Sandbox
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-md-surface-container-high text-md-on-surface border border-md-outline-variant shrink-0">
-                <Cpu className="w-3.5 h-3.5 text-md-on-surface-variant" /> Host Workspace
-              </span>
-            )
-          ) : null}
+          {conversationId && (
+            <span
+              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-200 border border-blue-300 dark:border-blue-800/80 shrink-0"
+              title="Everything this agent runs — commands, code, tools — executes inside an isolated Docker container, never on your machine."
+            >
+              <Container className="w-3.5 h-3.5" /> Isolated container
+            </span>
+          )}
 
           {activeAgent && (
             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-md-surface-container-high text-md-on-surface border border-md-outline-variant font-mono shrink-0">
@@ -180,6 +198,28 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </button>
           )}
         </div>
+
+        {/* Drawer into this conversation's container: files and terminal. */}
+        {conversationId && (
+          <button
+            type="button"
+            onClick={() => setIsWorkspaceOpen((open) => !open)}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer shrink-0 ${
+              isWorkspaceOpen
+                ? 'bg-md-primary text-md-on-primary shadow-xs'
+                : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container border border-md-outline-variant'
+            }`}
+            title="Browse files, upload, and open a terminal inside this conversation's container"
+          >
+            {isWorkspaceOpen ? (
+              <ChevronRight className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronLeft className="w-3.5 h-3.5" />
+            )}
+            <Container className="w-3.5 h-3.5" />
+            <span>Container</span>
+          </button>
+        )}
       </div>
 
       {/* Main Area: Draft Setup Widget vs Active Chat Pane */}
@@ -197,7 +237,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   How can Kayak help you today?
                 </h3>
                 <p className="text-xs text-md-on-surface-variant leading-relaxed">
-                  Select an agent profile and execution environment below. Type your initial prompt to begin.
+                  Select an agent profile below and type your initial prompt to begin.
                 </p>
               </div>
 
@@ -290,29 +330,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   </div>
                 </div>
 
-                {/* Execution Sandbox Isolation Toggle */}
-                <div className="pt-3 border-t border-md-outline-variant flex items-center justify-between shrink-0">
+                {/* Every conversation is isolated; stated here so it is a visible
+                    guarantee rather than a hidden implementation detail. */}
+                <div className="pt-3 border-t border-md-outline-variant flex items-center gap-2.5 shrink-0">
+                  <Container className="w-4 h-4 text-md-primary shrink-0" />
                   <div>
-                    <div className="text-xs font-semibold text-md-on-surface flex items-center gap-1.5">
-                      <span>🐳 Docker Sandbox Isolation</span>
+                    <div className="text-xs font-semibold text-md-on-surface">
+                      Runs in an isolated container
                     </div>
-                    <div className="text-[11px] text-md-on-surface-variant">
-                      Run shell commands and code in an isolated container instead of host
+                    <div className="text-[11px] text-md-on-surface-variant leading-relaxed">
+                      Commands, code, and tools execute inside a dedicated Docker
+                      container — never directly on your machine.
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setDraftUseContainer(!draftUseContainer)}
-                    className={`w-11 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors duration-200 ease-in-out ${
-                      draftUseContainer ? 'bg-md-primary' : 'bg-md-surface-container-high'
-                    }`}
-                  >
-                    <div
-                      className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform duration-200 ease-in-out ${
-                        draftUseContainer ? 'translate-x-5' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
                 </div>
               </div>
             </div>
@@ -388,19 +418,31 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
         </div>
       ) : (
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <ChatPane
-            conversationId={conversationId}
-            showHeader={false}
-            agentId={conversation?.agent_id || 'general'}
-            agentName={activeAgent?.name || 'Kayak Agent'}
-            agentModel={activeAgent?.model}
-            placeholder="Ask anything, execute code, run tasks, type LaTeX formulas... (Enter to send)"
-            onRefreshConversations={onRefreshConversations}
-            onConversationUpdated={loadConversationData}
-            onOpenConversation={onOpenConversation}
-            onActivityChange={onActivityChange}
-          />
+        <div className="flex-1 flex overflow-hidden">
+          <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+            <ChatPane
+              conversationId={conversationId}
+              showHeader={false}
+              agentId={conversation?.agent_id || 'general'}
+              agentName={activeAgent?.name || 'Kayak Agent'}
+              agentModel={activeAgent?.model}
+              placeholder="Ask anything, execute code, run tasks, type LaTeX formulas... (Enter to send)"
+              onRefreshConversations={onRefreshConversations}
+              onConversationUpdated={loadConversationData}
+              onOpenConversation={onOpenConversation}
+              onActivityChange={onActivityChange}
+              onOpenFile={handleOpenFile}
+            />
+          </div>
+          {isWorkspaceOpen && (
+            <WorkspacePanel
+              key={conversationId}
+              conversationId={conversationId}
+              initialTab="files"
+              previewRequest={workspacePreview}
+              onClose={() => setIsWorkspaceOpen(false)}
+            />
+          )}
         </div>
       )}
     </div>

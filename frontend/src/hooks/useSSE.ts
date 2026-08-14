@@ -11,7 +11,8 @@ export interface SSECallbacks {
   onThinking?: (token: string) => void;
   onToolCallDelta?: (delta: { id: string; name?: string; arguments?: string }) => void;
   onToolCallExecuting?: (data: { id: string; name: string; arguments: string }) => void;
-  onToolCallResult?: (data: { id: string; name: string; output: string; is_error: boolean }) => void;
+  /** `arguments` is only present on replayed results, for clients that missed the executing event. */
+  onToolCallResult?: (data: { id: string; name: string; arguments?: string; output: string; is_error: boolean }) => void;
   onToolApprovalRequired?: (data: ToolApprovalRequest) => void;
   onTaskEvent?: (event: any) => void;
   onTitleUpdated?: (title: string) => void;

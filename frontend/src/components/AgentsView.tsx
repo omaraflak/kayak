@@ -8,6 +8,7 @@ import {
   Bot,
   Copy,
   MessageSquarePlus,
+  Network,
   Pencil,
   Plus,
   RefreshCw,
@@ -419,6 +420,54 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                     ? `On-demand skills restricted to: ${selectedAgent.allowed_skills.join(', ')}`
                     : `All ${skills.length} installed skills are discoverable on demand.`}
                 </p>
+              </div>
+
+              {/* Sub-agents this profile may start. Delegation widens what an agent
+                  can do, so the grant is stated as plainly as its tool access. */}
+              <div className="space-y-2">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-md-on-surface flex items-center gap-1.5">
+                  <Network className="w-4 h-4 text-md-primary" /> Sub-agents
+                </h3>
+                {(() => {
+                  const allowed =
+                    selectedAgent.allowed_subagents ?? [selectedAgent.id];
+                  if (allowed.length === 0) {
+                    return (
+                      <p className="text-xs text-md-on-surface-variant">
+                        This agent cannot start any sub-agents.
+                      </p>
+                    );
+                  }
+                  return (
+                    <>
+                      <div className="flex flex-wrap gap-1.5">
+                        {allowed.map((agentId) => {
+                          const profile = agents.find((a) => a.id === agentId);
+                          return (
+                            <span
+                              key={agentId}
+                              className={`text-[11px] font-mono px-2 py-1 rounded-lg border ${
+                                profile
+                                  ? 'bg-md-surface-container-high text-md-on-surface border-md-outline-variant'
+                                  : 'bg-md-error-container text-md-error border-md-outline-variant'
+                              }`}
+                              title={profile ? profile.name : 'This profile no longer exists'}
+                            >
+                              {agentId}
+                              {agentId === selectedAgent.id ? ' (itself)' : ''}
+                            </span>
+                          );
+                        })}
+                      </div>
+                      {selectedAgent.allowed_subagents == null && (
+                        <p className="text-[11px] text-md-on-surface-variant leading-relaxed">
+                          Default policy: an agent may only start sub-agents with its
+                          own profile unless granted others in the editor.
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </div>
           ) : (

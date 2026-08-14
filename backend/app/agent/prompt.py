@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import List, Optional
+from backend.app.agents.manager import agent_manager, allowed_subagent_ids
 from backend.app.models import AgentConfig
 from backend.app.skills.registry import skill_registry
 
@@ -57,7 +58,31 @@ def build_system_prompt(
         for s in available_on_demand:
             parts.append(f"- **{s.name}**: {s.description}")
 
-    # 5. Background Tasks & Sub-Agent Guidance
+    # 5. Sub-agent profiles this agent is allowed to start. Served from the agent's
+    # own policy rather than listing every profile: advertising an agent it cannot
+    # start would only produce failed calls.
+    if "spawn_subagent" in agent_config.allowed_tools:
+        parts.append("\n## Sub-agent Profiles")
+        profiles = [
+            profile
+            for profile in (
+                agent_manager.get_agent(allowed_id)
+                for allowed_id in allowed_subagent_ids(agent_config)
+            )
+            if profile
+        ]
+        if profiles:
+            parts.append(
+                "You may start sub-agents with these profiles only (pass the id to `spawn_subagent`):"
+            )
+            for profile in profiles:
+                parts.append(f"- **{profile.id}**: {profile.name} — {profile.description}")
+        else:
+            parts.append(
+                "No sub-agent profiles are available to you; do not call `spawn_subagent`."
+            )
+
+    # 6. Background Tasks & Sub-Agent Guidance
     parts.append("\n## Execution & Tool Guidelines")
     parts.append(
         "- **File Modifications**: Always inspect existing files using `read_file` before calling `edit_file` or `write_file`. Make minimal, precise replacements."

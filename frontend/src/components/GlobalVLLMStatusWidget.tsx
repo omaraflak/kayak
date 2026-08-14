@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useVLLMStatus } from '../context/VLLMStatusContext';
 import { VLLMDeploymentModal } from './VLLMDeploymentModal';
+import { READY_TOAST_TIMEOUT_MS, shouldShowVllmToast } from './vllmToast';
 import { 
   Rocket, 
   Loader2, 
@@ -14,13 +15,21 @@ export const GlobalVLLMStatusWidget: React.FC = () => {
   const { status, isBusy: isDeploymentBusy } = useVLLMStatus();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDismissed, setIsDismissed] = useState(false);
+  const [readyExpired, setReadyExpired] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const startTimeRef = useRef<number | null>(null);
+  // Whether this tab watched the deployment happen. A tab that opens onto an
+  // already-serving model has nothing to announce.
+  const sawDeploymentRef = useRef(false);
 
   // Re-surface the widget whenever a new deployment starts, even if the user
   // dismissed the previous one.
   useEffect(() => {
-    if (isDeploymentBusy) setIsDismissed(false);
+    if (isDeploymentBusy) {
+      sawDeploymentRef.current = true;
+      setIsDismissed(false);
+      setReadyExpired(false);
+    }
   }, [isDeploymentBusy]);
 
   const isLoading = status?.state === 'loading';
@@ -29,6 +38,13 @@ export const GlobalVLLMStatusWidget: React.FC = () => {
   const isBusy = isLoading || isPulling || isStarting;
   const isReady = status?.state === 'ready';
   const isError = status?.state === 'error';
+
+  // The ready confirmation retires itself instead of living in the corner forever.
+  useEffect(() => {
+    if (!isReady || !sawDeploymentRef.current) return;
+    const timer = setTimeout(() => setReadyExpired(true), READY_TOAST_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [isReady]);
 
   useEffect(() => {
     if (isBusy) {
@@ -47,7 +63,12 @@ export const GlobalVLLMStatusWidget: React.FC = () => {
     }
   }, [isBusy]);
 
-  const showFloatingBar = status && !isDismissed && status.state !== 'idle' && status.state !== 'stopped';
+  const showFloatingBar = shouldShowVllmToast({
+    state: status?.state,
+    dismissed: isDismissed,
+    sawDeployment: sawDeploymentRef.current,
+    readyExpired,
+  });
   const modelShortName = status?.model_id ? (status.model_id.split('/').pop() || status.model_id) : 'vLLM Server';
 
   return (

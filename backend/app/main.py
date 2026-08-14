@@ -20,6 +20,7 @@ from backend.app.routes import (
     tasks,
     tool_builder,
     tools,
+    workspace,
 )
 from backend.app.routes.auth import PUBLIC_API_PATHS, is_authorized
 from backend.app.skills.registry import skill_registry
@@ -114,6 +115,7 @@ async def require_auth_token(request: Request, call_next):
 # Register API Routers
 app.include_router(auth.router)
 app.include_router(conversations.router)
+app.include_router(workspace.router)
 app.include_router(agents.router)
 app.include_router(models.router)
 app.include_router(vllm_routes.router)
