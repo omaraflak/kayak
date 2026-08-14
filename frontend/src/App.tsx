@@ -10,6 +10,7 @@ import { TasksMonitor } from './components/TasksMonitor';
 import { SettingsView } from './components/SettingsView';
 import { ModelsView } from './components/ModelsView';
 import { GlobalVLLMStatusWidget } from './components/GlobalVLLMStatusWidget';
+import { useDialog } from './context/DialogContext';
 import { parseCurrentUrl, navigateTo } from './utils/router';
 
 export const App: React.FC = () => {
@@ -23,6 +24,10 @@ export const App: React.FC = () => {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(initialRoute.itemId || null);
   // Agent preselected in the composer when arriving from a "chat with this agent" link.
   const [draftAgentId, setDraftAgentId] = useState<string | null>(null);
+  // Settings owns its own form state; the shell only needs to know whether leaving
+  // the page would throw work away.
+  const [hasUnsavedSettings, setHasUnsavedSettings] = useState(false);
+  const dialog = useDialog();
 
   const loadInitialData = async () => {
     try {
@@ -69,7 +74,20 @@ export const App: React.FC = () => {
     };
   }, [handlePopState]);
 
-  const handleSelectTab = (tab: NavigationTab) => {
+  const handleSelectTab = async (tab: NavigationTab) => {
+    // Leaving Settings with an unsaved credential would silently discard it.
+    if (currentTab === 'settings' && tab !== 'settings' && hasUnsavedSettings) {
+      const leave = await dialog.confirm({
+        title: 'Discard unsaved settings?',
+        message: 'You have changes on this page that have not been saved yet.',
+        confirmText: 'Discard changes',
+        cancelText: 'Stay here',
+        variant: 'danger',
+      });
+      if (!leave) return;
+      setHasUnsavedSettings(false);
+    }
+
     // Re-selecting the current tab keeps whatever is open in it.
     if (tab === currentTab) {
       navigateTo(tab, tab === 'chat' ? activeConversationId : selectedItemId);
@@ -215,7 +233,10 @@ export const App: React.FC = () => {
         )}
 
         {currentTab === 'settings' && (
-          <SettingsView />
+          <SettingsView
+            onDirtyChange={setHasUnsavedSettings}
+            onOpenLocalModels={() => handleSelectTab('models')}
+          />
         )}
       </main>
 

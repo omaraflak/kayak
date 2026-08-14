@@ -13,7 +13,8 @@ import {
   VLLMDeploymentProgress,
   VLLMDeployRequest,
   HostCapability,
-  ModelCacheInfo
+  ModelCacheInfo,
+  SettingsUpdate
 } from '../types';
 
 const API_BASE = '/api';
@@ -229,8 +230,8 @@ export const api = {
   getSettings: (): Promise<AppSettings> =>
     fetchJSON(`${API_BASE}/settings`),
 
-  updateSettings: (settings: Partial<AppSettings>): Promise<{ status: string; settings: AppSettings }> =>
-    fetchJSONPost(`${API_BASE}/settings`, settings),
+  updateSettings: (update: SettingsUpdate): Promise<{ status: string; settings: AppSettings }> =>
+    fetchJSONPost(`${API_BASE}/settings`, update),
 
   // Models Discovery & Hugging Face Hub
   listModels: (): Promise<ProviderModels[]> =>

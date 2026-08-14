@@ -5,6 +5,7 @@ import httpx
 import litellm
 from pydantic import BaseModel
 from backend.app.config import settings
+from backend.app.providers import ProviderInfo, require_provider
 
 router = APIRouter(prefix="/api/models", tags=["models"])
 
@@ -56,11 +57,12 @@ class ModelEntry:
 
 @dataclass(frozen=True)
 class ProviderCatalogItem:
-    """Static catalog configuration for a model provider."""
-    provider_id: str
-    provider_name: str
-    icon: str
-    api_key_attr: str
+    """The curated models offered for one provider.
+
+    Identity and credential live on the shared ProviderInfo registry, so a provider is
+    described in exactly one place.
+    """
+    provider: ProviderInfo
     models: List[ModelEntry]
 
 
@@ -78,10 +80,7 @@ def _get_context_window(model_id: str, default: str) -> str:
 
 _PROVIDER_CATALOG: List[ProviderCatalogItem] = [
     ProviderCatalogItem(
-        provider_id="gemini",
-        provider_name="Google",
-        icon="✨",
-        api_key_attr="GEMINI_API_KEY",
+        provider=require_provider("gemini"),
         models=[
             ModelEntry("gemini/gemini-2.5-pro", "Gemini 2.5 Pro", "Flagship model for complex agentic workflows, deep coding, and complex tool reasoning.", "2,000,000 tokens"),
             ModelEntry("gemini/gemini-2.5-flash", "Gemini 2.5 Flash", "Next-gen balanced frontier model with rapid response and multimodal reasoning.", "1,000,000 tokens"),
@@ -92,10 +91,7 @@ _PROVIDER_CATALOG: List[ProviderCatalogItem] = [
         ],
     ),
     ProviderCatalogItem(
-        provider_id="openai",
-        provider_name="OpenAI",
-        icon="🧠",
-        api_key_attr="OPENAI_API_KEY",
+        provider=require_provider("openai"),
         models=[
             ModelEntry("openai/gpt-4o", "GPT-4o", "OpenAI's flagship omni model for advanced reasoning and general agent workflows.", "128,000 tokens"),
             ModelEntry("openai/gpt-4o-mini", "GPT-4o Mini", "Fast and lightweight model offering high intelligence at low latency.", "128,000 tokens"),
@@ -105,10 +101,7 @@ _PROVIDER_CATALOG: List[ProviderCatalogItem] = [
         ],
     ),
     ProviderCatalogItem(
-        provider_id="anthropic",
-        provider_name="Anthropic",
-        icon="⚡",
-        api_key_attr="ANTHROPIC_API_KEY",
+        provider=require_provider("anthropic"),
         models=[
             ModelEntry("anthropic/claude-3-7-sonnet-latest", "Claude 3.7 Sonnet", "Anthropic's flagship hybrid reasoning model for precision engineering.", "200,000 tokens"),
             ModelEntry("anthropic/claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", "Industry-leading precision coding and agentic execution model.", "200,000 tokens"),
@@ -121,12 +114,13 @@ _PROVIDER_CATALOG: List[ProviderCatalogItem] = [
 
 def _build_provider_response(provider: ProviderCatalogItem) -> ProviderModels:
     """Constructs a ProviderModels API response from a catalog item and current settings."""
-    has_key = bool(getattr(settings, provider.api_key_attr, ""))
+    info = provider.provider
+    has_key = bool(getattr(settings, info.api_key_setting, ""))
     items = [
         ModelItem(
             id=entry.id,
             name=entry.name,
-            provider=provider.provider_id,
+            provider=info.id,
             description=entry.description,
             context_window=_get_context_window(entry.id, entry.default_context_window),
             is_available=has_key,
@@ -135,9 +129,9 @@ def _build_provider_response(provider: ProviderCatalogItem) -> ProviderModels:
         for entry in provider.models
     ]
     return ProviderModels(
-        provider_id=provider.provider_id,
-        provider_name=provider.provider_name,
-        icon=provider.icon,
+        provider_id=info.id,
+        provider_name=info.name,
+        icon=info.icon,
         is_configured=has_key,
         status_message="API Key Configured" if has_key else "Missing API Key in Settings",
         models=items,

@@ -166,22 +166,49 @@ export interface HuggingFaceModelSearchResult {
 }
 
 /**
- * API keys arrive masked (a `••••••••` preview keeping only the last characters).
- * Submitting a masked value back is treated by the server as "unchanged", so the
- * form can round-trip without ever holding the real secret.
+ * A provider and the state of its stored credential.
+ *
+ * The key itself never leaves the server: `preview` is a masked hint that identifies
+ * which key is stored without disclosing it. The list is served rather than hardcoded,
+ * so adding a provider does not mean editing the settings form.
  */
+export interface ProviderCredential {
+  id: string;
+  name: string;
+  icon: string;
+  /** Field name to send this credential under when saving. */
+  setting_key: string;
+  console_url: string;
+  key_hint: string;
+  preview: string;
+  is_set: boolean;
+}
+
+/** How exposed the server is — the page's most consequential fact. */
+export interface SecurityPosture {
+  auth_required: boolean;
+  host: string;
+  is_loopback: boolean;
+  warning?: string | null;
+}
+
 export interface AppSettings {
   DEFAULT_MODEL: string;
-  OPENAI_API_KEY: string;
-  GEMINI_API_KEY: string;
-  ANTHROPIC_API_KEY: string;
-  HUGGINGFACE_API_KEY?: string;
   VLLM_API_BASE: string;
   DOCKER_AVAILABLE: boolean;
-  OPENAI_API_KEY_SET?: boolean;
-  GEMINI_API_KEY_SET?: boolean;
-  ANTHROPIC_API_KEY_SET?: boolean;
-  HUGGINGFACE_API_KEY_SET?: boolean;
+  AGENT_MAX_ITERATIONS: number;
+  providers: ProviderCredential[];
+  security: SecurityPosture;
+}
+
+/** Only the fields being changed are sent; anything omitted is left alone. */
+export interface SettingsUpdate {
+  DEFAULT_MODEL?: string;
+  VLLM_API_BASE?: string;
+  OPENAI_API_KEY?: string;
+  GEMINI_API_KEY?: string;
+  ANTHROPIC_API_KEY?: string;
+  HUGGINGFACE_API_KEY?: string;
 }
 
 export type VLLMServerState =

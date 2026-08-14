@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo, ReactNode } from 'react';
 import { 
   AlertTriangle, 
   AlertCircle, 
@@ -209,8 +209,17 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return 'bg-md-primary hover:opacity-90 text-md-on-primary shadow-xs';
   };
 
+  // Stable across renders. Handing consumers a fresh object each time made the
+  // `dialog` value change identity whenever any dialog merely opened or closed, so
+  // every callback and effect keyed on it re-ran -- silently refetching data and
+  // discarding in-progress form state on an unrelated part of the screen.
+  const contextValue = useMemo(
+    () => ({ confirm, alert, prompt }),
+    [confirm, alert, prompt]
+  );
+
   return (
-    <DialogContext.Provider value={{ confirm, alert, prompt }}>
+    <DialogContext.Provider value={contextValue}>
       {children}
 
       {isOpen && dialogConfig && (

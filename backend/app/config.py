@@ -1,7 +1,11 @@
 import json
+import logging
 import os
 from pathlib import Path
+import tempfile
 from typing import Any, Dict
+
+logger = logging.getLogger(__name__)
 
 # Base Paths
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -30,9 +34,39 @@ _PERSISTABLE_KEYS = [
 ]
 
 
+#: Owner read/write only. Anything wider exposes provider keys to every account on
+#: the machine, which on a shared or multi-user host is a credential leak.
+SECRET_FILE_MODE = 0o600
+
+
 def _split_csv(raw: str) -> list[str]:
     """Splits a comma-separated environment value into a clean list."""
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _write_private_json(path: Path, payload: Dict[str, Any]) -> None:
+    """Writes JSON to `path` atomically, readable only by the owning user.
+
+    The temporary file is created in the destination directory so that the final
+    move is a rename within one filesystem, which is atomic: readers see either the
+    old file or the new one, never a partial write.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    handle, temp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+    )
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temp_path, SECRET_FILE_MODE)
+        os.replace(temp_path, path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 class Settings:
@@ -112,11 +146,18 @@ class Settings:
             for key in _PERSISTABLE_KEYS:
                 if key in data:
                     setattr(self, key, data[key])
-        except Exception as error:
-            print(f"Error reading settings file: {error}")
+        except Exception:
+            # Losing this file silently makes a fully configured install look blank,
+            # so it is worth a real log line rather than a print to stdout.
+            logger.exception("Could not read settings file %s", self.SETTINGS_FILE)
 
     def save_settings(self, updates: Dict[str, Any]) -> None:
-        """Persists updated configuration dictionary to data/settings.json.
+        """Persists updated configuration to data/settings.json.
+
+        The file holds provider API keys in plaintext, so it is written through a
+        private temporary file and moved into place: the default umask would leave it
+        world-readable, and writing in place would truncate every stored key if the
+        process died mid-write.
 
         Args:
             updates: Dictionary of setting keys and their new values.
@@ -127,9 +168,7 @@ class Settings:
                 current[key] = value
                 setattr(self, key, value)
 
-        self.SETTINGS_FILE.write_text(
-            json.dumps(current, indent=2), encoding="utf-8"
-        )
+        _write_private_json(self.SETTINGS_FILE, current)
 
 
 settings = Settings()

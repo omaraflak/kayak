@@ -3,19 +3,19 @@ import re
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 import litellm
 from backend.app.config import settings
+from backend.app.providers import API_KEY_SETTINGS
 
 logger = logging.getLogger(__name__)
 
 # Configure LiteLLM settings
 litellm.drop_params = True  # Automatically drop unsupported parameters for providers
 
-# Settings attribute holding the API key for each LiteLLM provider prefix.
+# Settings attribute holding the API key for each LiteLLM provider prefix. Sourced
+# from the shared registry so a new provider does not need registering here too;
+# "hf" is an alias LiteLLM accepts for Hugging Face.
 _PROVIDER_KEY_SETTINGS: Dict[str, str] = {
-    "openai": "OPENAI_API_KEY",
-    "gemini": "GEMINI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "huggingface": "HUGGINGFACE_API_KEY",
-    "hf": "HUGGINGFACE_API_KEY",
+    **API_KEY_SETTINGS,
+    "hf": API_KEY_SETTINGS["huggingface"],
 }
 
 # Substrings that identify a provider genuinely refusing tool calling, as opposed to
