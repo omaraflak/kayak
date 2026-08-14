@@ -45,9 +45,10 @@ def build_system_prompt(
         )
     if "run_command" in allowed_tools:
         parts.append(
-            "- Every `run_command` call is a fresh shell: variables and working"
-            " directory do not persist between calls, only files do. The default"
-            " timeout is 60s; pass `timeout` (up to 600) for slower commands."
+            "- Every `run_command` call is a fresh shell, but the working directory"
+            " persists: `cd project` carries into your next command. Environment"
+            " variables do not persist, only files do. The default timeout is 60s;"
+            " pass `timeout` (up to 600) for slower commands."
         )
     if "run_python" in allowed_tools:
         parts.append(
