@@ -12,6 +12,7 @@ import {
   Loader2,
   Settings
 } from 'lucide-react';
+import { useConversationActivity } from '../context/ConversationActivityContext';
 import { useDialog } from '../context/DialogContext';
 
 interface SidebarProps {
@@ -22,12 +23,6 @@ interface SidebarProps {
   agents: AgentConfig[];
   currentTab: NavigationTab;
   onSelectTab: (tab: NavigationTab) => void;
-  /**
-   * Conversation with a turn in flight right now, observed live rather than read from
-   * the stored status, which only changes on the server and is re-read once a turn has
-   * already ended.
-   */
-  activeTurnConversationId?: string | null;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -38,9 +33,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   agents,
   currentTab,
   onSelectTab,
-  activeTurnConversationId,
 }) => {
   const dialog = useDialog();
+  // Read from the shared stream rather than passed down: the sidebar outlives the
+  // chat pane, which is exactly the case the prop could not cover.
+  const { runningIds } = useConversationActivity();
 
   return (
     <div className="w-72 bg-md-surface-container-low border-r border-md-outline-variant flex flex-col h-full shrink-0 select-none transition-colors">
@@ -171,14 +168,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ) : (
           conversations.map((conversation) => {
             const isActive = currentTab === 'chat' && activeConversationId === conversation.id;
-            // For the conversation on screen the live signal is authoritative in both
-            // directions: it knows a turn has begun before the stored status is re-read,
-            // and knows it has ended before the refreshed list arrives. Any other
-            // conversation can only be judged by what was last stored.
-            const isRunning =
-              activeConversationId === conversation.id
-                ? activeTurnConversationId === conversation.id
-                : conversation.status === 'running';
+            // The shared activity stream is authoritative for every conversation and
+            // on every page. The stored status cannot be used here: it is only re-read
+            // when the list happens to be refreshed.
+            const isRunning = runningIds.has(conversation.id);
             return (
               <div
                 key={conversation.id}

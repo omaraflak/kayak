@@ -43,24 +43,34 @@ def _shell_quote(text: str) -> str:
 
 
 def _build_volume_mounts(workspace_dir: Path) -> Dict[str, Dict[str, str]]:
-    """Constructs the container volume mounts dictionary using the DockerPathResolver."""
+    """Constructs the container volume mounts dictionary using the DockerPathResolver.
+
+    Only the conversation's own workspace is mounted -- nothing else. The whole
+    platform data directory used to be exposed read-only at `/data`, which let
+    every agent read every other conversation's files, the conversation
+    database, and settings.json with its plaintext provider API keys. Nothing
+    in the sandbox execution path ever needed that mount.
+    """
     workspace_src = DockerPathResolver.resolve_volume_source(workspace_dir)
-    volumes_map: Dict[str, Dict[str, str]] = {
+    return {
         workspace_src: {
             "bind": "/workspace",
             "mode": "rw",
         },
     }
 
-    if settings.DATA_DIR.exists():
-        data_src = DockerPathResolver.resolve_volume_source(settings.DATA_DIR)
-        if not DockerPathResolver.is_in_container() or not data_src.startswith("/app"):
-            volumes_map[data_src] = {
-                "bind": "/data",
-                "mode": "ro",
-            }
 
-    return volumes_map
+def has_forbidden_data_mount(container: Any) -> bool:
+    """Detects the legacy `/data` mount on a container built before its removal.
+
+    Containers are long-lived and reused across app restarts, so without this
+    check an already-created sandbox would keep leaking other conversations'
+    files (and the API keys) until it happened to be deleted.
+    """
+    return any(
+        mount.get("Destination") == "/data"
+        for mount in container.attrs.get("Mounts", [])
+    )
 
 
 def _build_custom_tool_runner_script(
@@ -307,11 +317,23 @@ class SandboxManager:
         def _create() -> str:
             try:
                 existing = client.containers.get(container_name)
-                if existing.status != "running":
-                    existing.start()
-                return existing.id
             except NotFound:
-                pass
+                existing = None
+
+            if existing is not None:
+                if has_forbidden_data_mount(existing):
+                    # A container from before the /data mount was removed keeps
+                    # leaking until replaced; its workspace lives on the host,
+                    # so recreating loses nothing the conversation relies on.
+                    try:
+                        existing.stop(timeout=2)
+                        existing.remove(v=True, force=True)
+                    except Exception:
+                        pass
+                else:
+                    if existing.status != "running":
+                        existing.start()
+                    return existing.id
 
             image_name = settings.DOCKER_SANDBOX_IMAGE
             try:
@@ -349,13 +371,26 @@ class SandboxManager:
         """
         if not self._docker_available or not self._client:
             return False
+        client = self._client
 
         def _start() -> bool:
             try:
-                self._get_running_container_sync(container_id)
-                return True
+                container = client.containers.get(container_id)
             except NotFound:
                 return False
+            if has_forbidden_data_mount(container):
+                # Not revivable: this container predates the removal of the
+                # /data mount and would keep exposing other conversations'
+                # files. Reporting False makes the caller create a clean one.
+                try:
+                    container.stop(timeout=2)
+                    container.remove(v=True, force=True)
+                except Exception:
+                    pass
+                return False
+            if container.status != "running":
+                container.start()
+            return True
 
         try:
             running = await self._run_blocking(_start)

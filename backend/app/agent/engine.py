@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
 import uuid
+from backend.app.agent.activity import activity_tracker
 from backend.app.agent.approvals import approval_registry
 from backend.app.agent.history import (
     MAX_HISTORY_CHARS,
@@ -318,6 +319,9 @@ class AgentEngine:
 
         iteration_ceiling = max_iterations or settings.AGENT_MAX_ITERATIONS
         await update_conversation(conversation_id, status=ConversationStatus.RUNNING)
+        # Announced from here rather than from the route so that sub-agent runs,
+        # which never pass through it, are reported too.
+        activity_tracker.set_running(conversation_id)
         hit_ceiling = True
 
         try:
@@ -415,6 +419,7 @@ class AgentEngine:
                 }
         finally:
             approval_registry.cancel_conversation(conversation_id)
+            activity_tracker.set_idle(conversation_id)
             await asyncio.shield(
                 update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
             )

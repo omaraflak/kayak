@@ -11,6 +11,7 @@ from backend.app.agents.manager import agent_manager
 from backend.app.config import settings
 from backend.app.database import init_db, reconcile_interrupted_state
 from backend.app.routes import (
+    activity,
     agents,
     auth,
     conversations,
@@ -115,6 +116,7 @@ async def require_auth_token(request: Request, call_next):
 # Register API Routers
 app.include_router(auth.router)
 app.include_router(conversations.router)
+app.include_router(activity.router)
 app.include_router(workspace.router)
 app.include_router(agents.router)
 app.include_router(models.router)

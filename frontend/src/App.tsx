@@ -27,17 +27,7 @@ export const App: React.FC = () => {
   // Settings owns its own form state; the shell only needs to know whether leaving
   // the page would throw work away.
   const [hasUnsavedSettings, setHasUnsavedSettings] = useState(false);
-  // Live turn state for the open conversation. The stored status is only re-read when
-  // a turn finishes, so it cannot answer "is this one working right now".
-  const [activeTurnConversationId, setActiveTurnConversationId] = useState<string | null>(null);
   const dialog = useDialog();
-
-  const handleActivityChange = useCallback(
-    (isActive: boolean) => {
-      setActiveTurnConversationId(isActive ? activeConversationId : null);
-    },
-    [activeConversationId]
-  );
 
   /**
    * Refreshes the conversation and agent lists.
@@ -217,7 +207,6 @@ export const App: React.FC = () => {
         agents={agents}
         currentTab={currentTab}
         onSelectTab={handleSelectTab}
-        activeTurnConversationId={activeTurnConversationId}
       />
 
       {/* Main Content Pane */}
@@ -231,7 +220,6 @@ export const App: React.FC = () => {
             onRefreshConversations={loadInitialData}
             onOpenConversation={handleOpenConversation}
             onSelectConversation={handleSelectConversation}
-            onActivityChange={handleActivityChange}
           />
         )}
 

@@ -31,8 +31,6 @@ interface ChatViewProps {
   /** Opens an existing conversation, e.g. a branch or the conversation it came from. */
   onOpenConversation?: (conversation: Conversation) => void;
   onSelectConversation?: (id: string) => void;
-  /** Reports whether this conversation currently has a turn in flight. */
-  onActivityChange?: (isActive: boolean) => void;
 }
 
 export const ChatView: React.FC<ChatViewProps> = ({
@@ -43,7 +41,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onRefreshConversations,
   onOpenConversation,
   onSelectConversation,
-  onActivityChange,
 }) => {
   const [conversation, setConversation] = useState<Conversation | null>(null);
 
@@ -430,7 +427,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
               onRefreshConversations={onRefreshConversations}
               onConversationUpdated={loadConversationData}
               onOpenConversation={onOpenConversation}
-              onActivityChange={onActivityChange}
               onOpenFile={handleOpenFile}
             />
           </div>
