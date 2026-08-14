@@ -1,9 +1,8 @@
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-from backend.app.agent.sandbox import sandbox_manager
 from backend.app.config import settings
 from backend.app.providers import PROVIDERS
 
@@ -22,13 +21,21 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 class UpdateSettingsRequest(BaseModel):
-    """Payload for updating platform API keys, endpoints, and default model configuration."""
-    DEFAULT_MODEL: Optional[str] = None
+    """Payload for updating stored provider credentials.
+
+    Credentials are the only thing this endpoint writes. Endpoints, model choices and
+    execution limits are deployment configuration and come from the environment, so
+    they cannot be changed by anyone who can reach the UI. Unknown fields are rejected
+    rather than ignored, so an attempt to set one fails loudly instead of appearing to
+    succeed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     OPENAI_API_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
     HUGGINGFACE_API_KEY: Optional[str] = None
-    VLLM_API_BASE: Optional[str] = None
 
 
 class ProviderCredential(BaseModel):
@@ -59,10 +66,6 @@ class SecurityPosture(BaseModel):
 
 class PublicSettings(BaseModel):
     """Everything the settings page renders, with credentials masked."""
-    DEFAULT_MODEL: str
-    VLLM_API_BASE: str
-    DOCKER_AVAILABLE: bool
-    AGENT_MAX_ITERATIONS: int
     providers: List[ProviderCredential]
     security: SecurityPosture
 
@@ -126,14 +129,7 @@ def _public_settings() -> PublicSettings:
             )
         )
 
-    return PublicSettings(
-        DEFAULT_MODEL=settings.DEFAULT_MODEL,
-        VLLM_API_BASE=settings.VLLM_API_BASE,
-        DOCKER_AVAILABLE=sandbox_manager.is_available,
-        AGENT_MAX_ITERATIONS=settings.AGENT_MAX_ITERATIONS,
-        providers=credentials,
-        security=_security_posture(),
-    )
+    return PublicSettings(providers=credentials, security=_security_posture())
 
 
 @router.get("", response_model=PublicSettings)

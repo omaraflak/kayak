@@ -99,6 +99,17 @@ def _clean_initial_title(prompt: Optional[str]) -> Optional[str]:
     return clean[:36].rsplit(" ", 1)[0] + "..." if len(clean) > 36 else clean
 
 
+def resolve_conversation_model(agent_id: str) -> Optional[str]:
+    """Returns the model a conversation with this agent will actually run on.
+
+    Resolved exactly the way the engine resolves it, falling back to the general agent,
+    so a generated title comes from the same model that answers the conversation. There
+    is no global default to reach for: if no agent resolves, the caller does without.
+    """
+    agent_config = agent_manager.get_agent(agent_id) or agent_manager.get_agent("general")
+    return agent_config.model if agent_config else None
+
+
 async def _async_generate_and_update_title(conversation_id: str, prompt: str, model_name: str) -> None:
     """Asynchronously generates an LLM title in the background without delaying conversation creation."""
     try:
@@ -209,13 +220,13 @@ async def create_new_conversation(request: CreateConversationRequest) -> Convers
         isolated_container=request.isolated_container,
     )
 
-    # Launch background LLM title generation without blocking UI response
-    if not request.title and request.initial_message:
-        agent_config = agent_manager.get_agent(request.agent_id)
-        model_name = agent_config.model if agent_config else settings.DEFAULT_MODEL
+    # Launch background LLM title generation without blocking UI response. It runs on
+    # the conversation's own model, so no title is written if that cannot be resolved.
+    title_model = resolve_conversation_model(request.agent_id)
+    if not request.title and request.initial_message and title_model:
         _spawn_side_task(
             _async_generate_and_update_title(
-                conversation.id, request.initial_message, model_name
+                conversation.id, request.initial_message, title_model
             )
         )
 

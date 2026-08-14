@@ -233,10 +233,7 @@ export const App: React.FC = () => {
         )}
 
         {currentTab === 'settings' && (
-          <SettingsView
-            onDirtyChange={setHasUnsavedSettings}
-            onOpenLocalModels={() => handleSelectTab('models')}
-          />
+          <SettingsView onDirtyChange={setHasUnsavedSettings} />
         )}
       </main>
 

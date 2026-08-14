@@ -1,7 +1,7 @@
 import { AppSettings, ProviderCredential, SettingsUpdate } from '../types';
 
 /**
- * The edits a user has made to settings but not yet saved.
+ * The edits a user has made to the stored credentials but not yet saved.
  *
  * Credentials are deliberately not round-tripped through the form. The server returns
  * a mask, and the old form loaded that mask into the input: you could not tell what
@@ -19,8 +19,6 @@ export type CredentialEdit =
   | { kind: 'clear' };
 
 export interface SettingsDraft {
-  defaultModel: string;
-  vllmBase: string;
   /** Keyed by the provider's `setting_key`. */
   credentials: Record<string, CredentialEdit>;
 }
@@ -31,11 +29,7 @@ export function draftFromSettings(settings: AppSettings): SettingsDraft {
   for (const provider of settings.providers) {
     credentials[provider.setting_key] = { kind: 'unchanged' };
   }
-  return {
-    defaultModel: settings.DEFAULT_MODEL,
-    vllmBase: settings.VLLM_API_BASE,
-    credentials,
-  };
+  return { credentials };
 }
 
 /** Reports whether a credential edit would change what is stored. */
@@ -51,15 +45,13 @@ export function isCredentialDirty(
 
 /** Reports whether the draft differs from what is saved. */
 export function isDraftDirty(draft: SettingsDraft, settings: AppSettings): boolean {
-  if (draft.defaultModel.trim() !== settings.DEFAULT_MODEL.trim()) return true;
-  if (draft.vllmBase.trim() !== settings.VLLM_API_BASE.trim()) return true;
   return settings.providers.some((provider) =>
     isCredentialDirty(draft.credentials[provider.setting_key], provider)
   );
 }
 
 /**
- * Reduces a draft to the fields that actually changed.
+ * Reduces a draft to the credentials that actually changed.
  *
  * Sending only what changed is what makes "leave the input empty to keep the existing
  * key" work: an untouched credential is simply absent from the payload, so there is no
@@ -70,13 +62,6 @@ export function buildSettingsUpdate(
   settings: AppSettings
 ): SettingsUpdate {
   const update: SettingsUpdate = {};
-
-  if (draft.defaultModel.trim() !== settings.DEFAULT_MODEL.trim()) {
-    update.DEFAULT_MODEL = draft.defaultModel.trim();
-  }
-  if (draft.vllmBase.trim() !== settings.VLLM_API_BASE.trim()) {
-    update.VLLM_API_BASE = draft.vllmBase.trim();
-  }
 
   for (const provider of settings.providers) {
     const edit = draft.credentials[provider.setting_key];

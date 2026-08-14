@@ -23,14 +23,13 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 for directory in [DATA_DIR, AGENTS_DIR, SKILLS_DIR, TOOLS_DIR, WORKSPACES_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
-# Keys that are persisted to/from settings.json
+# Keys that are persisted to/from settings.json. Only credentials: everything else is
+# deployment configuration, which belongs to the environment rather than to a form.
 _PERSISTABLE_KEYS = [
-    "DEFAULT_MODEL",
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
     "ANTHROPIC_API_KEY",
     "HUGGINGFACE_API_KEY",
-    "VLLM_API_BASE",
 ]
 
 
@@ -111,10 +110,9 @@ class Settings:
         self.DB_PATH: Path = DB_PATH
         self.SETTINGS_FILE: Path = SETTINGS_FILE
 
-        # LLM Providers Configuration
-        self.DEFAULT_MODEL: str = os.getenv(
-            "KAYAK_DEFAULT_MODEL", "gemini/gemini-3.6-flash"
-        )
+        # LLM Providers Configuration. There is deliberately no global default model:
+        # every agent carries its own, and anything that needs a model is acting on
+        # behalf of some agent.
         self.OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
         self.GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
         self.ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")

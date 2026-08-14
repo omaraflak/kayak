@@ -128,7 +128,6 @@ app.include_router(settings_route.router)
 async def health_check():
     return {
         "status": "ok",
-        "default_model": settings.DEFAULT_MODEL,
         "total_agents": len(agent_manager.list_agents()),
         "total_skills": len(skill_registry.list_skills()),
         "total_tools": len(tool_registry.list_all_tools()),

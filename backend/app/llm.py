@@ -358,17 +358,21 @@ async def generate_completion(
         return {"content": None, "thinking": None, "tool_calls": None, "error": str(error)}
 
 
-async def generate_title(prompt: str, model: Optional[str] = None) -> str:
+async def generate_title(prompt: str, model: str) -> str:
     """Generates a concise, relevant 3-6 word title for a conversation using an LLM call.
+
+    The model is required: a title is written by the same model the conversation runs
+    on, so it costs nothing extra to configure and cannot quietly call a provider the
+    user never set up.
 
     Args:
         prompt: Initial user message text.
-        model: Optional model override (defaults to settings.DEFAULT_MODEL).
+        model: Model the conversation runs on.
 
     Returns:
-        str: Generated conversation title or sanitized fallback.
+        str: Generated conversation title, or a sanitized excerpt of the prompt if the
+        call fails.
     """
-    chosen_model = model or settings.DEFAULT_MODEL
     try:
         messages = [
             {
@@ -381,7 +385,7 @@ async def generate_title(prompt: str, model: Optional[str] = None) -> str:
             {"role": "user", "content": f"User prompt:\n{prompt[:350]}"},
         ]
         result = await generate_completion(
-            model=chosen_model,
+            model=model,
             messages=messages,
             temperature=0.3,
         )

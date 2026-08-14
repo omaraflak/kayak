@@ -3,7 +3,6 @@ import { AppSettings, ProviderCredential } from '../types';
 import { api } from '../api/client';
 import { useDialog } from '../context/DialogContext';
 import { useTheme, ThemeMode } from '../context/ThemeContext';
-import { ModelSelectorModal } from './ModelSelectorModal';
 import {
   CredentialEdit,
   SettingsDraft,
@@ -16,8 +15,6 @@ import {
 import {
   Settings as SettingsIcon,
   Key,
-  Server,
-  Cpu,
   CheckCircle2,
   Save,
   ExternalLink,
@@ -36,21 +33,15 @@ import {
 interface SettingsViewProps {
   /** Lets the shell warn before navigating away from unsaved credentials. */
   onDirtyChange?: (isDirty: boolean) => void;
-  /** Opens the Local Models page, which owns the vLLM server. */
-  onOpenLocalModels?: () => void;
 }
 
-export const SettingsView: React.FC<SettingsViewProps> = ({
-  onDirtyChange,
-  onOpenLocalModels,
-}) => {
+export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => {
   const dialog = useDialog();
   const { theme, setTheme } = useTheme();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [draft, setDraft] = useState<SettingsDraft | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
 
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -189,7 +180,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               )}
             </h1>
             <p className="text-xs text-md-on-surface-variant">
-              Provider credentials, local inference endpoint, and the default model for new agents.
+              Appearance and the API credentials Kayak uses to reach model providers.
             </p>
           </div>
         </div>
@@ -270,101 +261,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </Section>
 
-        {/* ---------------------------------------------------------- Default model */}
-        <Section
-          icon={<Cpu className="w-4 h-4 text-md-primary" />}
-          title="Default model"
-          subtitle="Used by new agents and for generating conversation titles."
-        >
-          <div className="flex items-center gap-2">
-            <code className="flex-1 bg-md-surface-container-lowest border border-md-outline-variant rounded-xl px-3.5 py-2 text-xs font-mono text-md-on-surface truncate">
-              {draft.defaultModel || 'None selected'}
-            </code>
-            {/* Picked from the catalog rather than typed: a typo here is only
-                discovered later, as a provider error on every new conversation. */}
-            <button
-              type="button"
-              onClick={() => setIsModelPickerOpen(true)}
-              className="px-4 py-2 rounded-xl border border-md-outline-variant bg-md-surface-container-low hover:bg-md-surface-container-high text-xs font-semibold text-md-on-surface transition-colors cursor-pointer shrink-0"
-            >
-              Change
-            </button>
-          </div>
-        </Section>
-
-        {/* --------------------------------------------------------- Local endpoint */}
-        <Section
-          icon={<Server className="w-4 h-4 text-md-primary" />}
-          title="Local inference endpoint"
-          subtitle="Where Kayak reaches the vLLM server."
-          action={
-            onOpenLocalModels && (
-              <button
-                type="button"
-                onClick={onOpenLocalModels}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-md-primary-container border border-md-outline-variant text-md-on-primary-container hover:opacity-90 transition-opacity shadow-2xs cursor-pointer"
-              >
-                <Server className="w-3.5 h-3.5" />
-                <span>Open Local Models</span>
-              </button>
-            )
-          }
-        >
-          <label className="block text-xs font-semibold text-md-on-surface mb-1.5">
-            vLLM endpoint base URL
-          </label>
-          <input
-            type="text"
-            value={draft.vllmBase}
-            onChange={(event) =>
-              setDraft((prev) => (prev ? { ...prev, vllmBase: event.target.value } : prev))
-            }
-            // No hardcoded fallback: the previous placeholder suggested port 8000,
-            // which is Kayak's own API, not the model server.
-            placeholder={settings.VLLM_API_BASE}
-            className="w-full bg-md-surface-container-lowest border border-md-outline-variant rounded-xl px-3.5 py-2 text-xs font-mono text-md-on-surface focus:outline-none focus:border-md-primary focus:ring-1 focus:ring-md-primary transition-all"
-          />
-          <p className="text-[11px] text-md-on-surface-variant mt-1.5">
-            Starting and stopping the server, and managing downloaded weights, lives on the
-            Local Models page.
-          </p>
-        </Section>
-
-        {/* ---------------------------------------------------------- Environment */}
-        <Section
-          icon={<Cpu className="w-4 h-4 text-md-primary" />}
-          title="Environment"
-          subtitle="Set through the environment, shown here for reference."
-        >
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <ReadOnlyStat
-              label="Docker sandbox"
-              value={settings.DOCKER_AVAILABLE ? 'Available' : 'Host mode'}
-              detail={
-                settings.DOCKER_AVAILABLE
-                  ? 'Conversations can run in an isolated container.'
-                  : 'Docker socket not reachable; agents run in the host workspace.'
-              }
-              tone={settings.DOCKER_AVAILABLE ? 'good' : 'warn'}
-            />
-            <ReadOnlyStat
-              label="Max tool steps per turn"
-              value={String(settings.AGENT_MAX_ITERATIONS)}
-              detail="KAYAK_AGENT_MAX_ITERATIONS"
-            />
-          </div>
-        </Section>
-
       </div>
-
-      <ModelSelectorModal
-        isOpen={isModelPickerOpen}
-        onClose={() => setIsModelPickerOpen(false)}
-        selectedModel={draft.defaultModel}
-        onSelectModel={(modelId) =>
-          setDraft((prev) => (prev ? { ...prev, defaultModel: modelId } : prev))
-        }
-      />
     </div>
   );
 };
@@ -555,21 +452,3 @@ const CredentialRow: React.FC<{
   );
 };
 
-const ReadOnlyStat: React.FC<{
-  label: string;
-  value: string;
-  detail: string;
-  tone?: 'good' | 'warn';
-}> = ({ label, value, detail, tone }) => (
-  <div className="p-3.5 rounded-xl border border-md-outline-variant bg-md-surface-container-lowest">
-    <span className="text-[10px] text-md-on-surface-variant uppercase font-bold block">{label}</span>
-    <span
-      className={`text-xs font-semibold block mt-0.5 ${
-        tone === 'warn' ? 'text-amber-800 dark:text-amber-200' : 'text-md-on-surface'
-      }`}
-    >
-      {value}
-    </span>
-    <span className="text-[11px] text-md-on-surface-variant font-mono">{detail}</span>
-  </div>
-);

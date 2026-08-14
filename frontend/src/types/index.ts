@@ -193,18 +193,16 @@ export interface SecurityPosture {
 }
 
 export interface AppSettings {
-  DEFAULT_MODEL: string;
-  VLLM_API_BASE: string;
-  DOCKER_AVAILABLE: boolean;
-  AGENT_MAX_ITERATIONS: number;
   providers: ProviderCredential[];
   security: SecurityPosture;
 }
 
-/** Only the fields being changed are sent; anything omitted is left alone. */
+/**
+ * Only the credentials being changed are sent; anything omitted is left alone.
+ * Endpoints, model choices and execution limits come from the environment and are
+ * deliberately not writable here.
+ */
 export interface SettingsUpdate {
-  DEFAULT_MODEL?: string;
-  VLLM_API_BASE?: string;
   OPENAI_API_KEY?: string;
   GEMINI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;

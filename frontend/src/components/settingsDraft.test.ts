@@ -31,10 +31,6 @@ function provider(overrides: Partial<ProviderCredential> = {}): ProviderCredenti
 
 function settingsWith(providers: ProviderCredential[]): AppSettings {
   return {
-    DEFAULT_MODEL: 'gemini/gemini-3.6-flash',
-    VLLM_API_BASE: 'http://host.docker.internal:8001/v1',
-    DOCKER_AVAILABLE: true,
-    AGENT_MAX_ITERATIONS: 25,
     providers,
     security: { auth_required: false, host: '127.0.0.1', is_loopback: true, warning: null },
   };
@@ -85,12 +81,16 @@ describe('buildSettingsUpdate', () => {
   it('omits untouched credentials entirely', () => {
     // Absence is what lets an empty input mean "keep the existing key" -- there is no
     // mask for the server to have to recognise.
-    const settings = settingsWith([provider({ is_set: true, preview: '••••••••9876' })]);
-    const draft = { ...draftFromSettings(settings), defaultModel: 'openai/gpt-4o' };
+    const settings = settingsWith([
+      provider({ is_set: true, preview: '••••••••9876' }),
+      provider({ id: 'gemini', setting_key: 'GEMINI_API_KEY' }),
+    ]);
+    const draft = draftFromSettings(settings);
+    draft.credentials.GEMINI_API_KEY = { kind: 'replace', value: 'AIza-new' };
 
     const update = buildSettingsUpdate(draft, settings);
 
-    expect(update).toEqual({ DEFAULT_MODEL: 'openai/gpt-4o' });
+    expect(update).toEqual({ GEMINI_API_KEY: 'AIza-new' });
     expect('OPENAI_API_KEY' in update).toBe(false);
   });
 
@@ -118,20 +118,11 @@ describe('buildSettingsUpdate', () => {
     const draft = draftFromSettings(settings);
     draft.credentials.OPENAI_API_KEY = { kind: 'replace', value: 'sk-a' };
     draft.credentials.GEMINI_API_KEY = { kind: 'clear' };
-    draft.vllmBase = 'http://localhost:9000/v1';
 
     expect(buildSettingsUpdate(draft, settings)).toEqual({
       OPENAI_API_KEY: 'sk-a',
       GEMINI_API_KEY: '',
-      VLLM_API_BASE: 'http://localhost:9000/v1',
     });
-  });
-
-  it('does not treat re-typing the same endpoint as a change', () => {
-    const settings = settingsWith([provider()]);
-    const draft = { ...draftFromSettings(settings), vllmBase: '  http://host.docker.internal:8001/v1  ' };
-
-    expect(buildSettingsUpdate(draft, settings)).toEqual({});
   });
 });
 
