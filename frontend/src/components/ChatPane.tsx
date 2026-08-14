@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import { Conversation, Message } from '../types';
 import { api } from '../api/client';
 import { useSSE, ToolApprovalRequest } from '../hooks/useSSE';
@@ -17,6 +17,7 @@ import {
   isPersistedTurn,
   lastAssistantTurnIndex,
 } from './conversationTurns';
+import { isNearBottom } from './chatScroll';
 import { extractWrittenFiles, workspaceRelativePath } from './workspaceFiles';
 import {
   ActiveToolCalls,
@@ -43,9 +44,6 @@ import { useDialog } from '../context/DialogContext';
 
 export type { GroupedTurn } from './conversationTurns';
 export { groupMessagesIntoTurns } from './conversationTurns';
-
-/** How close to the bottom still counts as "following along", in pixels. */
-const FOLLOW_THRESHOLD_PX = 120;
 
 export interface ChatPaneProps {
   conversationId: string | null;
@@ -108,9 +106,14 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   const vllm = useVllmModel(agentModel);
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const messagesContentRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  // Mirrors isFollowingOutput for callbacks that are registered once and would
+  // otherwise capture a stale value (the resize observer below).
+  const isFollowingRef = useRef(true);
+  isFollowingRef.current = isFollowingOutput;
 
-  const scrollToBottom = (smooth = true) => {
+  const scrollToBottom = (smooth = false) => {
     if (messagesContainerRef.current) {
       messagesContainerRef.current.scrollTo({
         top: messagesContainerRef.current.scrollHeight,
@@ -152,19 +155,33 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     setIsFollowingOutput(true);
   }, [conversationId, loadConversationData]);
 
-  // Only follow the output while the reader is already at the bottom. Scrolling up to
-  // re-read something during a long generation used to drag the view back down on
-  // every token.
-  useEffect(() => {
+  // Positioned before the browser paints, and without animation: opening a
+  // conversation should simply *be* at the newest message, rather than showing the
+  // top of the history and then scrolling down through it. The same instant pin
+  // keeps the view at the end as output arrives; a smooth animation there only
+  // chases the content it is trying to follow.
+  useLayoutEffect(() => {
     if (isFollowingOutput) scrollToBottom();
   }, [messages, streamingTokenText, streamingThinkingText, activeToolExecutions, isFollowingOutput]);
+
+  // Content that finishes loading after paint -- images, KaTeX, highlighted code --
+  // grows the transcript underneath the viewport, which would silently leave the
+  // reader above the end. Re-pin whenever the height changes while following.
+  useEffect(() => {
+    const content = messagesContentRef.current;
+    if (!content) return;
+
+    const observer = new ResizeObserver(() => {
+      if (isFollowingRef.current) scrollToBottom();
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [conversationId]);
 
   const handleScroll = () => {
     const element = messagesContainerRef.current;
     if (!element) return;
-    const distanceFromBottom =
-      element.scrollHeight - element.scrollTop - element.clientHeight;
-    setIsFollowingOutput(distanceFromBottom <= FOLLOW_THRESHOLD_PX);
+    setIsFollowingOutput(isNearBottom(element));
   };
 
   const resetStreamState = useCallback(() => {
@@ -466,7 +483,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
           onScroll={handleScroll}
           className="h-full overflow-y-auto px-4 sm:px-6 py-6"
         >
-          <div className="max-w-3xl mx-auto w-full space-y-6">
+          <div ref={messagesContentRef} className="max-w-3xl mx-auto w-full space-y-6">
             {groupedTurns.length === 0 && !isStreamingTurn && (
               <div className="text-center py-20 space-y-3">
                 <div className="w-12 h-12 rounded-2xl bg-md-primary-container text-md-on-primary-container border border-md-outline-variant flex items-center justify-center mx-auto shadow-xs">
