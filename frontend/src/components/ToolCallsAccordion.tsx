@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, Wrench, CheckCircle2, AlertCircle } from 'lucide-react';
 import { ToolCallCard } from './ToolCallCard';
-import { ToolCallItem } from '../types';
+import { summarizeToolCalls } from './toolCallSummary';
 
 interface ToolExecutionItem {
   id: string;
@@ -24,8 +24,7 @@ export const ToolCallsAccordion: React.FC<ToolCallsAccordionProps> = ({
 
   if (!toolCalls || toolCalls.length === 0) return null;
 
-  const totalCount = toolCalls.length;
-  const hasErrors = toolCalls.some((t) => t.isError);
+  const summary = summarizeToolCalls(toolCalls);
 
   return (
     <div className="my-3 font-sans">
@@ -40,20 +39,23 @@ export const ToolCallsAccordion: React.FC<ToolCallsAccordionProps> = ({
       >
         <div className="flex items-center gap-1.5">
           <Wrench className="w-3.5 h-3.5 text-md-primary" />
-          <span>
-            {totalCount} {totalCount === 1 ? 'tool call' : 'tool calls'} executed
-          </span>
+          <span>{summary.label}</span>
         </div>
 
-        {hasErrors ? (
-          <span className="inline-flex items-center gap-1 text-[10px] text-md-error font-semibold bg-md-error-container border border-md-outline-variant px-1.5 py-0.5 rounded-full">
+        {/* Amber and counted, never red and never "failed": individual steps erroring
+            is normal, and the turn's own outcome is reported elsewhere. */}
+        {summary.tone === 'partial' ? (
+          <span
+            className="inline-flex items-center gap-1 text-[10px] text-amber-800 dark:text-amber-200 font-semibold bg-amber-100 dark:bg-amber-950/80 border border-amber-300 dark:border-amber-800/80 px-1.5 py-0.5 rounded-full"
+            title="Some steps errored; open the list to see which."
+          >
             <AlertCircle className="w-3 h-3" />
-            <span>failed</span>
+            <span>{summary.badgeLabel}</span>
           </span>
         ) : (
           <span className="inline-flex items-center gap-1 text-[10px] text-emerald-800 dark:text-emerald-200 font-semibold bg-emerald-100 dark:bg-emerald-950/80 border border-emerald-300 dark:border-emerald-800/80 px-1.5 py-0.5 rounded-full">
             <CheckCircle2 className="w-3 h-3 stroke-[2.5]" />
-            <span>completed</span>
+            <span>{summary.badgeLabel}</span>
           </span>
         )}
 
