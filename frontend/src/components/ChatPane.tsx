@@ -60,6 +60,12 @@ export interface ChatPaneProps {
   onConversationUpdated?: () => void;
   /** Opens a conversation created from this one, e.g. by branching. */
   onOpenConversation?: (conversation: Conversation) => void;
+  /**
+   * Reports whether a turn is in flight. The stored conversation status only changes
+   * in the database, and the shell re-reads that list when a turn *ends* -- so without
+   * this the sidebar could never show activity while it was actually happening.
+   */
+  onActivityChange?: (isActive: boolean) => void;
 }
 
 export const ChatPane: React.FC<ChatPaneProps> = ({
@@ -78,6 +84,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   onRefreshConversations,
   onConversationUpdated,
   onOpenConversation,
+  onActivityChange,
 }) => {
   const dialog = useDialog();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -149,6 +156,14 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   useEffect(() => {
     if (isFollowingOutput) scrollToBottom();
   }, [messages, streamingTokenText, streamingThinkingText, activeToolExecutions, isFollowingOutput]);
+
+  // Report activity while this pane is mounted, and clear it on unmount so a
+  // conversation cannot be left looking busy after it is closed.
+  useEffect(() => {
+    onActivityChange?.(isSending);
+  }, [isSending, onActivityChange]);
+
+  useEffect(() => () => onActivityChange?.(false), [onActivityChange]);
 
   const handleScroll = () => {
     const element = messagesContainerRef.current;

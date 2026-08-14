@@ -239,6 +239,8 @@ export interface VLLMDeployRequest {
   dtype?: string;
   /** Executes modelling code published in the model repository. Off by default. */
   trust_remote_code?: boolean;
+  /** CPU deployments only: memory reserved for the KV cache, in GiB. */
+  cpu_kvcache_space_gb?: number | null;
 }
 
 export interface GPUDevice {
@@ -250,6 +252,10 @@ export interface HostCapability {
   docker_available: boolean;
   gpus: GPUDevice[];
   total_vram_mb: number;
+  /** Memory Docker reports for its host — what actually bounds a CPU deployment. */
+  total_memory_mb: number;
+  /** KV cache size a CPU deployment would use by default, in GiB. */
+  default_cpu_kvcache_gb: number;
   accelerator: 'cuda' | 'cpu';
   image_present?: boolean | null;
 }

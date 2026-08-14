@@ -101,6 +101,37 @@ export function judgeFit(
   return 'fits';
 }
 
+/**
+ * Memory a CPU deployment consumes beyond the size of the weight files.
+ *
+ * Measured rather than guessed. On a 7.77 GB host, a model whose weights are 1.4 GB on
+ * disk reported a 2.33 GB loaded footprint and left 2.5 GB free -- so about 4 GB went
+ * to the runtime plus the gap between the file size and what the loaded model actually
+ * occupies. Rounded up, because over-promising here is precisely what stops a
+ * deployment from starting.
+ */
+const CPU_RUNTIME_OVERHEAD_GB = 4.5;
+
+/**
+ * The largest working-memory reservation a CPU deployment can actually use.
+ *
+ * vLLM refuses to start when the reservation exceeds the memory still free after the
+ * weights are loaded, so this is a hard ceiling rather than a suggestion.
+ *
+ * @param totalMemoryGB Memory available to Docker.
+ * @param estimate Sizing for the model, when its repository name reveals it.
+ */
+export function maxWorkingMemoryGB(
+  totalMemoryGB: number,
+  estimate: ModelSizeEstimate | null
+): number {
+  if (!Number.isFinite(totalMemoryGB) || totalMemoryGB <= 0) return 1;
+
+  const weightsGB = estimate?.weightsGB ?? 0;
+  const spare = Math.floor(totalMemoryGB - weightsGB - CPU_RUNTIME_OVERHEAD_GB);
+  return Math.max(1, spare);
+}
+
 /** Formats a byte count for display, in the units people use for model weights. */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';

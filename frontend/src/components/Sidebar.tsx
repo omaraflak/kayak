@@ -8,7 +8,8 @@ import {
   Sparkles, 
   Wrench, 
   Cpu, 
-  Activity, 
+  Activity,
+  Loader2,
   Settings
 } from 'lucide-react';
 import { useDialog } from '../context/DialogContext';
@@ -21,6 +22,12 @@ interface SidebarProps {
   agents: AgentConfig[];
   currentTab: NavigationTab;
   onSelectTab: (tab: NavigationTab) => void;
+  /**
+   * Conversation with a turn in flight right now, observed live rather than read from
+   * the stored status, which only changes on the server and is re-read once a turn has
+   * already ended.
+   */
+  activeTurnConversationId?: string | null;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -31,6 +38,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   agents,
   currentTab,
   onSelectTab,
+  activeTurnConversationId,
 }) => {
   const dialog = useDialog();
 
@@ -144,8 +152,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </span>
         <button
           onClick={() => {
-            onSelectConversation(null); // Enter draft mode
-            onSelectTab('chat');
+            onSelectConversation(null); // Enter draft mode; this also opens the chat tab.
           }}
           className="p-1.5 rounded-lg text-md-primary hover:bg-md-surface-container-high transition-colors flex items-center gap-1 text-xs font-bold cursor-pointer"
           title="New Conversation"
@@ -164,14 +171,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ) : (
           conversations.map((conversation) => {
             const isActive = currentTab === 'chat' && activeConversationId === conversation.id;
-            const isRunning = conversation.status === 'running';
+            // For the conversation on screen the live signal is authoritative in both
+            // directions: it knows a turn has begun before the stored status is re-read,
+            // and knows it has ended before the refreshed list arrives. Any other
+            // conversation can only be judged by what was last stored.
+            const isRunning =
+              activeConversationId === conversation.id
+                ? activeTurnConversationId === conversation.id
+                : conversation.status === 'running';
             return (
               <div
                 key={conversation.id}
-                onClick={() => {
-                  onSelectConversation(conversation.id);
-                  onSelectTab('chat');
-                }}
+                // Selecting a conversation already switches to the chat tab and sets
+                // the URL. Also calling onSelectTab here re-navigated using the
+                // previously selected id, because that state has not flushed yet
+                // within the same handler.
+                onClick={() => onSelectConversation(conversation.id)}
                 className={`group relative flex items-center justify-between px-3 py-2.5 rounded-xl text-xs cursor-pointer transition-all border ${
                   isActive
                     ? 'bg-md-primary-container text-md-on-primary-container border-md-primary/40 shadow-xs font-medium'
@@ -191,9 +206,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <div className="text-[10px] text-md-on-surface-variant flex items-center gap-1.5 mt-0.5 font-mono">
                       <span>{conversation.agent_id}</span>
                       {isRunning && (
-                        <span className="inline-flex items-center gap-1 text-[10px] text-teal-700 dark:text-teal-300 font-bold">
-                          <span className="w-1.5 h-1.5 rounded-full bg-teal-500 animate-pulse"></span>
-                          <span>active</span>
+                        <span
+                          className="inline-flex items-center gap-1 text-[10px] text-md-primary font-bold"
+                          title="The agent is working on this conversation"
+                        >
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          <span>working</span>
                         </span>
                       )}
                     </div>

@@ -1,4 +1,5 @@
 import asyncio
+import re
 import time
 from pathlib import Path
 import shutil
@@ -35,6 +36,94 @@ _ACTIVE_STATES = frozenset({
     VLLMServerState.LOADING,
     VLLMServerState.READY,
 })
+
+#: Share of total memory offered to the KV cache. The rest goes to the model weights
+#: and the vLLM runtime, which together take far more than the weights alone: loading a
+#: 1.4 GiB model on an 7.77 GiB host left only 2.5 GiB free. Subtracting a fixed
+#: headroom instead over-promises on exactly the small machines that can least afford it.
+_CPU_KVCACHE_MEMORY_SHARE = 0.25
+_MIN_CPU_KVCACHE_GIB = 1
+_MAX_CPU_KVCACHE_GIB = 8
+#: Memory the runtime and the loaded weights need before any is left for the cache.
+#: Used to bound an explicit request against what the machine can actually spare.
+_CPU_RUNTIME_RESERVE_GIB = 5
+#: Used when Docker will not say how much memory it has.
+_FALLBACK_CPU_KVCACHE_GIB = 1
+
+#: Lines like "ValueError: Available memory on node 0 ... is less than requested".
+_ERROR_LINE = re.compile(r"\b([A-Za-z_]*(?:Error|Exception)):\s*(\S.*)$")
+
+#: Log noise that names an exception type but never explains a failure.
+_UNHELPFUL_ERROR_MARKERS = (
+    "resource_tracker",
+    "FutureWarning",
+    "DeprecationWarning",
+    "UserWarning",
+)
+
+
+def resolve_cpu_kvcache_gib(
+    total_memory_bytes: Optional[int], requested_gib: Optional[int] = None
+) -> int:
+    """Chooses how much memory to hand vLLM for its CPU KV cache.
+
+    This was previously a hardcoded 12 GiB, which no machine with less than roughly
+    14 GiB available could ever satisfy: vLLM refuses to start when the requested KV
+    cache exceeds free memory, so the smallest model failed exactly like the largest.
+
+    Args:
+        total_memory_bytes: Memory Docker reports for its host, if known.
+        requested_gib: An explicit choice from the user, which wins.
+
+    Returns:
+        int: Size in GiB, always at least 1.
+    """
+    if requested_gib:
+        # Clamped, not trusted. An oversized request is refused by vLLM minutes into a
+        # deployment, long after the weights have downloaded, so it is better caught
+        # here than surfaced as a crash.
+        ceiling = _MAX_CPU_KVCACHE_GIB
+        if total_memory_bytes and total_memory_bytes > 0:
+            spare = int(total_memory_bytes / (1024 ** 3)) - _CPU_RUNTIME_RESERVE_GIB
+            ceiling = max(_MIN_CPU_KVCACHE_GIB, spare)
+        return max(_MIN_CPU_KVCACHE_GIB, min(int(requested_gib), ceiling))
+
+    if not total_memory_bytes or total_memory_bytes <= 0:
+        return _FALLBACK_CPU_KVCACHE_GIB
+
+    total_gib = total_memory_bytes / (1024 ** 3)
+    share_gib = int(total_gib * _CPU_KVCACHE_MEMORY_SHARE)
+    return max(_MIN_CPU_KVCACHE_GIB, min(_MAX_CPU_KVCACHE_GIB, share_gib))
+
+
+def extract_failure_reason(log_lines: List[str]) -> Optional[str]:
+    """Finds the line in a container's output that explains why it died.
+
+    Quoting the last few lines instead is unreliable: a crashing vLLM prints shutdown
+    tracebacks and interpreter warnings after the real error, so the tail is usually
+    noise while the sentence naming the cause sits further up.
+
+    Args:
+        log_lines: Captured container output, oldest first.
+
+    Returns:
+        Optional[str]: The most specific error message found, or None.
+    """
+    best: Optional[str] = None
+
+    for line in log_lines:
+        match = _ERROR_LINE.search(line)
+        if not match:
+            continue
+        message = match.group(2).strip()
+        if not message or any(marker in line for marker in _UNHELPFUL_ERROR_MARKERS):
+            continue
+        # Later errors are usually wrappers around the first real one, so the earliest
+        # informative message is kept.
+        if best is None:
+            best = f"{match.group(1)}: {message}"
+
+    return best
 
 
 class VLLMManager:
@@ -87,10 +176,16 @@ class VLLMManager:
             pass
 
     def subscribe(self) -> asyncio.Queue:
-        """Subscribes to live SSE events from the vLLM manager."""
+        """Subscribes to live SSE events from the vLLM manager.
+
+        The greeting must use the same envelope as every later broadcast. It used to
+        push the bare status dict, which the client could not read -- so a tab that
+        reconnected after an app restart received nothing and kept showing whatever it
+        believed before the restart.
+        """
         queue: asyncio.Queue = asyncio.Queue(maxsize=100)
         self._listeners.add(queue)
-        queue.put_nowait(self.get_status().model_dump())
+        queue.put_nowait({"type": "status", "data": self.get_status().model_dump()})
         return queue
 
     def unsubscribe(self, queue: asyncio.Queue):
@@ -239,7 +334,9 @@ class VLLMManager:
 
             # 3. Build Container Execution Arguments & Environment
             env_vars: Dict[str, str] = {
-                "HF_HUB_ENABLE_HF_TRANSFER": "1",
+                # HF_HUB_ENABLE_HF_TRANSFER is deprecated and ignored by current
+                # huggingface_hub, which warns about it on every start.
+                "HF_XET_HIGH_PERFORMANCE": "1",
                 "PYTHONUNBUFFERED": "1",
             }
             if settings.HUGGINGFACE_API_KEY:
@@ -273,8 +370,20 @@ class VLLMManager:
                     "--dtype", cpu_dtype,
                     "--enforce-eager",
                 ])
-                env_vars["VLLM_CPU_KVCACHE_SPACE"] = "12"
-                shm_size = "12g"
+
+                # Sized to the machine. vLLM refuses to start when the requested KV
+                # cache exceeds free memory, so a fixed figure made every CPU launch
+                # fail on any host smaller than that figure.
+                total_memory = await self._docker_memory_bytes()
+                kvcache_gib = resolve_cpu_kvcache_gib(total_memory, request.cpu_kvcache_space_gb)
+                env_vars["VLLM_CPU_KVCACHE_SPACE"] = str(kvcache_gib)
+                shm_size = f"{kvcache_gib}g"
+
+                if total_memory:
+                    self._add_log(
+                        f"ℹ Docker reports {total_memory / 1024 ** 3:.1f} GiB of memory; "
+                        f"reserving {kvcache_gib} GiB for the KV cache."
+                    )
 
             if request.trust_remote_code:
                 cmd_args.append("--trust-remote-code")
@@ -426,8 +535,14 @@ class VLLMManager:
                 "model, a lower --max-model-len, or a lower GPU memory fraction."
             )
         elif exit_code:
-            tail = " / ".join(self._log_history[-3:]) or "no output was captured"
-            detail = f"Container exited with code {exit_code}. Last output: {tail}"
+            # The tail of a crashing vLLM is shutdown noise; the sentence that names
+            # the cause is further up.
+            reason = extract_failure_reason(self._log_history)
+            detail = (
+                f"Container exited with code {exit_code}. {reason}"
+                if reason
+                else f"Container exited with code {exit_code}, with no error in its output."
+            )
         else:
             detail = "The container stopped before the server became reachable."
 
@@ -672,6 +787,25 @@ class VLLMManager:
         """Host directory mounted into the container as the Hugging Face cache."""
         return settings.DATA_DIR / "huggingface_cache"
 
+    async def _docker_memory_bytes(self) -> Optional[int]:
+        """Returns the memory Docker reports for its host, or None if unavailable.
+
+        On Docker Desktop this is the VM's allocation rather than the laptop's RAM,
+        which is exactly the number that bounds a container.
+        """
+        if not self._docker_available or not self._client:
+            return None
+
+        def _read() -> Optional[int]:
+            try:
+                total = self._client.info().get("MemTotal")
+                return int(total) if total else None
+            except Exception:
+                return None
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _read)
+
     async def get_host_capability(self) -> HostCapability:
         """Reports GPU inventory, Docker availability, and whether the image is pulled."""
         image_present: Optional[bool] = None
@@ -691,7 +825,11 @@ class VLLMManager:
             loop = asyncio.get_running_loop()
             image_present = await loop.run_in_executor(None, _has_image)
 
-        return await probe_host_capability(self._docker_available, image_present)
+        total_memory = await self._docker_memory_bytes()
+        capability = await probe_host_capability(self._docker_available, image_present)
+        capability.total_memory_mb = int(total_memory / (1024 ** 2)) if total_memory else 0
+        capability.default_cpu_kvcache_gb = resolve_cpu_kvcache_gib(total_memory)
+        return capability
 
     async def get_cache_info(self) -> ModelCacheInfo:
         """Lists locally downloaded model weights and their size on disk."""

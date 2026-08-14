@@ -4,6 +4,7 @@ import {
   estimateModelSize,
   formatBytes,
   judgeFit,
+  maxWorkingMemoryGB,
   parseParameterCount,
 } from './modelSizing';
 
@@ -93,6 +94,38 @@ describe('judgeFit', () => {
 
   it('says unknown when the size could not be read', () => {
     expect(judgeFit(null, 24)).toBe('unknown');
+  });
+});
+
+describe('maxWorkingMemoryGB', () => {
+  it('leaves room for the model and the runtime', () => {
+    // The reported machine: 7.77 GB of Docker memory running a 1.4 GB model had only
+    // 2.5 GB free once loaded, so the ceiling must sit at or below that.
+    const ceiling = maxWorkingMemoryGB(7.77, estimateModelSize('Qwen/Qwen3-0.6B'));
+
+    expect(ceiling).toBeGreaterThanOrEqual(1);
+    expect(ceiling).toBeLessThanOrEqual(2);
+  });
+
+  it('shrinks as the model grows', () => {
+    const small = maxWorkingMemoryGB(32, estimateModelSize('org/Model-1B'));
+    const large = maxWorkingMemoryGB(32, estimateModelSize('org/Model-7B'));
+
+    expect(large).toBeLessThan(small);
+  });
+
+  it('never offers less than a gigabyte', () => {
+    // Below this the deployment cannot run at all, so the floor is honest about the
+    // minimum rather than proposing zero.
+    expect(maxWorkingMemoryGB(4, estimateModelSize('org/Model-7B'))).toBe(1);
+    expect(maxWorkingMemoryGB(0, null)).toBe(1);
+  });
+
+  it('still bounds a model whose size is unknown', () => {
+    const ceiling = maxWorkingMemoryGB(16, null);
+
+    expect(ceiling).toBeGreaterThan(1);
+    expect(ceiling).toBeLessThan(16);
   });
 });
 

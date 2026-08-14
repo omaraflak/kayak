@@ -1,0 +1,10 @@
+id: local_agent
+name: Local Agent
+description: Lightweight local agent running on your computer.
+model: vllm/Qwen/Qwen3-0.6B
+temperature: 0.7
+system_prompt: You are Kayak, a lightweight local agent. Be friendly to the user.
+allowed_tools: []
+allowed_skills: []
+preloaded_skills: []
+tool_permissions: {}

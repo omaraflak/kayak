@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { HostCapability, VLLMDeployRequest } from '../types';
-import { estimateModelSize, judgeFit } from './modelSizing';
+import { estimateModelSize, judgeFit, maxWorkingMemoryGB } from './modelSizing';
 import { AlertTriangle, Cpu, Rocket, ShieldAlert, X, Zap } from 'lucide-react';
 
 /**
@@ -54,8 +54,21 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
 
   const hasGPU = (capability?.total_vram_mb ?? 0) > 0;
   const availableGB = (capability?.total_vram_mb ?? 0) / 1024;
+  const systemMemoryGB = (capability?.total_memory_mb ?? 0) / 1024;
   const estimate = useMemo(() => estimateModelSize(modelId), [modelId]);
   const fit = judgeFit(estimate, availableGB);
+
+  // Sized from the machine by the server; adjustable here because it is the setting
+  // that decides whether a CPU deployment starts at all.
+  const [kvCacheGB, setKvCacheGB] = useState<number | null>(null);
+  const memoryCeilingGB = useMemo(
+    () => maxWorkingMemoryGB(systemMemoryGB, estimate),
+    [systemMemoryGB, estimate]
+  );
+  const effectiveKvCacheGB = Math.min(
+    kvCacheGB ?? capability?.default_cpu_kvcache_gb ?? 1,
+    memoryCeilingGB
+  );
 
   const handleLaunch = () => {
     onLaunch({
@@ -65,6 +78,7 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
       gpu_memory_utilization: gpuMemory,
       enforce_eager: enforceEager,
       trust_remote_code: trustRemoteCode,
+      cpu_kvcache_space_gb: hasGPU ? null : effectiveKvCacheGB,
     });
   };
 
@@ -136,7 +150,7 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
 
           <Field
             label="Context length"
-            hint="The single most effective lever when a model will not fit. Lower means less KV cache."
+            hint="How much of a conversation the model can take into account at once. Shorter needs less memory, and is the first thing to reduce if a model will not start."
           >
             <div className="flex flex-wrap gap-1.5">
               {CONTEXT_PRESETS.map((preset) => (
@@ -175,7 +189,7 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
             </div>
           </Field>
 
-          {hasGPU && (
+          {hasGPU ? (
             <Field
               label={`GPU memory fraction — ${Math.round(gpuMemory * 100)}%`}
               hint="How much of the card vLLM reserves. Lower it to leave room for anything else using the GPU."
@@ -189,6 +203,36 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
                 onChange={(event) => setGpuMemory(Number.parseFloat(event.target.value))}
                 className="w-full accent-md-primary cursor-pointer"
               />
+            </Field>
+          ) : (
+            <Field
+              label={`Conversation memory — ${effectiveKvCacheGB} GB`}
+              hint={
+                'Space set aside for the model to remember the conversation as it runs. ' +
+                'More lets it handle longer conversations at once; the slider stops where ' +
+                'this machine runs out of room, because asking for more than that prevents ' +
+                'the model from starting at all.'
+              }
+            >
+              <input
+                type="range"
+                min={1}
+                // Hard-capped: past this the launch cannot succeed, so it is not
+                // offered rather than left to fail several minutes later.
+                max={memoryCeilingGB}
+                step={1}
+                value={effectiveKvCacheGB}
+                onChange={(event) => setKvCacheGB(Number.parseInt(event.target.value, 10))}
+                disabled={memoryCeilingGB <= 1}
+                className="w-full accent-md-primary cursor-pointer disabled:opacity-50"
+              />
+              <div className="flex items-center justify-between text-[10px] text-md-on-surface-variant font-mono pt-1">
+                <span>1 GB</span>
+                <span>
+                  {memoryCeilingGB} GB max
+                  {systemMemoryGB > 0 && ` · ${systemMemoryGB.toFixed(1)} GB on this machine`}
+                </span>
+              </div>
             </Field>
           )}
 

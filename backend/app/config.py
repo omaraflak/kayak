@@ -43,6 +43,42 @@ def _split_csv(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def running_in_container(
+    dockerenv: Path = Path("/.dockerenv"),
+    cgroup: Path = Path("/proc/1/cgroup"),
+) -> bool:
+    """Reports whether this process is itself running inside a container.
+
+    Args:
+        dockerenv: Marker file Docker places in every container.
+        cgroup: Init process control groups, which name the container runtime.
+
+    Returns:
+        bool: True when running inside a container.
+    """
+    if dockerenv.exists():
+        return True
+    try:
+        return any(
+            marker in cgroup.read_text()
+            for marker in ("docker", "containerd", "kubepods")
+        )
+    except OSError:
+        return False
+
+
+def default_vllm_api_base(port: int, in_container: bool) -> str:
+    """Chooses where to reach the vLLM server by default.
+
+    The server always publishes to a port on the host. How that is addressed depends on
+    which side of the container boundary the caller sits on: `host.docker.internal`
+    resolves only from inside a container, so using it unconditionally left a Kayak run
+    directly on the host unable to reach a model it had just started.
+    """
+    host = "host.docker.internal" if in_container else "localhost"
+    return f"http://{host}:{port}/v1"
+
+
 def _write_private_json(path: Path, payload: Dict[str, Any]) -> None:
     """Writes JSON to `path` atomically, readable only by the owning user.
 
@@ -117,8 +153,10 @@ class Settings:
         self.GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
         self.ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
         self.VLLM_PORT: int = int(os.getenv("KAYAK_VLLM_PORT", "8001"))
+        self.RUNNING_IN_CONTAINER: bool = running_in_container()
         self.VLLM_API_BASE: str = os.getenv(
-            "VLLM_API_BASE", f"http://host.docker.internal:{self.VLLM_PORT}/v1"
+            "VLLM_API_BASE",
+            default_vllm_api_base(self.VLLM_PORT, self.RUNNING_IN_CONTAINER),
         )
         self.HUGGINGFACE_API_KEY: str = os.getenv("HUGGINGFACE_API_KEY", "")
 

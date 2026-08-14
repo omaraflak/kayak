@@ -27,9 +27,27 @@ export const App: React.FC = () => {
   // Settings owns its own form state; the shell only needs to know whether leaving
   // the page would throw work away.
   const [hasUnsavedSettings, setHasUnsavedSettings] = useState(false);
+  // Live turn state for the open conversation. The stored status is only re-read when
+  // a turn finishes, so it cannot answer "is this one working right now".
+  const [activeTurnConversationId, setActiveTurnConversationId] = useState<string | null>(null);
   const dialog = useDialog();
 
-  const loadInitialData = async () => {
+  const handleActivityChange = useCallback(
+    (isActive: boolean) => {
+      setActiveTurnConversationId(isActive ? activeConversationId : null);
+    },
+    [activeConversationId]
+  );
+
+  /**
+   * Refreshes the conversation and agent lists.
+   *
+   * Deliberately does not touch which conversation is open. This runs after every
+   * turn, and re-deriving the selection from the URL here meant any moment where the
+   * URL lagged the state -- which a double navigation can cause -- was turned into a
+   * jump to a different conversation the next time a message was sent.
+   */
+  const loadInitialData = useCallback(async () => {
     try {
       const [convs, ags] = await Promise.all([
         api.listConversations(),
@@ -37,21 +55,12 @@ export const App: React.FC = () => {
       ]);
       setConversations(convs);
       setAgents(ags);
-
-      const route = parseCurrentUrl();
-      if (route.tab === 'chat') {
-        if (route.conversationId) {
-          setActiveConversationId(route.conversationId);
-        } else if (convs.length > 0 && !activeConversationId) {
-          // If at root and has conversations, select first
-          setActiveConversationId(convs[0].id);
-          navigateTo('chat', convs[0].id, true);
-        }
-      }
+      return convs;
     } catch (err) {
       console.error('Failed to load initial data:', err);
+      return [];
     }
-  };
+  }, []);
 
   const handlePopState = useCallback(() => {
     const route = parseCurrentUrl();
@@ -67,32 +76,50 @@ export const App: React.FC = () => {
   // change over SSE (including LLM-generated titles), so no background poll is needed.
   useEffect(() => {
     window.addEventListener('popstate', handlePopState);
-    loadInitialData();
+
+    // Resolving the opening route happens exactly once. Landing on /chat with no id
+    // opens the most recent conversation; after that the selection belongs to the
+    // user, and no later refresh may move it.
+    loadInitialData().then((convs) => {
+      const route = parseCurrentUrl();
+      if (route.tab === 'chat' && !route.conversationId && convs.length > 0) {
+        setActiveConversationId(convs[0].id);
+        navigateTo('chat', convs[0].id, true);
+      }
+    });
 
     return () => {
       window.removeEventListener('popstate', handlePopState);
     };
-  }, [handlePopState]);
+  }, [handlePopState, loadInitialData]);
+
+  /**
+   * Asks before navigating away from Settings with unsaved credentials.
+   *
+   * Every route out of Settings has to ask, not just the tab buttons: selecting a
+   * conversation in the sidebar leaves the page just as completely.
+   */
+  const confirmLeavingSettings = async (): Promise<boolean> => {
+    if (currentTab !== 'settings' || !hasUnsavedSettings) return true;
+
+    const leave = await dialog.confirm({
+      title: 'Discard unsaved settings?',
+      message: 'You have changes on this page that have not been saved yet.',
+      confirmText: 'Discard changes',
+      cancelText: 'Stay here',
+      variant: 'danger',
+    });
+    if (leave) setHasUnsavedSettings(false);
+    return leave;
+  };
 
   const handleSelectTab = async (tab: NavigationTab) => {
-    // Leaving Settings with an unsaved credential would silently discard it.
-    if (currentTab === 'settings' && tab !== 'settings' && hasUnsavedSettings) {
-      const leave = await dialog.confirm({
-        title: 'Discard unsaved settings?',
-        message: 'You have changes on this page that have not been saved yet.',
-        confirmText: 'Discard changes',
-        cancelText: 'Stay here',
-        variant: 'danger',
-      });
-      if (!leave) return;
-      setHasUnsavedSettings(false);
-    }
+    if (tab !== 'settings' && !(await confirmLeavingSettings())) return;
 
-    // Re-selecting the current tab keeps whatever is open in it.
-    if (tab === currentTab) {
-      navigateTo(tab, tab === 'chat' ? activeConversationId : selectedItemId);
-      return;
-    }
+    // Re-selecting the current tab is a no-op. Re-navigating here would rewrite the
+    // URL from state that may not have flushed yet, which is how selecting a
+    // conversation could leave the address bar pointing at the previous one.
+    if (tab === currentTab) return;
 
     setCurrentTab(tab);
 
@@ -109,7 +136,8 @@ export const App: React.FC = () => {
     navigateTo(tab, null);
   };
 
-  const handleSelectConversation = (id: string | null) => {
+  const handleSelectConversation = async (id: string | null) => {
+    if (!(await confirmLeavingSettings())) return;
     setActiveConversationId(id);
     setCurrentTab('chat');
     navigateTo('chat', id);
@@ -182,6 +210,7 @@ export const App: React.FC = () => {
         agents={agents}
         currentTab={currentTab}
         onSelectTab={handleSelectTab}
+        activeTurnConversationId={activeTurnConversationId}
       />
 
       {/* Main Content Pane */}
@@ -195,6 +224,7 @@ export const App: React.FC = () => {
             onRefreshConversations={loadInitialData}
             onOpenConversation={handleOpenConversation}
             onSelectConversation={handleSelectConversation}
+            onActivityChange={handleActivityChange}
           />
         )}
 

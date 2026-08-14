@@ -73,6 +73,13 @@ export const VLLMStatusProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     eventSource.addEventListener('update', handleStatus);
     eventSource.addEventListener('log', handleLog);
 
+    // Re-sync on every (re)connect. The browser quietly reconnects after the server
+    // restarts, and any state change the fresh server broadcast before this listener
+    // attached is otherwise lost -- leaving the page describing the old process.
+    eventSource.onopen = () => {
+      refresh();
+    };
+
     return () => {
       eventSource.close();
       eventSourceRef.current = null;

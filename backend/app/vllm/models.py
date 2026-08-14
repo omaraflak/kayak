@@ -21,6 +21,11 @@ class VLLMDeployRequest(BaseModel):
     max_model_len: Optional[int] = Field(None, ge=256, description="Maximum sequence length (context window)")
     enforce_eager: bool = Field(False, description="Disable CUDA graph capture for reduced memory usage")
     dtype: str = Field("auto", description="Data type for model weights ('auto', 'float16', 'bfloat16')")
+    #: CPU deployments only. vLLM refuses to start when this exceeds free memory, so
+    #: the default is derived from the memory Docker reports rather than fixed.
+    cpu_kvcache_space_gb: Optional[int] = Field(
+        None, ge=1, le=64, description="Memory reserved for the KV cache on CPU, in GiB"
+    )
     # Defaults off: this flag makes vLLM import and execute Python published in the
     # model repository, inside the container, with the Hugging Face token in its
     # environment. It is occasionally required, but it is never a safe default.
@@ -52,6 +57,11 @@ class HostCapability(BaseModel):
     docker_available: bool
     gpus: List[GPUDevice] = []
     total_vram_mb: int = 0
+    #: Memory Docker reports for its host. On Docker Desktop this is the VM's
+    #: allocation, which is what actually bounds a CPU deployment.
+    total_memory_mb: int = 0
+    #: KV cache size a CPU deployment would use by default, in GiB.
+    default_cpu_kvcache_gb: int = 0
     #: 'cuda' when the GPU image will be used, 'cpu' otherwise.
     accelerator: str = "cpu"
     #: Whether the vLLM image is already pulled, when it could be determined.
