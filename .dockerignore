@@ -5,6 +5,7 @@
 # the image can be pushed to a registry, and a baked settings.json would ship live
 # provider API keys with it.
 data/settings.json
+data/memories.md
 data/kayak.db
 data/kayak.db-wal
 data/kayak.db-shm

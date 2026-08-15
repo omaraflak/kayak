@@ -16,6 +16,7 @@ AGENTS_DIR = DATA_DIR / "agents"
 SKILLS_DIR = DATA_DIR / "skills"
 TOOLS_DIR = DATA_DIR / "tools"
 WORKSPACES_DIR = DATA_DIR / "workspaces"
+MEMORY_FILE = DATA_DIR / "memories.md"
 DB_PATH = DATA_DIR / "kayak.db"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 
@@ -148,6 +149,7 @@ class Settings:
         self.SKILLS_DIR: Path = SKILLS_DIR
         self.TOOLS_DIR: Path = TOOLS_DIR
         self.WORKSPACES_DIR: Path = WORKSPACES_DIR
+        self.MEMORY_FILE: Path = MEMORY_FILE
         self.DB_PATH: Path = DB_PATH
         self.SETTINGS_FILE: Path = SETTINGS_FILE
 

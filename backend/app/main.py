@@ -16,6 +16,7 @@ from backend.app.routes import (
     agents,
     auth,
     conversations,
+    memories,
     models,
     settings as settings_route,
     skills,
@@ -126,6 +127,7 @@ app.include_router(skills.router)
 app.include_router(tools.router)
 app.include_router(tool_builder.router)
 app.include_router(tasks.router)
+app.include_router(memories.router)
 app.include_router(settings_route.router)
 
 

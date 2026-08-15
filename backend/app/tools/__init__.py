@@ -6,6 +6,7 @@ from backend.app.tools.builtins.file_tools import (
     read_file,
     write_file,
 )
+from backend.app.tools.builtins.memory_tools import remember
 from backend.app.tools.builtins.python_tools import run_python
 from backend.app.tools.builtins.skill_management_tools import (
     create_or_update_skill,
@@ -47,6 +48,7 @@ tool_registry.register_builtin(get_subagent_result)
 tool_registry.register_builtin(web_search)
 tool_registry.register_builtin(fetch_url)
 tool_registry.register_builtin(load_skill)
+tool_registry.register_builtin(remember)
 tool_registry.register_builtin(verify_tool)
 tool_registry.register_builtin(activate_tool)
 tool_registry.register_builtin(get_tool_source)

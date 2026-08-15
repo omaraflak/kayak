@@ -14,6 +14,7 @@ allowed_tools:
 - write_file
 - web_search
 - fetch_url
+- remember
 allowed_skills:
 - skill_creator
 preloaded_skills:

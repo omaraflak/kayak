@@ -8,6 +8,7 @@ import {
   Sparkles, 
   Wrench,
   Cpu,
+  Brain,
   Loader2,
   Settings
 } from 'lucide-react';
@@ -86,6 +87,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           <Bot className={`w-4 h-4 ${currentTab === 'agents' ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
           <span>Agent Profiles</span>
+        </button>
+
+        <button
+          onClick={() => onSelectTab('memories')}
+          className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+            currentTab === 'memories'
+              ? 'bg-md-primary-container text-md-on-primary-container border border-md-primary/40 shadow-xs'
+              : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
+          }`}
+        >
+          <Brain className={`w-4 h-4 ${currentTab === 'memories' ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
+          <span>Memories</span>
         </button>
 
         <button

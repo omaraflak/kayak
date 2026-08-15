@@ -9,6 +9,7 @@
 *.key
 *.pem
 data/settings.json
+data/memories.md
 
 # --- Database & Runtime State ---
 data/kayak.db

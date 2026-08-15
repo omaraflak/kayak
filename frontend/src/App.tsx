@@ -4,6 +4,7 @@ import { api, errorMessage } from './api/client';
 import { Sidebar } from './features/conversations/Sidebar';
 import { ChatView } from './features/chat/ChatView';
 import { AgentsView } from './features/agents/AgentsView';
+import { MemoriesView } from './features/memories/MemoriesView';
 import { SkillsView } from './features/skills/SkillsView';
 import { ToolsView } from './features/tools/ToolsView';
 import { SettingsView } from './features/settings/SettingsView';
@@ -239,6 +240,8 @@ export const App: React.FC = () => {
             onStartAgentChat={handleStartAgentChat}
           />
         )}
+
+        {currentTab === 'memories' && <MemoriesView />}
 
         {currentTab === 'skills' && (
           <SkillsView 

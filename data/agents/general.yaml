@@ -7,10 +7,13 @@ temperature: 0.7
 system_prompt: You are Kayak, an intelligent, helpful, and concise AI assistant. Answer
   clearly and format code snippets in Markdown.
 allowed_tools:
-- web_search
 - fetch_url
-- load_skill
 - get_weekly_moon_phases
+- load_skill
+- remember
+- web_search
 allowed_skills: []
 preloaded_skills: []
 tool_permissions: {}
+allowed_subagents:
+- general

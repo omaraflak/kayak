@@ -16,6 +16,7 @@ allowed_tools:
 - run_command
 - load_skill
 - web_search
+- remember
 allowed_skills:
 - tool_creator
 preloaded_skills:

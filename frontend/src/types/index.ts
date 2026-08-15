@@ -10,7 +10,14 @@ export type ToolPermission = 'auto_approve' | 'ask_user' | 'denied';
 
 // Background tasks have no tab of their own: they belong to one conversation's
 // container, so they live in that conversation's container drawer.
-export type NavigationTab = 'chat' | 'agents' | 'skills' | 'tools' | 'models' | 'settings';
+export type NavigationTab =
+  | 'chat'
+  | 'agents'
+  | 'memories'
+  | 'skills'
+  | 'tools'
+  | 'models'
+  | 'settings';
 
 export type ToolCategory =
   | 'filesystem'

@@ -109,22 +109,26 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-/** Shorthand for JSON POST/PUT requests. */
-function postJSON(url: string, data: unknown): Promise<Response> {
+/** Shorthand for a JSON request body on any method. */
+function sendJSON(url: string, method: string, data: unknown): Promise<Response> {
   return fetch(
     url,
     withAuth({
-      method: 'POST',
+      method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
   );
 }
 
-async function fetchJSONPost<T>(url: string, data: unknown): Promise<T> {
-  const res = await postJSON(url, data);
+async function fetchJSONSend<T>(url: string, method: string, data: unknown): Promise<T> {
+  const res = await sendJSON(url, method, data);
   await assertOk(res);
   return res.json();
+}
+
+function fetchJSONPost<T>(url: string, data: unknown): Promise<T> {
+  return fetchJSONSend<T>(url, 'POST', data);
 }
 
 async function requestVoid(url: string, method: string, action: string): Promise<void> {
@@ -258,6 +262,18 @@ export const api = {
 
   activateTool: (data: { tool_name: string; tool_code: string; verify_code: string }): Promise<ToolDefinition> =>
     fetchJSONPost(`${API_BASE}/tool-builder/activate`, data),
+
+  // Memory -- what Kayak has learned from the user, shared by every agent.
+  listMemories: (): Promise<string[]> =>
+    fetchJSON<{ memories: string[] }>(`${API_BASE}/memories`).then((data) => data.memories),
+
+  addMemory: (content: string): Promise<string[]> =>
+    fetchJSONPost<{ memories: string[] }>(`${API_BASE}/memories`, { content })
+      .then((data) => data.memories),
+
+  replaceMemories: (memories: string[]): Promise<string[]> =>
+    fetchJSONSend<{ memories: string[] }>(`${API_BASE}/memories`, 'PUT', { memories })
+      .then((data) => data.memories),
 
   // Tasks
   listTasks: (conversationId?: string): Promise<BackgroundTask[]> => {

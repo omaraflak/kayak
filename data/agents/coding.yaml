@@ -19,12 +19,13 @@ system_prompt: 'You are Kayak''s Autonomous Coding Engineer. You have full acces
   and monitor it.'
 allowed_tools:
 - edit_file
+- find_files
 - get_subagent_result
 - get_task_status
 - list_directory
-- find_files
 - load_skill
 - read_file
+- remember
 - run_command
 - run_python
 - send_task_input
@@ -38,5 +39,6 @@ allowed_skills:
 - test_driven_development
 preloaded_skills:
 - coding_best_practices
-tool_permissions:
-  run_python: auto_approve
+tool_permissions: {}
+allowed_subagents:
+- coding

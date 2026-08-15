@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Optional
 from backend.app.agents.manager import agent_manager, allowed_subagent_ids
+from backend.app.memories.store import memory_store
 from backend.app.models import AgentConfig
 from backend.app.skills.registry import skill_registry
 
@@ -57,7 +58,13 @@ def build_system_prompt(
             " of `python3 -c` one-liners, and load expensive data only once."
         )
 
-    # 3. Preloaded Skills (Full instructions)
+    # 3. What the user has taught Kayak, shared by every agent. Placed before skills
+    # and guidelines so a standing correction outranks the generic advice that follows.
+    memories = memory_store.prompt_section()
+    if memories:
+        parts.append(memories)
+
+    # 4. Preloaded Skills (Full instructions)
     if agent_config.preloaded_skills:
         parts.append("\n## Preloaded Active Skills")
         for skill_name in agent_config.preloaded_skills:
