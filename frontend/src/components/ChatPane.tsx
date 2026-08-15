@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import { Conversation, Message } from '../types';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import { useSSE, ToolApprovalRequest } from '../hooks/useSSE';
 import { useVllmModel } from '../hooks/useVllmModel';
 import { ToolCallCard } from './ToolCallCard';
@@ -68,6 +68,13 @@ export interface ChatPaneProps {
   onOpenConversation?: (conversation: Conversation) => void;
   /** Opens a workspace file in the side-panel preview (from a chip in the chat). */
   onOpenFile?: (path: string) => void;
+  /**
+   * Disables the composer. Set for a transcript nobody may add to -- a sub-agent
+   * session, which takes its instructions from the agent that started it.
+   */
+  readOnly?: boolean;
+  /** Shown in the disabled composer, explaining why it cannot be typed into. */
+  readOnlyMessage?: string;
 }
 
 export const ChatPane: React.FC<ChatPaneProps> = ({
@@ -87,6 +94,8 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   onConversationUpdated,
   onOpenConversation,
   onOpenFile,
+  readOnly = false,
+  readOnlyMessage,
 }) => {
   const dialog = useDialog();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -284,6 +293,8 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    // Guarded here as well as on the controls: Enter reaches this without them.
+    if (readOnly) return;
     if (!inputContent.trim() || isSending || !vllm.isReady) return;
 
     const text = inputContent.trim();
@@ -346,7 +357,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     } catch (err) {
       dialog.alert({
         title: 'Could not stop the turn',
-        message: String(err),
+        message: errorMessage(err),
         variant: 'danger',
       });
     }
@@ -419,7 +430,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
             : action === 'retry'
             ? 'Could not retry'
             : 'Could not branch',
-        message: String(err),
+        message: errorMessage(err),
         variant: 'danger',
       });
     } finally {
@@ -716,9 +727,11 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
             value={inputContent}
             onChange={setInputContent}
             onKeyDown={handleKeyDown}
-            disabled={vllm.isOffline || vllm.isLoading}
+            disabled={readOnly || vllm.isOffline || vllm.isLoading}
             placeholder={
-              vllm.isOffline
+              readOnly
+                ? readOnlyMessage || 'This conversation is read-only.'
+                : vllm.isOffline
                 ? `Local model ${vllm.modelId} is offline. Click 'Start Model' to begin...`
                 : vllm.isLoading
                 ? `Local model ${vllm.modelId} is initializing...`
@@ -783,7 +796,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
               ) : (
                 <button
                   type="submit"
-                  disabled={!inputContent.trim() || vllm.isLoading}
+                  disabled={readOnly || !inputContent.trim() || vllm.isLoading}
                   className="inline-flex items-center space-x-1 px-4 py-1.5 rounded-lg text-xs font-semibold bg-md-primary text-md-on-primary hover:opacity-90 disabled:opacity-40 disabled:hover:opacity-40 transition-opacity shadow-xs cursor-pointer"
                 >
                   <span>{vllm.isLoading ? 'Model Loading...' : 'Send'}</span>

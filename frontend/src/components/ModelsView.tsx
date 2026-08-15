@@ -19,7 +19,7 @@ import {
   Zap,
   Package,
 } from 'lucide-react';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import { useDialog } from '../context/DialogContext';
 import { useVLLMStatus } from '../context/VLLMStatusContext';
 import { HostCapability, ModelCacheInfo, VLLMDeployRequest } from '../types';
@@ -135,7 +135,7 @@ export const ModelsView: React.FC = () => {
     } catch (err) {
       dialog.alert({
         title: 'Could not stop the server',
-        message: String(err),
+        message: errorMessage(err),
         variant: 'danger',
       });
     } finally {
@@ -159,7 +159,7 @@ export const ModelsView: React.FC = () => {
     } catch (err) {
       dialog.alert({
         title: 'Could not delete weights',
-        message: String(err),
+        message: errorMessage(err),
         variant: 'danger',
       });
     }

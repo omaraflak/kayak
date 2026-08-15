@@ -26,7 +26,7 @@ from backend.app.database import (
     list_conversations,
     update_conversation,
 )
-from backend.app.llm import generate_title
+from backend.app.llm import generate_title, missing_key_error
 from backend.app.models import (
     Conversation,
     ConversationStatus,
@@ -108,6 +108,27 @@ def resolve_conversation_model(agent_id: str) -> Optional[str]:
     """
     agent_config = agent_manager.get_agent(agent_id) or agent_manager.get_agent("general")
     return agent_config.model if agent_config else None
+
+
+def require_provider_key(agent_id: str) -> None:
+    """Refuses a turn whose model has no stored credential, before anything is created.
+
+    The engine reports this too, but only as a stream event, and this failure is
+    instant: on a fresh install the turn is over before the browser has finished
+    subscribing, so the event went nowhere and the user was left looking at a prompt
+    that never got an answer. Refusing the request instead puts the reason in the
+    response, where both the composer and the new-conversation screen already show it.
+
+    Raises:
+        HTTPException: 400 naming the provider whose key is missing.
+    """
+    model = resolve_conversation_model(agent_id)
+    if not model:
+        return
+
+    message = missing_key_error(model)
+    if message:
+        raise HTTPException(status_code=400, detail=message)
 
 
 async def _async_generate_and_update_title(conversation_id: str, prompt: str, model_name: str) -> None:
@@ -271,6 +292,11 @@ async def create_new_conversation(request: CreateConversationRequest) -> Convers
             deliberate: falling back to running tools on the host would silently
             drop the isolation the platform promises.
     """
+    # Checked before the container and the database row exist, so a missing key leaves
+    # no half-made conversation behind.
+    if request.initial_message:
+        require_provider_key(request.agent_id)
+
     title = request.title or _clean_initial_title(request.initial_message)
 
     conversation = await create_conversation(
@@ -397,6 +423,10 @@ async def send_user_message(conversation_id: str, request: SendMessageRequest) -
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    # Before the message is stored: the composer puts a rejected message back for the
+    # user to resend once the key is in place.
+    require_provider_key(conversation.agent_id)
+
     # Wait for the previous turn to finish unwinding before appending, so its cleanup
     # writes land ahead of the new user message.
     await _cancel_running_turn(conversation_id)
@@ -478,6 +508,10 @@ async def retry_from_message(
 ) -> Dict[str, str]:
     """Discards a turn and generates it again from the same history."""
     conversation = await _load_conversation_and_anchor(conversation_id, request.message_id)
+
+    # Checked before the turn is deleted: a retry that cannot run must not destroy the
+    # answer it was going to replace.
+    require_provider_key(conversation.agent_id)
 
     await _cancel_running_turn(conversation_id)
 

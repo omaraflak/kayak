@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppSettings, ProviderCredential } from '../types';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import { useDialog } from '../context/DialogContext';
 import { useTheme, ThemeMode } from '../context/ThemeContext';
 import {
@@ -55,7 +55,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => 
       setDraft(draftFromSettings(data));
       setLoadError(null);
     } catch (error) {
-      setLoadError(String(error));
+      setLoadError(errorMessage(error));
     }
   }, []);
 

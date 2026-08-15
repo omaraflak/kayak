@@ -18,16 +18,13 @@ services:
     environment:
       - KAYAK_HOST=0.0.0.0
       - KAYAK_PORT=8000
-      - KAYAK_DEFAULT_MODEL=${KAYAK_DEFAULT_MODEL:-gemini/gemini-3.6-flash}
       # Set to require a shared secret on every API call. Strongly recommended if you
       # change the port binding above to expose Kayak beyond loopback.
       - KAYAK_AUTH_TOKEN=${KAYAK_AUTH_TOKEN:-}
       - KAYAK_CORS_ORIGINS=${KAYAK_CORS_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000,http://localhost:3000,http://127.0.0.1:3000}
-      # API Keys (Loaded from your local .env or shell environment)
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY:-}
+      # Provider API keys are deliberately absent: they are entered in the Settings page
+      # and stored in data/settings.json, so nothing has to be configured before the
+      # first launch and the keys never appear in a process listing or a shell history.
       # Local models (vLLM)
       - KAYAK_VLLM_PORT=${KAYAK_VLLM_PORT:-8001}
       - VLLM_API_BASE=${VLLM_API_BASE:-http://host.docker.internal:8001/v1}

@@ -19,30 +19,31 @@ Kayak is a simple, opinionated, open-source AI agent platform containerized with
 
 ## 🚀 Quick Start
 
-### 1. Configure Environment (Optional)
+There is nothing to configure before starting. Kayak runs with no `.env` file and no
+environment variables set.
 
-Set your preferred API keys in your environment or a `.env` file:
-
-```bash
-export GEMINI_API_KEY="your-gemini-api-key"
-# or
-export OPENAI_API_KEY="your-openai-api-key"
-export ANTHROPIC_API_KEY="your-anthropic-api-key"
-```
-
-### 2. Build and Run Sandbox Image
+### 1. Build the Sandbox Image
 
 ```bash
 docker build -f Dockerfile.sandbox -t kayak-sandbox:latest .
 ```
 
-### 3. Launch Kayak
+### 2. Launch Kayak
 
 ```bash
 docker compose up --build
 ```
 
-Open **http://localhost:8000** in your browser!
+### 3. Add a Model Provider Key
+
+Open **http://localhost:8000**, go to **Settings**, and paste in a key for whichever
+provider you want to use (Google Gemini, OpenAI, or Anthropic). Each one links to the
+console where you obtain it. Keys are stored in `data/settings.json` on your own
+machine, are never sent back to the browser, and take effect immediately.
+
+Provider keys are **not** read from the environment. The Settings page is the only place
+they come from, so there is exactly one place to look when a key is wrong and no
+prior setup step to get right.
 
 ---
 
@@ -59,10 +60,12 @@ port can run code on the machine hosting it.** The defaults are set accordingly:
 - Set `KAYAK_CORS_ORIGINS` to the exact origins that should be able to call the API.
 - File tools are confined to each conversation's workspace directory; absolute paths,
   `..` traversal, and symlinks pointing outside it are refused.
-- Conversations run on the host workspace by default. Enable **Docker Sandbox
-  Isolation** when creating a conversation to give the agent its own container instead.
-- API keys are stored in `data/settings.json` and are never returned in full over the
-  API — the settings endpoint serves a masked preview.
+- Every conversation runs in its own Docker container, with only that conversation's
+  workspace mounted into it. Agents cannot read each other's files, the database, or
+  your stored credentials.
+- API keys are stored in `data/settings.json`, written owner-readable only, and are
+  never returned in full over the API — the settings endpoint serves a masked preview.
+  They are not passed to agents or into sandbox containers.
 
 `.dockerignore` keeps `data/settings.json` and the local database out of built images.
 Never commit or push an image built without it.
@@ -82,7 +85,9 @@ Run the app locally against a Vite dev server:
 ./run.sh --local
 ```
 
-Useful environment variables beyond the API keys:
+Optional environment variables, all of which control how the server is deployed rather
+than what it can do. None are required, and provider credentials are deliberately not
+among them:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

@@ -49,6 +49,21 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The sentence to show a user for a thrown value.
+ *
+ * `String(error)` prefixes it with the class name, so a message written to be read by
+ * someone who does not code arrived as "ApiError: No Google Gemini API key is
+ * configured...". The prefix says nothing they can act on.
+ */
+export function errorMessage(error: unknown): string {
+  // An Error is asked for its message directly: String() on a message-less one yields
+  // the bare word "Error", which reads as a bug rather than an explanation.
+  if (error instanceof Error) return error.message.trim() || 'Something went wrong.';
+  const text = String(error).trim();
+  return text || 'Something went wrong.';
+}
+
 function withAuth(init?: RequestInit): RequestInit {
   const token = getStoredAuthToken();
   const headers = new Headers(init?.headers);

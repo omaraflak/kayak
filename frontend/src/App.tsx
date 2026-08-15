@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Conversation, AgentConfig, NavigationTab } from './types';
-import { api } from './api/client';
+import { api, errorMessage } from './api/client';
 import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
 import { AgentsView } from './components/AgentsView';
 import { SkillsView } from './components/SkillsView';
 import { ToolsView } from './components/ToolsView';
-import { TasksMonitor } from './components/TasksMonitor';
 import { SettingsView } from './components/SettingsView';
 import { ModelsView } from './components/ModelsView';
 import { GlobalVLLMStatusWidget } from './components/GlobalVLLMStatusWidget';
@@ -158,7 +157,7 @@ export const App: React.FC = () => {
       // needs its container -- so the reason must reach the user, not the console.
       dialog.alert({
         title: 'Could not start the conversation',
-        message: String(err),
+        message: errorMessage(err),
         variant: 'danger',
       });
       // Rethrown so the composer knows to keep the drafted prompt.
@@ -196,6 +195,13 @@ export const App: React.FC = () => {
     navigateTo(tab, id);
   };
 
+  /** Opens an agent's profile from another tab, e.g. from a sub-agent transcript. */
+  const handleOpenAgentProfile = (agentId: string) => {
+    setCurrentTab('agents');
+    setSelectedItemId(agentId);
+    navigateTo('agents', agentId);
+  };
+
   return (
     <div className="flex h-full w-full overflow-hidden bg-md-surface text-md-on-surface font-['Plus_Jakarta_Sans',sans-serif]">
       {/* Navigation Sidebar */}
@@ -220,6 +226,7 @@ export const App: React.FC = () => {
             onRefreshConversations={loadInitialData}
             onOpenConversation={handleOpenConversation}
             onSelectConversation={handleSelectConversation}
+            onOpenAgent={handleOpenAgentProfile}
           />
         )}
 
@@ -247,10 +254,6 @@ export const App: React.FC = () => {
             onSelectId={(id) => handleSelectItem('tools', id)}
             onStartAgentChat={handleStartAgentChat}
           />
-        )}
-
-        {currentTab === 'tasks' && (
-          <TasksMonitor />
         )}
 
         {currentTab === 'models' && (

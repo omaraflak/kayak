@@ -32,8 +32,8 @@ export function parseCurrentUrl(): RouteState {
     return { tab: firstPart, itemId: parts[1] || null };
   }
 
-  // Simple tabs without sub-IDs: /tasks, /settings, /models
-  const SIMPLE_TABS = new Set<NavigationTab>(['tasks', 'settings', 'models']);
+  // Simple tabs without sub-IDs: /settings, /models
+  const SIMPLE_TABS = new Set<NavigationTab>(['settings', 'models']);
   if (SIMPLE_TABS.has(firstPart)) {
     return { tab: firstPart };
   }
@@ -56,7 +56,6 @@ export function navigateTo(tab: NavigationTab, id?: string | null, replace = fal
     case 'tools':
       targetPath = id ? `/${tab}/${encodeURIComponent(id)}` : `/${tab}`;
       break;
-    case 'tasks':
     case 'settings':
     case 'models':
       targetPath = `/${tab}`;

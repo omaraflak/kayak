@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { WorkspaceFileEntry } from '../types';
-import { api } from '../api/client';
+import { BackgroundTask, WorkspaceFileEntry } from '../types';
+import { api, errorMessage } from '../api/client';
 import { CodeBlock } from './CodeBlock';
+import { ContainerTasks } from './ContainerTasks';
 import { ContainerTerminal } from './ContainerTerminal';
+import { runningTaskCount } from './conversationTasks';
 import {
   breadcrumbs,
   clampPanelWidth,
@@ -14,6 +16,7 @@ import {
   restorePanelWidth,
 } from './workspaceFiles';
 import {
+  Activity,
   ArrowLeft,
   ChevronRight,
   Download,
@@ -31,12 +34,12 @@ import {
 
 /**
  * Side panel giving direct access to a conversation's container: the workspace
- * filesystem (browse, preview, upload) and a real shell executing inside the
- * container itself. The workspace is bind-mounted at /workspace, so everything
- * seen or uploaded here is exactly what the agent sees.
+ * filesystem (browse, preview, upload), a real shell executing inside the container
+ * itself, and the processes it has running. The workspace is bind-mounted at
+ * /workspace, so everything seen or uploaded here is exactly what the agent sees.
  */
 
-export type WorkspaceTab = 'files' | 'terminal';
+export type WorkspaceTab = 'files' | 'terminal' | 'tasks';
 
 /** Largest file the text preview will fetch; anything bigger is download-only. */
 const MAX_TEXT_PREVIEW_BYTES = 512 * 1024;
@@ -51,6 +54,11 @@ interface WorkspacePanelProps {
    * object so repeating the same path still re-opens the preview.
    */
   previewRequest?: { path: string } | null;
+  /** Processes running in this container, polled by the conversation view. */
+  tasks: BackgroundTask[];
+  onRefreshTasks: () => void;
+  /** Opens a sub-agent's transcript from its task. */
+  onOpenConversation: (conversationId: string) => void;
   onClose: () => void;
 }
 
@@ -71,6 +79,9 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   conversationId,
   initialTab,
   previewRequest,
+  tasks,
+  onRefreshTasks,
+  onOpenConversation,
   onClose,
 }) => {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>(initialTab);
@@ -126,7 +137,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
       setListError(null);
     } catch (err) {
       setEntries([]);
-      setListError(String(err));
+      setListError(errorMessage(err));
     }
   }, [conversationId, browserPath]);
 
@@ -162,7 +173,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
         );
       })
       .catch((err) => {
-        if (!cancelled) setPreviewError(String(err));
+        if (!cancelled) setPreviewError(errorMessage(err));
       })
       .finally(() => {
         if (!cancelled) setIsPreviewLoading(false);
@@ -197,6 +208,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
 
   const previewKind = preview ? fileKind(preview) : null;
   const previewUrl = preview ? api.workspaceFileUrl(conversationId, preview) : '';
+  const runningCount = runningTaskCount(tasks);
 
   return (
     <aside
@@ -218,6 +230,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
             [
               { id: 'files', label: 'Files', icon: <Folder className="w-3.5 h-3.5" /> },
               { id: 'terminal', label: 'Terminal', icon: <TerminalIcon className="w-3.5 h-3.5" /> },
+              { id: 'tasks', label: 'Tasks', icon: <Activity className="w-3.5 h-3.5" /> },
             ] as const
           ).map((tab) => (
             <button
@@ -232,6 +245,17 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
             >
               {tab.icon}
               {tab.label}
+              {tab.id === 'tasks' && runningCount > 0 && (
+                <span
+                  className={`min-w-4 px-1 rounded-full text-[10px] font-bold leading-4 text-center ${
+                    activeTab === 'tasks'
+                      ? 'bg-md-on-primary text-md-primary'
+                      : 'bg-md-primary text-md-on-primary'
+                  }`}
+                >
+                  {runningCount}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -432,6 +456,14 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
           {/* Keyed so switching conversations opens a fresh shell. */}
           <ContainerTerminal key={conversationId} conversationId={conversationId} />
         </div>
+      )}
+
+      {activeTab === 'tasks' && (
+        <ContainerTasks
+          tasks={tasks}
+          onRefresh={onRefreshTasks}
+          onOpenConversation={onOpenConversation}
+        />
       )}
     </aside>
   );

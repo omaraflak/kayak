@@ -8,7 +8,9 @@ export type TaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
 export type ToolPermission = 'auto_approve' | 'ask_user' | 'denied';
 
-export type NavigationTab = 'chat' | 'agents' | 'skills' | 'tools' | 'tasks' | 'models' | 'settings';
+// Background tasks have no tab of their own: they belong to one conversation's
+// container, so they live in that conversation's container drawer.
+export type NavigationTab = 'chat' | 'agents' | 'skills' | 'tools' | 'models' | 'settings';
 
 export type ToolCategory =
   | 'filesystem'
@@ -142,6 +144,8 @@ export interface BackgroundTask {
   exit_code?: number;
   stdout: string;
   stderr: string;
+  /** Set on sub-agent tasks: the conversation the delegated agent is working in. */
+  subagent_conversation_id?: string | null;
   created_at: string;
   updated_at: string;
 }

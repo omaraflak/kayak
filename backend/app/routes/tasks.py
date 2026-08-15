@@ -17,13 +17,17 @@ class TaskInputRequest(BaseModel):
 async def get_all_tasks(conversation_id: Optional[str] = None) -> List[BackgroundTask]:
     """Lists background tasks, optionally filtered by conversation identifier.
 
+    Filtering by conversation includes the tasks its sub-agents started: they run in
+    the same container, and the conversation that delegated the work is where someone
+    looks for a process it left running.
+
     Args:
         conversation_id: Optional filter for a specific conversation session.
 
     Returns:
         A list of matching BackgroundTask objects.
     """
-    return await list_tasks(conversation_id=conversation_id)
+    return await list_tasks(conversation_id=conversation_id, include_subagents=True)
 
 
 @router.get("/{task_id}", response_model=BackgroundTask)

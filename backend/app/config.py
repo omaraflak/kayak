@@ -25,6 +25,11 @@ for directory in [DATA_DIR, AGENTS_DIR, SKILLS_DIR, TOOLS_DIR, WORKSPACES_DIR]:
 
 # Keys that are persisted to/from settings.json. Only credentials: everything else is
 # deployment configuration, which belongs to the environment rather than to a form.
+#
+# settings.json is also their *only* source. Kayak is meant to be installed and opened,
+# not configured beforehand, so a credential is something you type into the Settings
+# page once the app is already running -- never something the user has to place in the
+# environment before it will start.
 _PERSISTABLE_KEYS = [
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
@@ -146,19 +151,23 @@ class Settings:
         self.DB_PATH: Path = DB_PATH
         self.SETTINGS_FILE: Path = SETTINGS_FILE
 
-        # LLM Providers Configuration. There is deliberately no global default model:
-        # every agent carries its own, and anything that needs a model is acting on
-        # behalf of some agent.
-        self.OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-        self.GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-        self.ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+        # LLM Providers Configuration. Credentials start empty and are filled in by
+        # load_from_file() below: the Settings page is the only way to set them, so a
+        # key present in the environment is deliberately ignored rather than quietly
+        # becoming a second, invisible source of truth. There is also no global default
+        # model: every agent carries its own, and anything that needs a model is acting
+        # on behalf of some agent.
+        self.OPENAI_API_KEY: str = ""
+        self.GEMINI_API_KEY: str = ""
+        self.ANTHROPIC_API_KEY: str = ""
+        self.HUGGINGFACE_API_KEY: str = ""
+
         self.VLLM_PORT: int = int(os.getenv("KAYAK_VLLM_PORT", "8001"))
         self.RUNNING_IN_CONTAINER: bool = running_in_container()
         self.VLLM_API_BASE: str = os.getenv(
             "VLLM_API_BASE",
             default_vllm_api_base(self.VLLM_PORT, self.RUNNING_IN_CONTAINER),
         )
-        self.HUGGINGFACE_API_KEY: str = os.getenv("HUGGINGFACE_API_KEY", "")
 
         # Docker Sandbox Configuration
         self.DOCKER_SANDBOX_IMAGE: str = os.getenv(

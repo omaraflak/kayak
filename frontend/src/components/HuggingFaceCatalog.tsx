@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { HuggingFaceModelSearchResult } from '../types';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import { estimateModelSize, judgeFit } from './modelSizing';
 import {
   Search,
@@ -61,7 +61,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
     } catch (error) {
       // Reporting this as "no models found" would send the user off rewording a query
       // that was never the problem.
-      setSearchError(error instanceof Error ? error.message : String(error));
+      setSearchError(errorMessage(error));
       setResults([]);
     } finally {
       setIsLoading(false);

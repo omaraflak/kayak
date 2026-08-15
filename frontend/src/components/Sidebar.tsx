@@ -6,9 +6,8 @@ import {
   Trash2, 
   Bot, 
   Sparkles, 
-  Wrench, 
-  Cpu, 
-  Activity,
+  Wrench,
+  Cpu,
   Loader2,
   Settings
 } from 'lucide-react';
@@ -38,6 +37,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Read from the shared stream rather than passed down: the sidebar outlives the
   // chat pane, which is exactly the case the prop could not cover.
   const { runningIds } = useConversationActivity();
+
+  // Sub-agent sessions are excluded: they are work an agent delegated to itself, not
+  // conversations you hold. One task can spawn several, which buried the user's own
+  // chats under machine-generated ones. They are reached from the task that started
+  // them, in the container drawer of the conversation that delegated the work.
+  const ownConversations = conversations.filter(
+    (conversation) => !conversation.parent_conversation_id
+  );
 
   return (
     <div className="w-72 bg-md-surface-container-low border-r border-md-outline-variant flex flex-col h-full shrink-0 select-none transition-colors">
@@ -106,18 +113,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </button>
 
         <button
-          onClick={() => onSelectTab('tasks')}
-          className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            currentTab === 'tasks'
-              ? 'bg-md-primary-container text-md-on-primary-container border border-md-primary/40 shadow-xs'
-              : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
-          }`}
-        >
-          <Activity className={`w-4 h-4 ${currentTab === 'tasks' ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
-          <span>Background Tasks</span>
-        </button>
-
-        <button
           onClick={() => onSelectTab('models')}
           className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
             currentTab === 'models'
@@ -145,7 +140,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Conversations Section Header */}
       <div className="px-3 pt-3 pb-1 flex items-center justify-between">
         <span className="text-[11px] font-bold uppercase tracking-wider text-md-on-surface-variant">
-          Chats ({conversations.length})
+          Chats ({ownConversations.length})
         </span>
         <button
           onClick={() => {
@@ -161,12 +156,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Conversation List */}
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
-        {conversations.length === 0 ? (
+        {ownConversations.length === 0 ? (
           <div className="text-center py-8 px-4 text-md-on-surface-variant text-xs">
             No active conversations.<br />Click + to draft a message.
           </div>
         ) : (
-          conversations.map((conversation) => {
+          ownConversations.map((conversation) => {
             const isActive = currentTab === 'chat' && activeConversationId === conversation.id;
             // The shared activity stream is authoritative for every conversation and
             // on every page. The stored status cannot be used here: it is only re-read

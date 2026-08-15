@@ -172,6 +172,7 @@ async def spawn_subagent(
         task_type="subagent",
         name=f"SubAgent [{agent_id}]",
         command=prompt,
+        subagent_conversation_id=child_conv.id,
     )
 
     run_kwargs: Dict[str, Any] = {

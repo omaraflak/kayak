@@ -114,6 +114,15 @@ async def init_db() -> None:
         );
         """)
 
+        # Migration: a sub-agent task names the conversation it is running, so the
+        # task list can open the transcript of the delegated work.
+        try:
+            await db.execute(
+                "ALTER TABLE tasks ADD COLUMN subagent_conversation_id TEXT;"
+            )
+        except Exception:
+            pass
+
         await db.execute(
             # rowid is implicit in every index entry, so ordering by
             # (created_at, rowid) is still served by this index.
@@ -195,6 +204,11 @@ def _row_to_task(row: aiosqlite.Row) -> BackgroundTask:
         exit_code=row["exit_code"],
         stdout=row["stdout"],
         stderr=row["stderr"],
+        subagent_conversation_id=(
+            row["subagent_conversation_id"]
+            if "subagent_conversation_id" in row.keys()
+            else None
+        ),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -605,15 +619,18 @@ async def create_task(
     name: str,
     command: Optional[str] = None,
     pid: Optional[int] = None,
+    subagent_conversation_id: Optional[str] = None,
 ) -> BackgroundTask:
     """Inserts a new asynchronous background task record.
 
     Args:
-        conversation_id: ID of the originating conversation.
+        conversation_id: ID of the conversation that started the task.
         task_type: Task classification type.
         name: Descriptive name for the task.
         command: Optional shell command line executed.
         pid: Optional process ID.
+        subagent_conversation_id: For a sub-agent task, the conversation the delegated
+            agent is working in, so its transcript can be opened from the task.
 
     Returns:
         BackgroundTask: Created background task record.
@@ -626,10 +643,21 @@ async def create_task(
     async with get_db_connection() as db:
         await db.execute(
             """
-        INSERT INTO tasks (id, conversation_id, task_type, name, command, status, pid, stdout, stderr, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?, ?)
+        INSERT INTO tasks (id, conversation_id, task_type, name, command, status, pid, stdout, stderr, subagent_conversation_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?)
         """,
-            (tid, conversation_id, type_enum.value, name, command, status_enum.value, pid, now, now),
+            (
+                tid,
+                conversation_id,
+                type_enum.value,
+                name,
+                command,
+                status_enum.value,
+                pid,
+                subagent_conversation_id,
+                now,
+                now,
+            ),
         )
         await db.commit()
 
@@ -644,6 +672,7 @@ async def create_task(
         exit_code=None,
         stdout="",
         stderr="",
+        subagent_conversation_id=subagent_conversation_id,
         created_at=now,
         updated_at=now,
     )
@@ -664,19 +693,43 @@ async def get_task(task_id: str) -> Optional[BackgroundTask]:
         return _row_to_task(row) if row else None
 
 
+#: Every conversation descended from one conversation through sub-agent delegation,
+#: including the conversation itself. Sub-agents share their parent's container, so
+#: their processes are running in the same place and belong in the same list.
+_CONVERSATION_TREE_CTE = """
+WITH RECURSIVE tree(id) AS (
+    SELECT ?
+    UNION
+    SELECT conversations.id FROM conversations
+    JOIN tree ON conversations.parent_conversation_id = tree.id
+)
+"""
+
+
 async def list_tasks(
     conversation_id: Optional[str] = None,
+    include_subagents: bool = False,
 ) -> List[BackgroundTask]:
     """Lists background tasks, optionally filtered by conversation.
 
     Args:
         conversation_id: Optional filter for a specific conversation session.
+        include_subagents: Also return tasks started by sub-agents of that
+            conversation, at any depth. Their work runs in the same container, so a
+            process left behind by a sub-agent is the caller's process to see.
 
     Returns:
         List[BackgroundTask]: List of task records.
     """
     async with get_db_connection() as db:
-        if conversation_id:
+        if conversation_id and include_subagents:
+            cursor = await db.execute(
+                _CONVERSATION_TREE_CTE
+                + "SELECT tasks.* FROM tasks JOIN tree ON tasks.conversation_id ="
+                " tree.id ORDER BY tasks.created_at DESC",
+                (conversation_id,),
+            )
+        elif conversation_id:
             cursor = await db.execute(
                 "SELECT * FROM tasks WHERE conversation_id = ? ORDER BY"
                 " created_at DESC",

@@ -199,6 +199,9 @@ class BackgroundTask(BaseModel):
     exit_code: Optional[int] = None
     stdout: str = ""
     stderr: str = ""
+    #: For a sub-agent task, the conversation the delegated agent works in. The UI
+    #: opens that transcript from the task rather than listing it as a chat of its own.
+    subagent_conversation_id: Optional[str] = None
     created_at: str
     updated_at: str
 

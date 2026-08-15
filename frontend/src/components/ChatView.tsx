@@ -3,8 +3,10 @@ import { Conversation, AgentConfig } from '../types';
 import { api } from '../api/client';
 import { ChatPane } from './ChatPane';
 import { AutoGrowTextarea } from './AutoGrowTextarea';
-import { WorkspacePanel } from './WorkspacePanel';
+import { WorkspacePanel, WorkspaceTab } from './WorkspacePanel';
+import { runningTaskCount } from './conversationTasks';
 import { useVLLMStatus, VLLM_LOADING_STATES } from '../context/VLLMStatusContext';
+import { useConversationTasks } from '../hooks/useConversationTasks';
 import { parseVllmModelId, useVllmModel } from '../hooks/useVllmModel';
 import {
   Bot,
@@ -31,6 +33,8 @@ interface ChatViewProps {
   /** Opens an existing conversation, e.g. a branch or the conversation it came from. */
   onOpenConversation?: (conversation: Conversation) => void;
   onSelectConversation?: (id: string) => void;
+  /** Opens an agent's profile, e.g. the agent running a sub-agent session. */
+  onOpenAgent?: (agentId: string) => void;
 }
 
 export const ChatView: React.FC<ChatViewProps> = ({
@@ -41,6 +45,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onRefreshConversations,
   onOpenConversation,
   onSelectConversation,
+  onOpenAgent,
 }) => {
   const [conversation, setConversation] = useState<Conversation | null>(null);
 
@@ -52,8 +57,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [isCreating, setIsCreating] = useState<boolean>(false);
   const { status: vllmStatus } = useVLLMStatus();
 
-  // Workspace side panel (container filesystem + terminal) for the open conversation.
+  // Workspace side panel (container filesystem, terminal, tasks) for the open
+  // conversation. The tab it opens on depends on what was clicked.
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('files');
+
+  // Polled here rather than in the panel: the count has to be right on the button
+  // while the panel is closed, which is the only time it is worth showing.
+  const { tasks, refresh: refreshTasks } = useConversationTasks(conversationId);
+  const runningCount = runningTaskCount(tasks);
   // Wrapped in an object so re-clicking the same file after closing its preview
   // still triggers the panel: a bare string would compare equal and do nothing.
   const [workspacePreview, setWorkspacePreview] = useState<{ path: string } | null>(null);
@@ -66,6 +78,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
   const handleOpenFile = useCallback((path: string) => {
     setIsWorkspaceOpen(true);
+    setWorkspaceTab('files');
     setWorkspacePreview({ path });
   }, []);
 
@@ -196,17 +209,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
           )}
         </div>
 
-        {/* Drawer into this conversation's container: files and terminal. */}
+        {/* Drawer into this conversation's container: files, terminal and tasks. */}
         {conversationId && (
           <button
             type="button"
             onClick={() => setIsWorkspaceOpen((open) => !open)}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer shrink-0 ${
+            className={`relative inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer shrink-0 ${
               isWorkspaceOpen
                 ? 'bg-md-primary text-md-on-primary shadow-xs'
                 : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container border border-md-outline-variant'
             }`}
-            title="Browse files, upload, and open a terminal inside this conversation's container"
+            title="Browse files, open a terminal, and see what is running inside this conversation's container"
           >
             {isWorkspaceOpen ? (
               <ChevronRight className="w-3.5 h-3.5" />
@@ -215,6 +228,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
             )}
             <Container className="w-3.5 h-3.5" />
             <span>Container</span>
+
+            {/* Only ever shown for a non-zero count: a "0" badge is noise that
+                trains you to ignore the badge that matters. */}
+            {runningCount > 0 && (
+              <span
+                className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-md-primary text-md-on-primary text-[10px] font-bold leading-[18px] text-center border border-md-surface-container-low"
+                title={`${runningCount} ${runningCount === 1 ? 'task' : 'tasks'} running in this container`}
+              >
+                {runningCount}
+              </span>
+            )}
           </button>
         )}
       </div>
@@ -417,6 +441,38 @@ export const ChatView: React.FC<ChatViewProps> = ({
       ) : (
         <div className="flex-1 flex overflow-hidden">
           <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+            {/* A sub-agent session belongs to the agent that started it. Saying so is
+                what makes the disabled composer below read as a rule rather than a
+                fault, and the links are the way back to who is running it. */}
+            {conversation?.parent_conversation_id && (
+              <div className="px-4 pt-3 shrink-0">
+                <div className="max-w-3xl mx-auto flex items-start gap-2 rounded-xl border border-md-outline-variant bg-md-surface-container-low px-3.5 py-2.5">
+                  <Bot className="w-4 h-4 text-md-primary shrink-0 mt-0.5" />
+                  <p className="text-xs text-md-on-surface-variant leading-relaxed flex-1">
+                    This session is run by an agent, not by you. It was started by{' '}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onSelectConversation?.(conversation.parent_conversation_id as string)
+                      }
+                      className="font-semibold text-md-primary hover:underline cursor-pointer"
+                    >
+                      the conversation that delegated it
+                    </button>
+                    , and is working under the{' '}
+                    <button
+                      type="button"
+                      onClick={() => onOpenAgent?.(conversation.agent_id)}
+                      className="font-semibold text-md-primary hover:underline cursor-pointer"
+                    >
+                      {activeAgent?.name || conversation.agent_id}
+                    </button>{' '}
+                    profile. You can read it, but only its parent agent can talk to it.
+                  </p>
+                </div>
+              </div>
+            )}
+
             <ChatPane
               conversationId={conversationId}
               showHeader={false}
@@ -428,14 +484,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
               onConversationUpdated={loadConversationData}
               onOpenConversation={onOpenConversation}
               onOpenFile={handleOpenFile}
+              readOnly={Boolean(conversation?.parent_conversation_id)}
+              readOnlyMessage="This sub-agent works for the agent that started it — only that agent can send it instructions."
             />
           </div>
           {isWorkspaceOpen && (
             <WorkspacePanel
               key={conversationId}
               conversationId={conversationId}
-              initialTab="files"
+              initialTab={workspaceTab}
               previewRequest={workspacePreview}
+              tasks={tasks}
+              onRefreshTasks={refreshTasks}
+              onOpenConversation={(id) => onSelectConversation?.(id)}
               onClose={() => setIsWorkspaceOpen(false)}
             />
           )}

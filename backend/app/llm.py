@@ -3,7 +3,7 @@ import re
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 import litellm
 from backend.app.config import settings
-from backend.app.providers import API_KEY_SETTINGS
+from backend.app.providers import API_KEY_SETTINGS, get_provider
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,9 @@ _PROVIDER_KEY_SETTINGS: Dict[str, str] = {
     **API_KEY_SETTINGS,
     "hf": API_KEY_SETTINGS["huggingface"],
 }
+
+# LiteLLM prefix -> id in the provider registry, for the aliases that differ.
+_PROVIDER_REGISTRY_IDS: Dict[str, str] = {"hf": "huggingface"}
 
 # Substrings that identify a provider genuinely refusing tool calling, as opposed to
 # any other 400. Matching loosely here turns unrelated failures (a malformed history,
@@ -140,6 +143,38 @@ def resolve_provider(model: str) -> Optional[str]:
     if lowered.startswith("gemini"):
         return "gemini"
     return None
+
+
+def missing_key_error(model: str) -> Optional[str]:
+    """Explains that a model cannot run because its provider has no stored credential.
+
+    Worth checking before the call rather than letting the provider reject it. LiteLLM
+    reads keys from the process environment when none is passed, so without this a key
+    that happens to be exported in the shell would authenticate calls the Settings page
+    reports as unconfigured -- and on a machine without one, the user saw a raw
+    provider authentication error instead of being told where to put a key.
+
+    Args:
+        model: LiteLLM model identifier.
+
+    Returns:
+        Optional[str]: A message naming the provider, or None if the model can run.
+    """
+    provider = resolve_provider(model)
+    # The local server needs no credential, and an unrecognised model string is left to
+    # LiteLLM to accept or reject on its own terms.
+    if not provider or provider == "vllm":
+        return None
+
+    if getattr(settings, _PROVIDER_KEY_SETTINGS[provider], ""):
+        return None
+
+    info = get_provider(_PROVIDER_REGISTRY_IDS.get(provider, provider))
+    name = info.name if info else provider
+    return (
+        f"No {name} API key is configured, so '{model}' cannot run. "
+        "Add one in Settings."
+    )
 
 
 def _build_llm_kwargs(
@@ -266,6 +301,11 @@ async def generate_completion_stream(
     Yields:
         Dict[str, Any]: Token chunks, thinking chunks, tool call deltas, or errors.
     """
+    missing_key = missing_key_error(model)
+    if missing_key:
+        yield {"type": "error", "error": missing_key}
+        return
+
     kwargs = _build_llm_kwargs(model, messages, tools, temperature, stream=True)
 
     try:
@@ -340,6 +380,15 @@ async def generate_completion(
     Returns:
         Dict[str, Any]: Response content, thinking, and parsed tool calls.
     """
+    missing_key = missing_key_error(model)
+    if missing_key:
+        return {
+            "content": None,
+            "thinking": None,
+            "tool_calls": None,
+            "error": missing_key,
+        }
+
     kwargs = _build_llm_kwargs(model, messages, tools, temperature, stream=False)
 
     try:
