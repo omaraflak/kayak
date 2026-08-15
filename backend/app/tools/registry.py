@@ -1,6 +1,5 @@
 import importlib.util
 import inspect
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, get_type_hints
 from backend.app.config import settings
 from backend.app.models import ToolCategory, ToolDefinition, ToolRisk

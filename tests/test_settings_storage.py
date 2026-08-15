@@ -6,7 +6,6 @@ account on the machine able to read the user's keys.
 """
 
 import json
-import os
 from pathlib import Path
 import stat
 

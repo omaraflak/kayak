@@ -2,6 +2,7 @@ import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
+from backend.app.agent.events import subagent_finished, subagent_started
 from backend.app.agent.task_manager import task_manager
 from backend.app.agents.manager import agent_manager, allowed_subagent_ids
 from backend.app.config import settings
@@ -37,13 +38,7 @@ async def _run_subagent_loop(
     from backend.app.agent.engine import agent_engine
 
     task_manager.notify_listeners(
-        parent_id,
-        {
-            "type": "subagent_started",
-            "task_id": task_id,
-            "subagent_conversation_id": child_conv_id,
-            "agent_id": agent_id,
-        },
+        parent_id, subagent_started(task_id, child_conv_id, agent_id)
     )
 
     final_response = ""
@@ -68,13 +63,7 @@ async def _run_subagent_loop(
         await update_task(task_id, status=TaskStatus.COMPLETED, stdout=final_response)
         task_manager.notify_listeners(
             parent_id,
-            {
-                "type": "subagent_finished",
-                "task_id": task_id,
-                "subagent_conversation_id": child_conv_id,
-                "status": "completed",
-                "result": final_response,
-            },
+            subagent_finished(task_id, child_conv_id, "completed", result=final_response),
         )
         return final_response
     except asyncio.CancelledError:
@@ -85,13 +74,7 @@ async def _run_subagent_loop(
         await update_task(task_id, status=TaskStatus.FAILED, stderr=str(e))
         task_manager.notify_listeners(
             parent_id,
-            {
-                "type": "subagent_finished",
-                "task_id": task_id,
-                "subagent_conversation_id": child_conv_id,
-                "status": "failed",
-                "error": str(e),
-            },
+            subagent_finished(task_id, child_conv_id, "failed", error=str(e)),
         )
         return f"Error executing sub-agent: {str(e)}"
 
@@ -195,6 +178,8 @@ async def spawn_subagent(
     detached = asyncio.create_task(_run_subagent_loop(**run_kwargs))
     _detached_subagent_tasks.add(detached)
     detached.add_done_callback(_detached_subagent_tasks.discard)
+    # Registered so stopping the task from the UI actually reaches the run.
+    task_manager.register_run(task.id, detached)
 
     return (
         f"SubAgent [{agent_id}] spawned in background.\nTask ID:"

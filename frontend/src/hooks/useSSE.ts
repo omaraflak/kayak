@@ -1,10 +1,38 @@
 import { useEffect, useRef } from 'react';
+import { Message, TaskStatus } from '../types';
 
 export interface ToolApprovalRequest {
   id: string;
   name: string;
   arguments: string;
 }
+
+/** A background task or sub-agent reporting progress on this conversation's stream. */
+export type TaskStreamEvent =
+  | { type: 'task_started'; task_id: string; name: string; pid?: number }
+  | { type: 'task_output'; task_id: string; stream: 'stdout' | 'stderr'; text: string }
+  | {
+      type: 'task_finished';
+      task_id: string;
+      name: string;
+      status: TaskStatus;
+      exit_code?: number | null;
+      error?: string;
+    }
+  | {
+      type: 'subagent_started';
+      task_id: string;
+      subagent_conversation_id: string;
+      agent_id: string;
+    }
+  | {
+      type: 'subagent_finished';
+      task_id: string;
+      subagent_conversation_id: string;
+      status: string;
+      result?: string;
+      error?: string;
+    };
 
 export interface SSECallbacks {
   onToken?: (token: string) => void;
@@ -14,14 +42,14 @@ export interface SSECallbacks {
   /** `arguments` is only present on replayed results, for clients that missed the executing event. */
   onToolCallResult?: (data: { id: string; name: string; arguments?: string; output: string; is_error: boolean }) => void;
   onToolApprovalRequired?: (data: ToolApprovalRequest) => void;
-  onTaskEvent?: (event: any) => void;
+  onTaskEvent?: (event: TaskStreamEvent) => void;
   onTitleUpdated?: (title: string) => void;
   onWarning?: (warning: string) => void;
   onMaxIterations?: (data: { limit: number; content: string }) => void;
   onDone?: () => void;
   onCancelled?: () => void;
   onError?: (error: string) => void;
-  onUserMessage?: (message: any) => void;
+  onUserMessage?: (message: Message) => void;
   /**
    * Fired on every (re)connect with whether a turn is actually in flight. A tab that
    * was backgrounded mid-turn has no other way to recover its composer state.

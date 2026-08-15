@@ -9,8 +9,21 @@ while a single agent waits on a build or a test run.
 import asyncio
 import json
 from pathlib import Path
+import queue
+import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    TypeVar,
+)
 import docker
 from docker.errors import NotFound
 from backend.app.agent.python_repl import (
@@ -37,9 +50,25 @@ PS1='\\[\\e[1;36m\\]container\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]$ '
 """
 
 
+#: Environment variable stamped onto a background process so it can be found and
+#: killed later. A container has no process supervisor, and the exec API gives no
+#: handle that survives the call, so the marker is the only way back to the process.
+BACKGROUND_TASK_MARKER = "KAYAK_TASK_ID"
+
+
 def _shell_quote(text: str) -> str:
     """Single-quotes a string for safe embedding in a POSIX shell command."""
     return "'" + text.replace("'", "'\\''") + "'"
+
+
+class ExecChunk:
+    """One piece of output from a streaming exec."""
+
+    __slots__ = ("text", "is_stderr")
+
+    def __init__(self, text: str, is_stderr: bool) -> None:
+        self.text = text
+        self.is_stderr = is_stderr
 
 
 def _build_volume_mounts(workspace_dir: Path) -> Dict[str, Dict[str, str]]:
@@ -241,9 +270,24 @@ class SandboxManager:
         # Containers started by this process, so shutdown can clean up after itself
         # instead of leaving orphans running until the next manual docker prune.
         self._owned_containers: Set[str] = set()
-        # One persistent Python interpreter per container, created on first use.
+        # One persistent Python interpreter per container, created on first use, and
+        # one lock per container guarding it.
         self._python_sessions: Dict[str, PythonSession] = {}
+        self._python_locks: Dict[str, asyncio.Lock] = {}
         self._init_client()
+
+    def _python_lock(self, container_id: str) -> asyncio.Lock:
+        """Serializes access to one container's interpreter.
+
+        Sub-agents run in their parent's container and can run concurrently, so
+        without this two calls write to the same interpreter socket at once and each
+        reads back the other's answer.
+        """
+        lock = self._python_locks.get(container_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._python_locks[container_id] = lock
+        return lock
 
     def _init_client(self):
         try:
@@ -473,20 +517,115 @@ class SandboxManager:
         )
         return await self.exec_python(container_id, runner_script)
 
-    async def exec_background_command(
-        self, container_id: str, command: str
-    ) -> Any:
-        """Executes a detached background command in the container."""
+    def _start_marked_exec(self, container_id: str, command: str, task_id: str) -> str:
+        """Creates an exec for a long-running command, tagged so it can be killed later."""
+        client = self._require_client()
+        self._get_running_container_sync(container_id)
+        return client.api.exec_create(
+            container_id,
+            cmd=["/bin/bash", "-c", command],
+            stdout=True,
+            stderr=True,
+            workdir="/workspace",
+            environment=[f"{BACKGROUND_TASK_MARKER}={task_id}"],
+        )["Id"]
 
-        def _exec() -> Any:
-            container = self._get_running_container_sync(container_id)
-            return container.exec_run(
-                cmd=["/bin/bash", "-c", f"nohup {command} > /tmp/task.log 2>&1 &"],
-                workdir="/workspace",
-                detach=True,
+    async def start_background_command(
+        self, container_id: str, command: str, task_id: str
+    ) -> str:
+        """Starts a long-running command in the container.
+
+        Returns:
+            str: Exec id, for streaming its output and collecting its exit code.
+        """
+        return await self._run_blocking(
+            lambda: self._start_marked_exec(container_id, command, task_id)
+        )
+
+    async def stream_exec_output(self, exec_id: str) -> AsyncIterator[ExecChunk]:
+        """Yields a running exec's output as it arrives, ending when the process exits.
+
+        Output is streamed rather than redirected to a file inside the container. The
+        previous approach detached the process into a fixed log path, so two tasks
+        overwrote each other's log, nothing ever read it back, and the task stayed
+        "running" forever because no exit code was ever collected.
+
+        The docker SDK's stream is a blocking iterator, so it is drained on a worker
+        thread and handed over through a queue.
+
+        Yields:
+            ExecChunk: A piece of stdout or stderr, in arrival order.
+        """
+        client = self._require_client()
+        chunks: queue.Queue[Optional[ExecChunk]] = queue.Queue(maxsize=256)
+
+        def _drain() -> None:
+            try:
+                stream: Iterator[Tuple[Optional[bytes], Optional[bytes]]] = (
+                    client.api.exec_start(exec_id, stream=True, demux=True)
+                )
+                for stdout_bytes, stderr_bytes in stream:
+                    if stdout_bytes:
+                        chunks.put(
+                            ExecChunk(stdout_bytes.decode("utf-8", "replace"), False)
+                        )
+                    if stderr_bytes:
+                        chunks.put(
+                            ExecChunk(stderr_bytes.decode("utf-8", "replace"), True)
+                        )
+            except Exception as error:  # surfaced as task stderr rather than lost
+                chunks.put(ExecChunk(f"[stream ended: {error}]\n", True))
+            finally:
+                chunks.put(None)
+
+        worker = threading.Thread(target=_drain, daemon=True)
+        worker.start()
+
+        loop = asyncio.get_running_loop()
+        while True:
+            chunk = await loop.run_in_executor(None, chunks.get)
+            if chunk is None:
+                return
+            yield chunk
+
+    async def exec_exit_code(self, exec_id: str) -> Optional[int]:
+        """Reports how an exec finished, or None if it is still running."""
+        client = self._require_client()
+        try:
+            inspection = await self._run_blocking(
+                lambda: client.api.exec_inspect(exec_id)
             )
+        except Exception:
+            return None
+        exit_code = inspection.get("ExitCode")
+        return int(exit_code) if exit_code is not None else None
 
-        return await self._run_blocking(_exec)
+    async def kill_background_command(self, container_id: str, task_id: str) -> bool:
+        """Kills the process started for a task, matching on its marker variable.
+
+        Returns:
+            bool: True if a process matched and was signalled.
+        """
+
+        def _kill() -> bool:
+            container = self._get_running_container_sync(container_id)
+            # Reading each process's own environ is what makes this exact: matching on
+            # the command line would also kill an unrelated process that merely
+            # mentions the same words.
+            script = (
+                "killed=0; for pid in /proc/[0-9]*; do "
+                f'if tr "\\0" "\\n" < "$pid/environ" 2>/dev/null | grep -qx '
+                f'"{BACKGROUND_TASK_MARKER}={task_id}"; then '
+                'kill -9 "${pid##*/}" 2>/dev/null && killed=1; fi; done; '
+                "test $killed -eq 1"
+            )
+            result = container.exec_run(cmd=["/bin/sh", "-c", script])
+            return result.exit_code == 0
+
+        try:
+            return await self._run_blocking(_kill)
+        except Exception:
+            return False
 
     async def open_shell(self, container_id: str) -> SandboxShell:
         """Opens an interactive bash session with a real PTY inside the container.
@@ -567,33 +706,41 @@ class SandboxManager:
         kills the session (the interpreter is still busy and cannot be reused),
         and the next call transparently starts a fresh one.
         """
+        async with self._python_lock(container_id):
+            session = await self._ensure_python_session(container_id)
+            try:
+                return await self._run_blocking(lambda: session.execute(code, timeout))
+            except TimeoutError:
+                self._discard_python_session(container_id)
+                return (
+                    f"Error: Execution timed out after {timeout} seconds and the Python"
+                    " session was restarted; its variables are lost. Re-run your setup,"
+                    " and put long-running work in a script via start_background_task."
+                )
+            except ConnectionError as error:
+                self._discard_python_session(container_id)
+                return (
+                    f"Error: The Python session ended unexpectedly ({error}). A fresh"
+                    " session will start on your next call; its variables are lost."
+                )
+
+    async def _ensure_python_session(self, container_id: str) -> PythonSession:
+        """Returns the container's live interpreter, starting one if needed."""
         session = self._python_sessions.get(container_id)
-        if session is None or session.dead:
-            self._discard_python_session(container_id)
-            session = await self._run_blocking(
-                lambda: self._open_python_session_sync(container_id)
-            )
-            self._python_sessions[container_id] = session
+        if session is not None and not session.dead:
+            return session
 
-        try:
-            return await self._run_blocking(lambda: session.execute(code, timeout))
-        except TimeoutError:
-            self._discard_python_session(container_id)
-            return (
-                f"Error: Execution timed out after {timeout} seconds and the Python"
-                " session was restarted; its variables are lost. Re-run your setup,"
-                " and put long-running work in a script via start_background_task."
-            )
-        except ConnectionError as error:
-            self._discard_python_session(container_id)
-            return (
-                f"Error: The Python session ended unexpectedly ({error}). A fresh"
-                " session will start on your next call; its variables are lost."
-            )
-
-    async def stop_and_remove_sandbox(self, container_id: str):
-        """Stops and removes the container."""
         self._discard_python_session(container_id)
+        session = await self._run_blocking(
+            lambda: self._open_python_session_sync(container_id)
+        )
+        self._python_sessions[container_id] = session
+        return session
+
+    async def stop_and_remove_sandbox(self, container_id: str) -> None:
+        """Destroys the container. Used when its conversation is deleted."""
+        self._discard_python_session(container_id)
+        self._python_locks.pop(container_id, None)
         if not self._docker_available or not self._client:
             return
 
@@ -610,10 +757,32 @@ class SandboxManager:
         await self._run_blocking(_remove)
         self._owned_containers.discard(container_id)
 
+    async def stop_sandbox(self, container_id: str) -> None:
+        """Stops the container without destroying it, keeping its filesystem."""
+        self._discard_python_session(container_id)
+        if not self._docker_available or not self._client:
+            return
+
+        client = self._client
+
+        def _stop() -> None:
+            try:
+                client.containers.get(container_id).stop(timeout=2)
+            except Exception:
+                pass
+
+        await self._run_blocking(_stop)
+
     async def shutdown_all(self) -> None:
-        """Stops every sandbox container this process started."""
+        """Stops every sandbox this process started, without destroying any of them.
+
+        A sandbox is where an agent installed its packages and built its tooling.
+        Removing containers at shutdown threw all of that away on every restart, while
+        the rest of the code is written to revive a conversation's recorded container
+        rather than replace it. Stopping leaves nothing running and loses nothing.
+        """
         for container_id in list(self._owned_containers):
-            await self.stop_and_remove_sandbox(container_id)
+            await self.stop_sandbox(container_id)
 
 
 sandbox_manager = SandboxManager()

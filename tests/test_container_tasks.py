@@ -7,8 +7,6 @@ conversation whose transcript it is, and a conversation's list must include the
 processes its sub-agents left running, since they run in the same container.
 """
 
-import pytest
-
 from backend.app.database import (
     create_conversation,
     create_task,

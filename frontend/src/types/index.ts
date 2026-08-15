@@ -30,6 +30,15 @@ export interface ToolCategoryInfo {
   description: string;
 }
 
+/** Any value that can appear in JSON, which is what a schema default may hold. */
+export type JSONValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JSONValue[]
+  | { [key: string]: JSONValue };
+
 export type JSONSchemaType = 'string' | 'integer' | 'number' | 'boolean' | 'array' | 'object';
 
 export interface Conversation {
@@ -113,7 +122,7 @@ export interface ToolParamProperty {
   type: JSONSchemaType;
   description?: string;
   enum?: (string | number | boolean)[];
-  default?: any;
+  default?: JSONValue;
 }
 
 export interface ToolParametersSchema {

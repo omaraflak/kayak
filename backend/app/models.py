@@ -72,21 +72,6 @@ class JSONSchemaType(str, Enum):
     OBJECT = "object"
 
 
-class ToolCall(BaseModel):
-    """A structured tool call requested by the model."""
-    id: str
-    name: str
-    arguments: Dict[str, Any]
-
-
-class ToolCallResult(BaseModel):
-    """Result payload returned after executing a tool."""
-    tool_call_id: str
-    name: str
-    output: str
-    is_error: bool = False
-
-
 class Message(BaseModel):
     """A single message item in the conversation history."""
     id: Optional[str] = None
@@ -158,14 +143,6 @@ class Skill(BaseModel):
     description: str
     instructions: str
     helper_files: List[str] = Field(default_factory=list)
-
-
-class ToolParamSchema(BaseModel):
-    """Schema definition for an individual tool parameter."""
-    type: JSONSchemaType
-    description: Optional[str] = None
-    enum: Optional[List[Any]] = None
-    default: Optional[Any] = None
 
 
 class ToolDefinition(BaseModel):

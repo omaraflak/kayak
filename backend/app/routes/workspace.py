@@ -22,7 +22,7 @@ from backend.app.config import settings
 from backend.app.database import get_conversation
 from backend.app.models import Conversation
 from backend.app.routes.auth import SESSION_COOKIE_NAME, TOKEN_HEADER_NAME
-from backend.app.routes.conversations import SANDBOX_UNAVAILABLE_DETAIL, ensure_sandbox
+from backend.app.agent.turns import SANDBOX_UNAVAILABLE_DETAIL, ensure_sandbox
 from backend.app.tools.builtins.file_tools import (
     PathOutsideWorkspaceError,
     resolve_workspace_path,

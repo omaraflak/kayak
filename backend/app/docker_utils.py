@@ -70,10 +70,6 @@ class DockerPathResolver:
             pass
 
     @classmethod
-    def is_in_container(cls) -> bool:
-        return cls._is_in_container
-
-    @classmethod
     def resolve_volume_source(cls, container_path: Union[str, Path], fallback_named_volume: Optional[str] = None) -> str:
         """Translates an internal container path (e.g. /app/data/huggingface_cache) to the host source path.
 

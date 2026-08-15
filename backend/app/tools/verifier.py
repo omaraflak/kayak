@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 from backend.app.tools.registry import extract_tool_schema
 
 

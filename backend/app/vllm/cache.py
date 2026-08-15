@@ -132,8 +132,3 @@ def list_cached_models(cache_root: Path) -> List[CachedModel]:
     return sorted(models, key=lambda model: model.size_bytes, reverse=True)
 
 
-def total_cache_bytes(cache_root: Path) -> int:
-    """Returns the total size of the Hugging Face cache directory."""
-    if not cache_root.is_dir():
-        return 0
-    return directory_size_bytes(cache_root)

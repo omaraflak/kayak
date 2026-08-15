@@ -11,9 +11,10 @@ to have witnessed the events it missed.
 
 import asyncio
 import json
-from typing import Any, AsyncGenerator, Dict
+from typing import AsyncGenerator
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
+from backend.app.agent import events
 from backend.app.agent.activity import activity_tracker
 
 router = APIRouter(prefix="/api/activity", tags=["activity"])
@@ -29,10 +30,7 @@ async def stream_activity(request: Request) -> StreamingResponse:
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
-            snapshot: Dict[str, Any] = {
-                "type": "snapshot",
-                "running": activity_tracker.running_ids(),
-            }
+            snapshot = events.activity_snapshot(activity_tracker.running_ids())
             yield f"data: {json.dumps(snapshot)}\n\n"
 
             while True:

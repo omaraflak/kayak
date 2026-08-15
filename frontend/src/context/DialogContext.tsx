@@ -57,12 +57,17 @@ export const useDialog = () => {
   return context;
 };
 
+/** What a dialog settles with: a decision, entered text, or a dismissal. */
+type DialogResult = boolean | string | null;
+
 export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [dialogConfig, setDialogConfig] = useState<DialogOptions | null>(null);
   const [promptInput, setPromptInput] = useState('');
+  // A dialog answers with a boolean (confirm) or a string/null (prompt), and one
+  // resolver serves both, so the settled value is the union rather than anything.
   const [resolver, setResolver] = useState<{
-    resolve: (value: any) => void;
+    resolve: (value: DialogResult) => void;
   } | null>(null);
 
   const confirm = useCallback(
@@ -83,7 +88,9 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           showCancel: true,
           isPrompt: false,
         });
-        setResolver({ resolve });
+        // Narrowed at the boundary rather than cast: one resolver serves three kinds
+        // of dialog, and each converts the settled value into its own answer.
+        setResolver({ resolve: (value) => resolve(value === true) });
         setIsOpen(true);
       });
     },
@@ -106,7 +113,7 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           showCancel: false,
           isPrompt: false,
         });
-        setResolver({ resolve });
+        setResolver({ resolve: () => resolve() });
         setIsOpen(true);
       });
     },
@@ -134,7 +141,9 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           isPrompt: true,
           inputPlaceholder: options.placeholder || '',
         });
-        setResolver({ resolve });
+        setResolver({
+          resolve: (value) => resolve(typeof value === 'string' ? value : null),
+        });
         setIsOpen(true);
       });
     },

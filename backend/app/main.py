@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from backend.app.agent import turns
 from backend.app.agent.sandbox import sandbox_manager
 from backend.app.agents.manager import agent_manager
 from backend.app.config import settings
@@ -76,7 +77,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown: stop sandbox containers this process started so they do not outlive it.
-    await conversations.shutdown_active_turns()
+    await turns.cancel_all()
     await sandbox_manager.shutdown_all()
 
 

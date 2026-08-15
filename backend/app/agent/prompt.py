@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 from backend.app.agents.manager import agent_manager, allowed_subagent_ids
 from backend.app.models import AgentConfig
 from backend.app.skills.registry import skill_registry

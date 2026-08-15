@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { applyActivityEvent } from '../components/conversationActivity';
+import { applyActivityEvent } from '../features/conversations/conversationActivity';
 
 /**
  * Which conversations are working, for the whole app.

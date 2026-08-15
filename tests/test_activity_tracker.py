@@ -5,7 +5,6 @@ whichever conversation happens to be open -- that coupling is what made the
 indicator vanish when the user switched tabs mid-turn.
 """
 
-import asyncio
 
 from backend.app.agent.activity import ActivityTracker
 

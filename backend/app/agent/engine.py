@@ -2,10 +2,12 @@ import asyncio
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple, Union
 import uuid
+from backend.app.agent import events
 from backend.app.agent.activity import activity_tracker
 from backend.app.agent.approvals import approval_registry
+from backend.app.agent.events import AgentEvent
 from backend.app.agent.history import (
     MAX_HISTORY_CHARS,
     repair_tool_call_pairing,
@@ -165,7 +167,7 @@ def _update_tool_delta(
     active_tool_calls: Dict[int, Dict[str, Any]],
     chunk: Dict[str, Any],
     iteration: int,
-) -> Dict[str, Any]:
+) -> events.ToolCallDeltaEvent:
     """Accumulates streaming tool call delta fragments into active_tool_calls state."""
     raw_index = chunk.get("index")
     idx = int(raw_index) if raw_index is not None else 0
@@ -186,13 +188,8 @@ def _update_tool_delta(
         if chunk.get("arguments"):
             active_tool_calls[idx]["arguments"] += chunk.get("arguments")
 
-    return {
-        "type": "tool_call_delta",
-        "index": idx,
-        "id": active_tool_calls[idx]["id"],
-        "name": active_tool_calls[idx]["name"],
-        "arguments": active_tool_calls[idx]["arguments"],
-    }
+    call = active_tool_calls[idx]
+    return events.tool_call_delta(idx, call["id"], call["name"], call["arguments"])
 
 
 def _finalize_tool_calls(active_tool_calls: Dict[int, Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -281,8 +278,69 @@ async def _close_unexecuted_tool_calls(
             pass
 
 
+@dataclass
+class _AssistantTurn:
+    """What one pass of the model produced."""
+    content: str
+    thinking: str
+    tool_calls: List[Dict[str, Any]]
+    failed: bool
+
+
 class AgentEngine:
     """Core autonomous agent execution loop managing prompt injection, tool dispatching, and streaming."""
+
+    async def _stream_assistant_turn(
+        self, session: _SessionContext, iteration: int
+    ) -> AsyncGenerator[Union[AgentEvent, _AssistantTurn], None]:
+        """Streams one model response, yielding its events and finally the result.
+
+        The last item yielded is the `_AssistantTurn` describing what was produced;
+        everything before it is an event for the client.
+        """
+        raw_messages = await get_messages(session.conversation_id)
+        llm_messages = _build_llm_messages(raw_messages, session)
+
+        content = ""
+        reasoning = ""
+        active_tool_calls: Dict[int, Dict[str, Any]] = {}
+        failed = False
+
+        async for chunk in generate_completion_stream(
+            model=session.agent_config.model,
+            messages=llm_messages,
+            tools=session.tool_schemas,
+            temperature=session.agent_config.temperature,
+        ):
+            chunk_type = chunk.get("type")
+
+            if chunk_type == "thinking":
+                text = chunk.get("content", "")
+                reasoning += text
+                yield events.thinking(text)
+
+            elif chunk_type == "token":
+                text = chunk.get("content", "")
+                content += text
+                yield events.token(text)
+
+            elif chunk_type == "tool_call_delta":
+                yield _update_tool_delta(active_tool_calls, chunk, iteration)
+
+            elif chunk_type == "warning":
+                yield events.warning(str(chunk.get("warning", "")))
+
+            elif chunk_type == "error":
+                yield events.error(str(chunk.get("error", "")))
+                failed = True
+                break
+
+        yield _AssistantTurn(
+            content=content,
+            thinking=reasoning,
+            tool_calls=_finalize_tool_calls(active_tool_calls),
+            failed=failed,
+        )
 
     async def run(
         self,
@@ -292,7 +350,7 @@ class AgentEngine:
         container_id: Optional[str] = None,
         max_iterations: Optional[int] = None,
         depth: int = 0,
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[AgentEvent, None]:
         """Runs the ReAct agent turn loop for a conversation, streaming step events and persisting messages.
 
         Args:
@@ -304,7 +362,7 @@ class AgentEngine:
             depth: Sub-agent nesting depth of this run.
 
         Yields:
-            Dict[str, Any]: SSE-compatible event dictionaries (tokens, tool executions, errors, completion).
+            AgentEvent: One event per step (tokens, tool executions, errors, completion).
         """
         session, error = await _resolve_session_context(
             conversation_id=conversation_id,
@@ -314,7 +372,8 @@ class AgentEngine:
             depth=depth,
         )
         if error or not session:
-            yield {"type": "error", "error": error}
+            yield events.error(error or "The conversation could not be started.")
+            yield events.done()
             return
 
         iteration_ceiling = max_iterations or settings.AGENT_MAX_ITERATIONS
@@ -326,83 +385,37 @@ class AgentEngine:
 
         try:
             for iteration in range(iteration_ceiling):
-                raw_messages = await get_messages(conversation_id)
-                llm_messages = _build_llm_messages(raw_messages, session)
+                turn: Optional[_AssistantTurn] = None
+                async for item in self._stream_assistant_turn(session, iteration):
+                    if isinstance(item, _AssistantTurn):
+                        turn = item
+                    else:
+                        yield item
+                assert turn is not None  # the generator always ends with the result
 
-                assistant_content = ""
-                assistant_thinking = ""
-                active_tool_calls: Dict[int, Dict[str, Any]] = {}
-                stream_failed = False
-
-                # Stream LLM generation
-                async for chunk in generate_completion_stream(
-                    model=session.agent_config.model,
-                    messages=llm_messages,
-                    tools=session.tool_schemas,
-                    temperature=session.agent_config.temperature,
-                ):
-                    chunk_type = chunk.get("type")
-
-                    if chunk_type == "thinking":
-                        text = chunk.get("content", "")
-                        assistant_thinking += text
-                        yield {"type": "thinking", "content": text}
-
-                    elif chunk_type == "token":
-                        text = chunk.get("content", "")
-                        assistant_content += text
-                        yield {"type": "token", "content": text}
-
-                    elif chunk_type == "tool_call_delta":
-                        event = _update_tool_delta(active_tool_calls, chunk, iteration)
-                        yield event
-
-                    elif chunk_type == "warning":
-                        yield {"type": "warning", "warning": chunk.get("warning")}
-
-                    elif chunk_type == "error":
-                        yield {"type": "error", "error": chunk.get("error")}
-                        stream_failed = True
-                        break
-
-                if stream_failed:
+                if turn.failed:
                     # Persist whatever was streamed before the failure so the partial
                     # turn is not silently lost, but drop any half-built tool calls.
-                    if assistant_content or assistant_thinking:
-                        await add_message(
-                            conversation_id=conversation_id,
-                            role=MessageRole.ASSISTANT,
-                            content=assistant_content or None,
-                            thinking=assistant_thinking.strip() or None,
-                        )
+                    await self._persist_assistant_turn(conversation_id, turn, with_calls=False)
                     hit_ceiling = False
-                    return
+                    break
 
-                final_tool_calls = _finalize_tool_calls(active_tool_calls)
-
-                # Persist assistant turn message
-                await add_message(
-                    conversation_id=conversation_id,
-                    role=MessageRole.ASSISTANT,
-                    content=assistant_content if assistant_content else None,
-                    thinking=assistant_thinking.strip() if assistant_thinking.strip() else None,
-                    tool_calls=final_tool_calls if final_tool_calls else None,
-                )
+                await self._persist_assistant_turn(conversation_id, turn, with_calls=True)
 
                 # Turn complete if no tool calls requested
-                if not final_tool_calls:
+                if not turn.tool_calls:
                     hit_ceiling = False
                     break
 
                 executed_ids: Set[str] = set()
                 try:
                     async for event in self._run_tool_calls(
-                        final_tool_calls, session, executed_ids
+                        turn.tool_calls, session, executed_ids
                     ):
                         yield event
                 except asyncio.CancelledError:
                     await _close_unexecuted_tool_calls(
-                        conversation_id, final_tool_calls, executed_ids, CANCELLED_RESULT
+                        conversation_id, turn.tool_calls, executed_ids, CANCELLED_RESULT
                     )
                     raise
 
@@ -412,11 +425,7 @@ class AgentEngine:
                     role=MessageRole.ASSISTANT,
                     content=MAX_ITERATIONS_NOTICE,
                 )
-                yield {
-                    "type": "max_iterations",
-                    "limit": iteration_ceiling,
-                    "content": MAX_ITERATIONS_NOTICE,
-                }
+                yield events.max_iterations(iteration_ceiling, MAX_ITERATIONS_NOTICE)
         finally:
             approval_registry.cancel_conversation(conversation_id)
             activity_tracker.set_idle(conversation_id)
@@ -424,14 +433,33 @@ class AgentEngine:
                 update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
             )
 
-        yield {"type": "done"}
+        # Sent however the turn ended, including after an error: it is what releases
+        # the composer, and a turn that failed used to leave the client waiting on an
+        # event that never came.
+        yield events.done()
+
+    @staticmethod
+    async def _persist_assistant_turn(
+        conversation_id: str, turn: _AssistantTurn, with_calls: bool
+    ) -> None:
+        """Stores what the model produced, if it produced anything worth storing."""
+        tool_calls = turn.tool_calls if with_calls else []
+        if not turn.content and not turn.thinking.strip() and not tool_calls:
+            return
+        await add_message(
+            conversation_id=conversation_id,
+            role=MessageRole.ASSISTANT,
+            content=turn.content or None,
+            thinking=turn.thinking.strip() or None,
+            tool_calls=tool_calls or None,
+        )
 
     async def _run_tool_calls(
         self,
         tool_calls: List[Dict[str, Any]],
         session: _SessionContext,
         executed_ids: Set[str],
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[AgentEvent, None]:
         """Executes each requested tool call, enforcing agent permissions along the way."""
         for tc in tool_calls:
             call_id = tc["id"]
@@ -442,13 +470,7 @@ class AgentEngine:
 
             if permission == ToolPermission.DENIED:
                 output = format_denial(fn_name, session.agent_config)
-                yield {
-                    "type": "tool_call_result",
-                    "id": call_id,
-                    "name": fn_name,
-                    "output": output,
-                    "is_error": True,
-                }
+                yield events.tool_call_result(call_id, fn_name, output, is_error=True)
                 await _record_tool_result(
                     session.conversation_id, call_id, fn_name, output
                 )
@@ -464,46 +486,24 @@ class AgentEngine:
                     tool_name=fn_name,
                     arguments=raw_args,
                 )
-                yield {
-                    "type": "tool_approval_required",
-                    "id": call_id,
-                    "name": fn_name,
-                    "arguments": raw_args,
-                }
+                yield events.tool_approval_required(call_id, fn_name, raw_args)
                 approved = await approval_registry.wait(call_id, pending)
                 if approved is not True:
                     output = (
                         APPROVAL_TIMEOUT_RESULT if approved is None else REJECTED_RESULT
                     )
-                    yield {
-                        "type": "tool_call_result",
-                        "id": call_id,
-                        "name": fn_name,
-                        "output": output,
-                        "is_error": True,
-                    }
+                    yield events.tool_call_result(call_id, fn_name, output, is_error=True)
                     await _record_tool_result(
                         session.conversation_id, call_id, fn_name, output
                     )
                     executed_ids.add(call_id)
                     continue
 
-            yield {
-                "type": "tool_call_executing",
-                "id": call_id,
-                "name": fn_name,
-                "arguments": raw_args,
-            }
+            yield events.tool_call_executing(call_id, fn_name, raw_args)
 
             output, is_error = await _execute_single_tool(tc, session)
 
-            yield {
-                "type": "tool_call_result",
-                "id": call_id,
-                "name": fn_name,
-                "output": output,
-                "is_error": is_error,
-            }
+            yield events.tool_call_result(call_id, fn_name, output, is_error=is_error)
 
             await _record_tool_result(
                 session.conversation_id, call_id, fn_name, output

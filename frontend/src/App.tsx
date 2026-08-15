@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Conversation, AgentConfig, NavigationTab } from './types';
 import { api, errorMessage } from './api/client';
-import { Sidebar } from './components/Sidebar';
-import { ChatView } from './components/ChatView';
-import { AgentsView } from './components/AgentsView';
-import { SkillsView } from './components/SkillsView';
-import { ToolsView } from './components/ToolsView';
-import { SettingsView } from './components/SettingsView';
-import { ModelsView } from './components/ModelsView';
-import { GlobalVLLMStatusWidget } from './components/GlobalVLLMStatusWidget';
+import { Sidebar } from './features/conversations/Sidebar';
+import { ChatView } from './features/chat/ChatView';
+import { AgentsView } from './features/agents/AgentsView';
+import { SkillsView } from './features/skills/SkillsView';
+import { ToolsView } from './features/tools/ToolsView';
+import { SettingsView } from './features/settings/SettingsView';
+import { ModelsView } from './features/models/ModelsView';
+import { GlobalVLLMStatusWidget } from './features/models/GlobalVLLMStatusWidget';
 import { useDialog } from './context/DialogContext';
 import { parseCurrentUrl, navigateTo } from './utils/router';
 

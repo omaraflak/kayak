@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { App } from './App';
-import { AuthGate } from './components/AuthGate';
+import { AuthGate } from './ui/AuthGate';
 import { ConversationActivityProvider } from './context/ConversationActivityContext';
 import { DialogProvider } from './context/DialogContext';
 import { ThemeProvider } from './context/ThemeContext';

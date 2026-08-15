@@ -32,10 +32,6 @@ class ApprovalRegistry:
     def __init__(self) -> None:
         self._pending: Dict[str, _PendingApproval] = {}
 
-    def is_pending(self, call_id: str) -> bool:
-        """Reports whether a tool call is currently awaiting a decision."""
-        return call_id in self._pending
-
     def register(
         self,
         call_id: str,

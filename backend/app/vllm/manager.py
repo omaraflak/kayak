@@ -151,10 +151,6 @@ class VLLMManager:
             self._client = None
             self._docker_available = False
 
-    @property
-    def is_docker_available(self) -> bool:
-        return self._docker_available
-
     def _get_endpoint_urls(self) -> List[str]:
         """Returns the ordered list of vLLM endpoint URLs to probe."""
         return [

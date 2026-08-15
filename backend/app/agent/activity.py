@@ -15,7 +15,9 @@ too.
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Set
+from typing import List, Set
+
+from backend.app.agent.events import ActivityEvent, conversation_activity
 
 logger = logging.getLogger(__name__)
 
@@ -31,19 +33,19 @@ class ActivityTracker:
 
     def __init__(self) -> None:
         self._running: Set[str] = set()
-        self._listeners: List[asyncio.Queue[Dict[str, Any]]] = []
+        self._listeners: List[asyncio.Queue[ActivityEvent]] = []
 
     def running_ids(self) -> List[str]:
         """Conversations with a turn in flight right now."""
         return sorted(self._running)
 
-    def subscribe(self) -> asyncio.Queue[Dict[str, Any]]:
+    def subscribe(self) -> asyncio.Queue[ActivityEvent]:
         """Registers a listener queue for subsequent status changes."""
-        queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
+        queue: asyncio.Queue[ActivityEvent] = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
         self._listeners.append(queue)
         return queue
 
-    def unsubscribe(self, queue: asyncio.Queue[Dict[str, Any]]) -> None:
+    def unsubscribe(self, queue: asyncio.Queue[ActivityEvent]) -> None:
         """Removes a listener queue."""
         if queue in self._listeners:
             self._listeners.remove(queue)
@@ -53,24 +55,20 @@ class ActivityTracker:
         if conversation_id in self._running:
             return
         self._running.add(conversation_id)
-        self._broadcast(
-            {"type": "conversation_activity", "conversation_id": conversation_id, "running": True}
-        )
+        self._broadcast(conversation_activity(conversation_id, running=True))
 
     def set_idle(self, conversation_id: str) -> None:
         """Marks a conversation as finished, announcing the change once."""
         if conversation_id not in self._running:
             return
         self._running.discard(conversation_id)
-        self._broadcast(
-            {"type": "conversation_activity", "conversation_id": conversation_id, "running": False}
-        )
+        self._broadcast(conversation_activity(conversation_id, running=False))
 
     def reset(self) -> None:
         """Clears all state. Used when a process takes over after a restart."""
         self._running.clear()
 
-    def _broadcast(self, event: Dict[str, Any]) -> None:
+    def _broadcast(self, event: ActivityEvent) -> None:
         for queue in list(self._listeners):
             try:
                 queue.put_nowait(event)

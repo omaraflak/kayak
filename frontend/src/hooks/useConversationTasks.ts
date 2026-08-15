@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BackgroundTask } from '../types';
 import { api } from '../api/client';
-import { TASK_POLL_INTERVAL_MS } from '../components/conversationTasks';
+import { TASK_POLL_INTERVAL_MS } from '../features/workspace/conversationTasks';
 
 /**
  * The background tasks running in a conversation's container.

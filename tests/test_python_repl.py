@@ -9,7 +9,6 @@ import json
 import subprocess
 import sys
 
-import pytest
 
 from backend.app.agent.python_repl import (
     PYTHON_REPL_DRIVER,
