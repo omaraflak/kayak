@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { CodeProps, ElementProps } from '../../ui/markdownProps';
+import { useStickToBottom } from '../../hooks/useStickToBottom';
 
 interface ThinkingAccordionProps {
   content?: string | null;
@@ -18,6 +19,9 @@ export const ThinkingAccordion: React.FC<ThinkingAccordionProps> = ({
   defaultExpanded = false,
 }) => {
   const [isExpanded, setIsExpanded] = useState<boolean>(defaultExpanded || isThinking);
+  // Reasoning scrolls inside its own box, so following the transcript is not enough:
+  // without this the box shows its first lines while the model keeps writing below.
+  const thoughtsRef = useStickToBottom([content], isThinking);
 
   // If there is no content and not actively thinking, do not render
   if (!content && !isThinking) return null;
@@ -97,7 +101,10 @@ export const ThinkingAccordion: React.FC<ThinkingAccordionProps> = ({
       {/* Expandable Thinking Content Drawer */}
       {isExpanded && (
         <div className="mt-2 pl-3 border-l-2 border-md-primary/40 animate-fade-in">
-          <div className="bg-md-surface-container-low border border-md-outline-variant rounded-xl p-3.5 max-h-[360px] overflow-y-auto shadow-2xs">
+          <div
+            ref={thoughtsRef}
+            className="bg-md-surface-container-low border border-md-outline-variant rounded-xl p-3.5 max-h-[360px] overflow-y-auto shadow-2xs"
+          >
             {content ? (
               <ReactMarkdown
                 remarkPlugins={[remarkGfm, remarkMath]}
