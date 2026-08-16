@@ -6,6 +6,7 @@
 # provider API keys with it.
 data/settings.json
 data/memories.md
+data/memories/
 data/kayak.db
 data/kayak.db-wal
 data/kayak.db-shm

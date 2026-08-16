@@ -1,5 +1,6 @@
 import React from 'react';
 import { Conversation, AgentConfig, NavigationTab } from '../../types';
+import { KayakMark } from '../../ui/KayakMark';
 import { 
   MessageSquare, 
   Plus, 
@@ -52,9 +53,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Brand Header */}
       <div className="p-4 border-b border-md-outline-variant flex items-center justify-between">
         <div className="flex items-center space-x-2.5">
-          <div className="w-8 h-8 rounded-lg bg-md-surface-container-high border border-md-outline-variant flex items-center justify-center text-lg shadow-xs">
-            🛶
-          </div>
+          <KayakMark className="w-8 h-8 shrink-0 shadow-xs rounded-lg" />
           <div>
             <h1 className="font-bold text-sm text-md-on-surface tracking-tight">
               Kayak

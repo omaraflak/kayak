@@ -3,6 +3,7 @@ import { Conversation, AgentConfig } from '../../types';
 import { api } from '../../api/client';
 import { ChatPane } from './ChatPane';
 import { AutoGrowTextarea } from '../../ui/AutoGrowTextarea';
+import { KayakMark } from '../../ui/KayakMark';
 import { WorkspacePanel, WorkspaceTab } from '../workspace/WorkspacePanel';
 import { runningTaskCount } from '../workspace/conversationTasks';
 import { useVLLMStatus, VLLM_LOADING_STATES } from '../../context/VLLMStatusContext';
@@ -251,9 +252,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <div className="w-full max-w-2xl flex flex-col space-y-4 max-h-full">
               {/* Header Title */}
               <div className="text-center space-y-1.5 shrink-0">
-                <div className="w-12 h-12 rounded-2xl bg-md-surface-container border border-md-outline-variant flex items-center justify-center text-2xl mx-auto shadow-xs">
-                  🛶
-                </div>
+                <KayakMark className="w-12 h-12 mx-auto shadow-xs rounded-2xl" />
                 <h3 className="text-base font-bold text-md-on-surface tracking-tight">
                   How can Kayak help you today?
                 </h3>

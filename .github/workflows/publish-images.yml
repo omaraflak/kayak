@@ -1,0 +1,70 @@
+name: Publish images
+
+# Publishing is driven by tags so that what lands on Docker Hub is always a
+# commit someone deliberately marked as a release. Pushing to main does not
+# publish, which keeps `latest` from moving under installed launchers on every
+# merge.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: omaraflak/kayak
+            dockerfile: Dockerfile
+            cache: server
+          - image: omaraflak/kayak-sandbox
+            dockerfile: Dockerfile.sandbox
+            cache: sandbox
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # arm64 is emulated rather than built on a native runner. Both images
+      # install their Python dependencies from prebuilt aarch64 wheels, so the
+      # emulation cost is unpacking rather than compiling.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ matrix.image }}
+          # `latest` is what the launcher tracks, so every release moves it.
+          # The version tags exist so a specific release can be pinned or
+          # rolled back to by hand.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          # Apple Silicon is a first-class target for the launcher, and an
+          # amd64-only image would run there under emulation.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          # Stamps org.opencontainers.image.version, which the launcher reads to
+          # show a real version number instead of a digest.
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.cache }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache }}

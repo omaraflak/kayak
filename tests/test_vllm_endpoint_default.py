@@ -1,7 +1,7 @@
 """Tests for choosing where to reach the local vLLM server.
 
 The default was `host.docker.internal`, which only resolves from inside a container.
-Running Kayak directly on the host -- the documented `run.sh` path -- meant a model
+Running Kayak directly on the host, as the development setup does, meant a model
 could be downloaded, started and reported healthy, while every conversation using it
 failed with a connection error.
 """
