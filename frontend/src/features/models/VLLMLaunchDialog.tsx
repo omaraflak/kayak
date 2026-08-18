@@ -210,8 +210,10 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
               hint={
                 'Space set aside for the model to remember the conversation as it runs. ' +
                 'More lets it handle longer conversations at once; the slider stops where ' +
-                'this machine runs out of room, because asking for more than that prevents ' +
-                'the model from starting at all.'
+                'Docker runs out of room, because asking for more than that prevents ' +
+                'the model from starting at all. Docker Desktop caps its own memory ' +
+                'independently of how much this machine has — raise it under ' +
+                'Settings > Resources > Memory if the ceiling here looks low.'
               }
             >
               <input
@@ -230,7 +232,7 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
                 <span>1 GB</span>
                 <span>
                   {memoryCeilingGB} GB max
-                  {systemMemoryGB > 0 && ` · ${systemMemoryGB.toFixed(1)} GB on this machine`}
+                  {systemMemoryGB > 0 && ` · ${systemMemoryGB.toFixed(1)} GB available to Docker`}
                 </span>
               </div>
             </Field>

@@ -526,9 +526,15 @@ class VLLMManager:
         the failure is legible without opening the log drawer.
         """
         if oom_killed:
+            # Names the Docker memory limit explicitly. On Docker Desktop that ceiling
+            # is the VM's allocation rather than the machine's RAM, so this is the one
+            # failure users routinely misread as "but I have plenty of memory".
             detail = (
-                "The container was killed for exceeding available memory. Try a smaller "
-                "model, a lower --max-model-len, or a lower GPU memory fraction."
+                "The container was killed for exceeding the memory Docker makes "
+                "available, which on Docker Desktop is set independently of the "
+                "machine's RAM. Raise it in Docker Desktop under Settings > Resources "
+                "> Memory, or try a smaller model, a lower --max-model-len, or a lower "
+                "GPU memory fraction."
             )
         elif exit_code:
             # The tail of a crashing vLLM is shutdown noise; the sentence that names
