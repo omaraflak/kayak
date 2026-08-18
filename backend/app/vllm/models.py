@@ -68,6 +68,30 @@ class HostCapability(BaseModel):
     image_present: Optional[bool] = None
 
 
+class MetalStatus(BaseModel):
+    """Metal inference, as reported by the desktop launcher.
+
+    Everything defaults to unavailable so that a Kayak running without a
+    launcher -- from docker-compose, or under a launcher too old to know about
+    Metal -- reports "not supported" rather than offering something nothing can
+    service.
+    """
+    #: False unless the launcher is present and the machine is Apple Silicon.
+    supported: bool = False
+    #: Whether the vllm-metal environment has been installed on the host.
+    installed: bool = False
+    #: stopped, installing, starting, ready, or error.
+    state: str = "stopped"
+    model: Optional[str] = None
+    port: int = 0
+    error: Optional[str] = None
+
+
+class MetalStartRequest(BaseModel):
+    """Asks the launcher to serve a model on the host GPU."""
+    model_id: str = Field(..., description="MLX repository, e.g. 'mlx-community/Qwen3.8-27B-8bit'")
+
+
 class CachedModel(BaseModel):
     """A model repository whose weights are already on this machine."""
     repo_id: str

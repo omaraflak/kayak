@@ -22,9 +22,10 @@ import {
 import { api, errorMessage } from '../../api/client';
 import { useDialog } from '../../context/DialogContext';
 import { useVLLMStatus } from '../../context/VLLMStatusContext';
-import { HostCapability, ModelCacheInfo, VLLMDeployRequest } from '../../types';
+import { HostCapability, MetalStatus, ModelCacheInfo, VLLMDeployRequest } from '../../types';
 import { HuggingFaceCatalog } from './HuggingFaceCatalog';
 import { VLLMLaunchDialog } from './VLLMLaunchDialog';
+import { MetalPanel } from './MetalPanel';
 import { formatBytes } from './modelSizing';
 
 /**
@@ -41,6 +42,7 @@ export const ModelsView: React.FC = () => {
   const dialog = useDialog();
   const { status, logs, refresh: fetchStatus } = useVLLMStatus();
   const [capability, setCapability] = useState<HostCapability | null>(null);
+  const [metal, setMetal] = useState<MetalStatus | null>(null);
   const [cache, setCache] = useState<ModelCacheInfo | null>(null);
   const [isStopping, setIsStopping] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
@@ -55,11 +57,13 @@ export const ModelsView: React.FC = () => {
   const isError = status?.state === 'error';
 
   const refreshMachine = useCallback(async () => {
-    const [capabilityResult, cacheResult] = await Promise.allSettled([
+    const [capabilityResult, cacheResult, metalResult] = await Promise.allSettled([
       api.getHostCapability(),
       api.getModelCache(),
+      api.getMetalStatus(),
     ]);
     if (capabilityResult.status === 'fulfilled') setCapability(capabilityResult.value);
+    if (metalResult.status === 'fulfilled') setMetal(metalResult.value);
     if (cacheResult.status === 'fulfilled') setCache(cacheResult.value);
   }, []);
 
@@ -98,6 +102,29 @@ export const ModelsView: React.FC = () => {
     }
     setPendingLaunch(modelId);
   };
+
+  // Metal runs on the host via the launcher rather than in a container, so its
+  // progress arrives by polling the control file rather than the vLLM event
+  // stream. Polled only while something is actually in flight.
+  useEffect(() => {
+    if (!metal || (metal.state !== 'installing' && metal.state !== 'starting')) return;
+    const timer = setInterval(async () => {
+      try {
+        setMetal(await api.getMetalStatus());
+      } catch {
+        // The launcher rewrites the file continuously; a failed read is transient.
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [metal]);
+
+  const handleStartMetal = useCallback(async (modelId: string) => {
+    setMetal(await api.startMetal(modelId));
+  }, []);
+
+  const handleStopMetal = useCallback(async () => {
+    setMetal(await api.stopMetal());
+  }, []);
 
   const handleLaunch = async (request: VLLMDeployRequest) => {
     setPendingLaunch(null);
@@ -369,6 +396,19 @@ export const ModelsView: React.FC = () => {
                 Docker is not reachable, so no model can be served locally. Start Docker Desktop
                 (or the daemon) and refresh.
               </p>
+            </div>
+          )}
+
+          {metal?.supported && (
+            <div className="p-3.5 rounded-xl bg-md-surface-container border border-md-outline-variant">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-md-on-surface mb-2">
+                Apple GPU
+              </p>
+              <MetalPanel
+                status={metal}
+                onStart={handleStartMetal}
+                onStop={handleStopMetal}
+              />
             </div>
           )}
 

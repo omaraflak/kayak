@@ -3,10 +3,13 @@ import json
 from typing import Dict
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+from backend.app.vllm import metal
 from backend.app.vllm.cache import CachePathError
 from backend.app.vllm.manager import vllm_manager
 from backend.app.vllm.models import (
     HostCapability,
+    MetalStartRequest,
+    MetalStatus,
     ModelCacheInfo,
     VLLMDeployRequest,
     VLLMDeploymentProgress,
@@ -62,6 +65,51 @@ async def get_vllm_served_models():
 async def get_host_capability() -> HostCapability:
     """Reports what this machine can serve: Docker, accelerators, and image state."""
     return await vllm_manager.get_host_capability()
+
+
+@router.get("/metal", response_model=MetalStatus)
+async def get_metal_status() -> MetalStatus:
+    """Reports Metal inference as the desktop launcher currently sees it."""
+    return metal.read_status()
+
+
+@router.post("/metal/start", response_model=MetalStatus)
+async def start_metal(request: MetalStartRequest) -> MetalStatus:
+    """Asks the launcher to serve a model on the host GPU.
+
+    Kayak cannot start this itself: Metal is unreachable from inside a
+    container, so the request is recorded for the launcher to act on. The reply
+    is the state at the moment of asking, not the result -- the caller polls
+    ``GET /metal`` to watch it come up.
+    """
+    model_id = request.model_id.strip()
+    status = metal.read_status()
+
+    if not status.supported:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Metal inference needs the Kayak launcher running on an Apple Silicon Mac."
+            ),
+        )
+    if not metal.is_mlx_model(model_id):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Metal serves MLX models only. Choose a repository published under "
+                "mlx-community."
+            ),
+        )
+
+    metal.write_desired(running=True, model=model_id)
+    return status
+
+
+@router.post("/metal/stop", response_model=MetalStatus)
+async def stop_metal() -> MetalStatus:
+    """Asks the launcher to stop the Metal server."""
+    metal.write_desired(running=False)
+    return metal.read_status()
 
 
 @router.get("/cache", response_model=ModelCacheInfo)

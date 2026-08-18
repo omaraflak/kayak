@@ -298,6 +298,23 @@ export interface HostCapability {
   image_present?: boolean | null;
 }
 
+/**
+ * Metal inference, as reported by the desktop launcher.
+ *
+ * Metal has no passthrough into Docker, so this server runs natively on the
+ * host and Kayak only asks the launcher for it. Everything defaults to
+ * unavailable, which is what a Kayak with no launcher sees.
+ */
+export interface MetalStatus {
+  /** False unless the launcher is present and the Mac is Apple Silicon. */
+  supported: boolean;
+  installed: boolean;
+  state: 'stopped' | 'installing' | 'starting' | 'ready' | 'error';
+  model: string | null;
+  port: number;
+  error: string | null;
+}
+
 export interface CachedModel {
   repo_id: string;
   size_bytes: number;

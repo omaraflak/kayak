@@ -13,6 +13,7 @@ import {
   VLLMDeploymentProgress,
   VLLMDeployRequest,
   HostCapability,
+  MetalStatus,
   ModelCacheInfo,
   SettingsUpdate,
   WorkspaceDirectoryListing
@@ -328,6 +329,15 @@ export const api = {
 
   getHostCapability: (): Promise<HostCapability> =>
     fetchJSON(`${API_BASE}/vllm/hardware`),
+
+  getMetalStatus: (): Promise<MetalStatus> =>
+    fetchJSON(`${API_BASE}/vllm/metal`),
+
+  startMetal: (modelId: string): Promise<MetalStatus> =>
+    fetchJSONPost(`${API_BASE}/vllm/metal/start`, { model_id: modelId }),
+
+  stopMetal: (): Promise<MetalStatus> =>
+    fetchJSON(`${API_BASE}/vllm/metal/stop`, { method: 'POST' }),
 
   getModelCache: (): Promise<ModelCacheInfo> =>
     fetchJSON(`${API_BASE}/vllm/cache`),
