@@ -20,7 +20,7 @@ export function KayakMark({ className }: KayakMarkProps) {
     <svg viewBox="0 0 100 100" className={className} aria-hidden="true">
       <rect width="100" height="100" rx="24" fill="#1a73e8" />
       {/* Hull and paddle share a rotation, which is what keeps them perpendicular. */}
-      <g transform="rotate(-35 50 50)">
+      <g transform="rotate(-45 50 50)">
         <rect x="17" y="45.5" width="66" height="9" rx="4.5" fill="#ffffff" />
         <ellipse
           cx="50"
