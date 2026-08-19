@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { HuggingFaceModelSearchResult } from '../../types';
 import { api, errorMessage } from '../../api/client';
 import { estimateModelSize, judgeFit } from './modelSizing';
+import { MLX_SEARCH_PREFIX, isMlxModel } from './metalModels';
 import {
   Search,
   Loader2,
@@ -14,6 +15,7 @@ import {
   AlertTriangle,
   HardDrive,
   ExternalLink,
+  Zap,
 } from 'lucide-react';
 
 export interface HuggingFaceCatalogProps {
@@ -29,6 +31,8 @@ export interface HuggingFaceCatalogProps {
   cachedModelIds?: Set<string>;
   /** Accelerator memory available, for flagging models that cannot fit. */
   availableVramGB?: number;
+  /** Whether this machine can serve MLX weights on the Apple GPU. */
+  metalSupported?: boolean;
 }
 
 export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
@@ -42,6 +46,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
   initialQuery = 'qwen2.5-coder',
   cachedModelIds,
   availableVramGB = 0,
+  metalSupported = false,
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>(initialQuery);
   const [results, setResults] = useState<HuggingFaceModelSearchResult[]>([]);
@@ -107,6 +112,20 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
           <span>Search Hub</span>
         </button>
       </form>
+
+      {metalSupported && (
+        <button
+          type="button"
+          onClick={() => {
+            setSearchQuery(MLX_SEARCH_PREFIX);
+            handleSearch(MLX_SEARCH_PREFIX);
+          }}
+          className="inline-flex items-center gap-1.5 text-[11px] font-bold rounded-lg px-2.5 py-1.5 bg-md-surface-container-high text-md-on-surface hover:brightness-95 transition-all cursor-pointer"
+        >
+          <Zap className="w-3 h-3 text-md-primary" />
+          Show models that run on the GPU
+        </button>
+      )}
 
       {/* Results Container */}
       {isLoading ? (
@@ -182,6 +201,15 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                   </div>
 
                   <div className="flex items-center gap-1.5 flex-wrap">
+                    {metalSupported && isMlxModel(rawModelId) && (
+                      <span
+                        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-md-primary-container text-md-on-primary-container"
+                        title="Runs on the Apple GPU instead of the CPU"
+                      >
+                        <Zap className="w-2.5 h-2.5" />
+                        GPU
+                      </span>
+                    )}
                     {estimate && (
                       <span
                         className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border inline-flex items-center gap-1 ${

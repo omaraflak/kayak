@@ -24,8 +24,8 @@ import { useDialog } from '../../context/DialogContext';
 import { useVLLMStatus } from '../../context/VLLMStatusContext';
 import { HostCapability, MetalStatus, ModelCacheInfo, VLLMDeployRequest } from '../../types';
 import { HuggingFaceCatalog } from './HuggingFaceCatalog';
+import { isMlxModel } from './metalModels';
 import { VLLMLaunchDialog } from './VLLMLaunchDialog';
-import { MetalPanel } from './MetalPanel';
 import { formatBytes } from './modelSizing';
 
 /**
@@ -90,6 +90,12 @@ export const ModelsView: React.FC = () => {
 
   const cachedIds = new Set((cache?.models || []).map((model) => model.repo_id));
 
+  /** The GPU server's model, while it is coming up or serving. */
+  const metalModelId =
+    metal && (metal.state === 'ready' || metal.state === 'starting') ? metal.model : null;
+  /** True while the GPU server is installing or loading. */
+  const metalBusy = metal?.state === 'installing' || metal?.state === 'starting';
+
   const requestLaunch = (modelId: string) => {
     if (capability && !capability.docker_available) {
       dialog.alert({
@@ -118,13 +124,24 @@ export const ModelsView: React.FC = () => {
     return () => clearInterval(timer);
   }, [metal]);
 
-  const handleStartMetal = useCallback(async (modelId: string) => {
-    setMetal(await api.startMetal(modelId));
-  }, []);
+  /**
+   * Sends a model to whichever backend can actually run it.
+   *
+   * MLX weights only run on the Apple GPU, and the container dialog's options
+   * -- GPU memory fraction, KV cache size, CUDA graphs -- mean nothing there,
+   * so those models skip it and start directly.
+   */
+  const handleLaunchRequest = useCallback(
+    async (modelId: string) => {
+      if (metal?.supported && isMlxModel(modelId)) {
+        setMetal(await api.startMetal(modelId));
+        return;
+      }
+      requestLaunch(modelId);
+    },
+    [metal?.supported, requestLaunch]
+  );
 
-  const handleStopMetal = useCallback(async () => {
-    setMetal(await api.stopMetal());
-  }, []);
 
   const handleLaunch = async (request: VLLMDeployRequest) => {
     setPendingLaunch(null);
@@ -157,7 +174,10 @@ export const ModelsView: React.FC = () => {
 
     setIsStopping(true);
     try {
+      // Whichever backend is up. Stopping the one that is not running is a
+      // no-op on both sides, so this needs no branch.
       await api.stopVLLMServer();
+      if (metal?.supported) setMetal(await api.stopMetal());
       await fetchStatus();
     } catch (err) {
       dialog.alert({
@@ -286,7 +306,7 @@ export const ModelsView: React.FC = () => {
                 </div>
               </div>
 
-              {(isReady || isLoading) && (
+              {(isReady || isLoading || metalModelId || metalBusy) && (
                 <button
                   type="button"
                   onClick={handleStopServer}
@@ -399,19 +419,6 @@ export const ModelsView: React.FC = () => {
             </div>
           )}
 
-          {metal?.supported && (
-            <div className="p-3.5 rounded-xl bg-md-surface-container border border-md-outline-variant">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-md-on-surface mb-2">
-                Apple GPU
-              </p>
-              <MetalPanel
-                status={metal}
-                onStart={handleStartMetal}
-                onStop={handleStopMetal}
-              />
-            </div>
-          )}
-
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <Stat
               icon={<Zap className="w-3.5 h-3.5" />}
@@ -491,7 +498,7 @@ export const ModelsView: React.FC = () => {
                       {!isServing && (
                         <button
                           type="button"
-                          onClick={() => requestLaunch(model.repo_id)}
+                          onClick={() => handleLaunchRequest(model.repo_id)}
                           disabled={isLoading}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-md-outline-variant bg-md-surface-container-low hover:bg-md-surface-container-high disabled:opacity-40 text-[11px] font-semibold text-md-on-surface transition-colors cursor-pointer"
                         >
@@ -537,11 +544,12 @@ export const ModelsView: React.FC = () => {
 
           <HuggingFaceCatalog
             mode="deploy"
-            onDeployVLLM={requestLaunch}
-            activeVllmModelId={status?.model_id}
-            isVllmLoading={isLoading}
+            onDeployVLLM={handleLaunchRequest}
+            activeVllmModelId={metalModelId ?? status?.model_id}
+            isVllmLoading={isLoading || metalBusy}
             cachedModelIds={cachedIds}
             availableVramGB={(capability?.total_vram_mb ?? 0) / 1024}
+            metalSupported={metal?.supported ?? false}
           />
         </section>
       </div>
