@@ -424,20 +424,35 @@ export const ModelsView: React.FC = () => {
               icon={<Zap className="w-3.5 h-3.5" />}
               label="Accelerator"
               value={
-                capability
+                // The GPU probe only knows about NVIDIA, so an Apple Silicon Mac
+                // reported "CPU only" while sitting next to a usable GPU. Metal
+                // has to be asked separately.
+                metal?.supported
+                  ? 'Apple GPU'
+                  : capability
                   ? capability.gpus.length > 0
                     ? capability.gpus.map((gpu) => gpu.name).join(', ')
                     : 'CPU only'
                   : '—'
               }
               detail={
-                capability && capability.total_vram_mb > 0
+                metal?.supported
+                  ? 'Available for MLX models'
+                  : metal?.detail
+                  ? metal.detail
+                  : capability && capability.total_vram_mb > 0
                   ? `${(capability.total_vram_mb / 1024).toFixed(0)} GB VRAM`
                   : capability
                   ? 'Generation will be slow'
                   : undefined
               }
-              tone={capability && capability.gpus.length === 0 ? 'warning' : 'default'}
+              tone={
+                metal?.supported
+                  ? 'default'
+                  : capability && capability.gpus.length === 0
+                  ? 'warning'
+                  : 'default'
+              }
             />
             <Stat
               icon={<Package className="w-3.5 h-3.5" />}

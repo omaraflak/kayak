@@ -54,6 +54,8 @@ def read_status() -> MetalStatus:
     try:
         raw = status_path().read_text(encoding="utf-8")
     except OSError:
+        # Absent is the normal case without a launcher, so this is not logged;
+        # it would be one line every poll.
         return MetalStatus()
 
     try:
@@ -73,6 +75,7 @@ def read_status() -> MetalStatus:
         model=payload.get("model"),
         port=int(payload.get("port") or 0),
         error=payload.get("error"),
+        detail=payload.get("detail"),
     )
 
 

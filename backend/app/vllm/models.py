@@ -85,6 +85,10 @@ class MetalStatus(BaseModel):
     model: Optional[str] = None
     port: int = 0
     error: Optional[str] = None
+    #: Why Metal is unavailable when the hardware could otherwise do it, such as
+    #: an Intel build of the launcher running under Rosetta. Distinct from
+    #: `error`, which describes a start that was attempted and failed.
+    detail: Optional[str] = None
 
 
 class MetalStartRequest(BaseModel):

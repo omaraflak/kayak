@@ -32,6 +32,11 @@ COPY data/ ./data/
 # Copy built frontend from Stage 1
 COPY --from=frontend-builder /frontend/dist ./frontend/dist
 
+# Stamped by the release workflow. A container cannot read the version label of
+# the image it is running from, so the value is baked in for the app to report.
+ARG KAYAK_VERSION=dev
+ENV KAYAK_VERSION=${KAYAK_VERSION}
+
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 # Binding to all interfaces is safe here because Docker isolates the container

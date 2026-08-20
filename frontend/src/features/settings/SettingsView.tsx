@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppSettings, ProviderCredential } from '../../types';
+import { AboutFooter } from './AboutFooter';
 import { api, errorMessage } from '../../api/client';
 import { useDialog } from '../../context/DialogContext';
 import { useTheme, ThemeMode } from '../../context/ThemeContext';
@@ -261,6 +262,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => 
           </div>
         </Section>
 
+        <AboutFooter />
       </div>
     </div>
   );

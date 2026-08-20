@@ -13,6 +13,7 @@ import {
   VLLMDeploymentProgress,
   VLLMDeployRequest,
   HostCapability,
+  InstalledVersions,
   MetalStatus,
   ModelCacheInfo,
   SettingsUpdate,
@@ -329,6 +330,16 @@ export const api = {
 
   getHostCapability: (): Promise<HostCapability> =>
     fetchJSON(`${API_BASE}/vllm/hardware`),
+
+  getVersions: (): Promise<InstalledVersions> =>
+    fetchJSON(`${API_BASE}/settings/versions`),
+
+  /** Plain-text diagnostics bundle, for a user to attach to a problem report. */
+  getSupportBundle: async (): Promise<string> => {
+    const response = await fetch(`${API_BASE}/settings/support-bundle`, withAuth());
+    if (!response.ok) throw new Error(`Could not build the report (${response.status})`);
+    return response.text();
+  },
 
   getMetalStatus: (): Promise<MetalStatus> =>
     fetchJSON(`${API_BASE}/vllm/metal`),

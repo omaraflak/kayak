@@ -313,6 +313,19 @@ export interface MetalStatus {
   model: string | null;
   port: number;
   error: string | null;
+  /**
+   * Why Metal is unavailable when the hardware could otherwise do it, such as
+   * an Intel build of the launcher running under Rosetta. Distinct from
+   * `error`, which describes a start that was attempted and failed.
+   */
+  detail: string | null;
+}
+
+/** Versions of the two separately updatable pieces of Kayak. */
+export interface InstalledVersions {
+  kayak: string;
+  /** Null when Kayak is running without the desktop launcher. */
+  launcher: string | null;
 }
 
 export interface CachedModel {

@@ -1,8 +1,10 @@
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict
 
+from backend.app import support
 from backend.app.config import settings
 from backend.app.providers import PROVIDERS
 
@@ -159,3 +161,29 @@ async def update_settings(request: UpdateSettingsRequest) -> Dict[str, object]:
     settings.save_settings(updates)
     return {"status": "saved", "settings": _public_settings()}
 
+
+class InstalledVersions(BaseModel):
+    """Versions of the two separately updatable pieces."""
+    kayak: str
+    #: None when Kayak is running without the desktop launcher.
+    launcher: Optional[str] = None
+
+
+@router.get("/versions", response_model=InstalledVersions)
+async def get_versions() -> InstalledVersions:
+    """Reports what is installed on both sides of the container boundary."""
+    installed = support.versions()
+    return InstalledVersions(kayak=installed["kayak"], launcher=installed["launcher"])
+
+
+@router.get("/support-bundle")
+async def get_support_bundle() -> PlainTextResponse:
+    """Returns a plain-text dump of everything useful for diagnosing a problem.
+
+    Served as a download rather than shown in the page: it contains hundreds of
+    log lines, and the point is to attach it to a message rather than read it.
+    """
+    return PlainTextResponse(
+        support.build_bundle(),
+        headers={"Content-Disposition": 'attachment; filename="kayak-support.txt"'},
+    )

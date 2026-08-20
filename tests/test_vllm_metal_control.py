@@ -118,3 +118,16 @@ def test_accepts_mlx_repositories(model_id):
 def test_rejects_anything_metal_cannot_serve(model_id):
     """These fail minutes into a download, so they are refused before asking."""
     assert metal.is_mlx_model(model_id) is False
+
+
+def test_detail_is_read_from_the_launcher(control):
+    """The launcher explains a capable machine that still cannot serve Metal."""
+    write_status(
+        control,
+        {"metal": {"supported": False, "detail": "Running under Rosetta."}},
+    )
+
+    status = metal.read_status()
+
+    assert status.supported is False
+    assert status.detail == "Running under Rosetta."

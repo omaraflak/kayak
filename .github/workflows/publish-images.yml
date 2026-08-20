@@ -62,6 +62,10 @@ jobs:
           # amd64-only image would run there under emulation.
           platforms: linux/amd64,linux/arm64
           push: true
+          # Baked in so the running container can report its own version, which
+          # it cannot read from the image label it was built with.
+          build-args: |
+            KAYAK_VERSION=${{ steps.meta.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           # Stamps org.opencontainers.image.version, which the launcher reads to
           # show a real version number instead of a digest.

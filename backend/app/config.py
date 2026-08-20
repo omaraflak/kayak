@@ -116,6 +116,11 @@ class Settings:
         # Server. Kayak grants agents shell and filesystem access, so it binds to
         # loopback unless explicitly told otherwise; the container image overrides
         # this to 0.0.0.0 because Docker isolates the network itself.
+        # Stamped into the image at build time by the release workflow. A
+        # container cannot read the version label of the image it is running
+        # from, so the value has to be baked in rather than looked up.
+        self.VERSION: str = os.getenv("KAYAK_VERSION", "dev")
+
         self.HOST: str = os.getenv("KAYAK_HOST", "127.0.0.1")
         self.PORT: int = int(os.getenv("KAYAK_PORT", "8000"))
         self.DEBUG: bool = os.getenv("KAYAK_DEBUG", "false").lower() == "true"

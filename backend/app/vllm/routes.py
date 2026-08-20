@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from typing import Dict
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -14,6 +15,8 @@ from backend.app.vllm.models import (
     VLLMDeployRequest,
     VLLMDeploymentProgress,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/vllm", tags=["vllm"])
 
@@ -86,6 +89,11 @@ async def start_metal(request: MetalStartRequest) -> MetalStatus:
     status = metal.read_status()
 
     if not status.supported:
+        logger.warning(
+            "Metal start refused for %s: the launcher reports it unsupported (detail: %s)",
+            model_id,
+            status.detail or "none",
+        )
         raise HTTPException(
             status_code=409,
             detail=(
@@ -101,6 +109,7 @@ async def start_metal(request: MetalStartRequest) -> MetalStatus:
             ),
         )
 
+    logger.info("Asking the launcher to serve %s on the GPU", model_id)
     metal.write_desired(running=True, model=model_id)
     return status
 

@@ -27,11 +27,16 @@ from backend.app.routes import (
 )
 from backend.app.routes.auth import PUBLIC_API_PATHS, is_authorized
 from backend.app.skills.registry import skill_registry
+from backend.app import support
 from backend.app.tools.registry import tool_registry
 from backend.app.vllm import routes as vllm_routes
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Installed before anything else logs, so a failure during startup is captured
+# in the support bundle rather than only on a stdout nobody can reach.
+support.install()
 
 # Background tasks are held here for their lifetime: asyncio keeps only weak
 # references to running tasks, so a fire-and-forget task can be garbage collected
