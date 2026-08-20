@@ -56,6 +56,12 @@ PS1='\\[\\e[1;36m\\]container\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]$ '
 BACKGROUND_TASK_MARKER = "KAYAK_TASK_ID"
 
 
+#: Every sandbox is named from this, which is also how they are found again
+#: after a restart -- the set of containers this process started is empty then,
+#: and the ones from the previous run still need stopping.
+SANDBOX_NAME_PREFIX = "kayak-sandbox-"
+
+
 def _shell_quote(text: str) -> str:
     """Single-quotes a string for safe embedding in a POSIX shell command."""
     return "'" + text.replace("'", "'\\''") + "'"
@@ -355,7 +361,7 @@ class SandboxManager:
             str: Container ID.
         """
         client = self._require_client()
-        container_name = f"kayak-sandbox-{conversation_id[:8]}"
+        container_name = f"{SANDBOX_NAME_PREFIX}{conversation_id[:8]}"
         volumes_map = _build_volume_mounts(workspace_dir)
 
         def _create() -> str:
@@ -774,15 +780,42 @@ class SandboxManager:
         await self._run_blocking(_stop)
 
     async def shutdown_all(self) -> None:
-        """Stops every sandbox this process started, without destroying any of them.
+        """Stops every sandbox, without destroying any of them.
 
         A sandbox is where an agent installed its packages and built its tooling.
         Removing containers at shutdown threw all of that away on every restart, while
         the rest of the code is written to revive a conversation's recorded container
-        rather than replace it. Stopping leaves nothing running and loses nothing.
+        rather than replace it. Stopping leaves nothing running and loses nothing:
+        opening the conversation again starts it back up.
+
+        Every sandbox is stopped, not only the ones this process started. After a
+        restart the owned set is empty while the previous run's containers are still
+        running, so scoping this to them left orphans accumulating with each restart
+        until someone noticed and pruned them by hand.
         """
         for container_id in list(self._owned_containers):
             await self.stop_sandbox(container_id)
+
+        if not self._docker_available or not self._client:
+            return
+        client = self._client
+
+        def _stop_strays() -> None:
+            try:
+                containers = client.containers.list(
+                    filters={"name": SANDBOX_NAME_PREFIX, "status": "running"}
+                )
+            except Exception:
+                return
+            for container in containers:
+                try:
+                    container.stop(timeout=2)
+                except Exception:
+                    # One container refusing to stop must not strand the rest,
+                    # and shutdown is already underway.
+                    continue
+
+        await self._run_blocking(_stop_strays)
 
 
 sandbox_manager = SandboxManager()
