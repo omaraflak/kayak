@@ -94,6 +94,32 @@ def versions() -> dict:
     return {"kayak": settings.VERSION, "launcher": launcher}
 
 
+def _docker_environment() -> str:
+    """Reports how Docker is configured, as the container can see it.
+
+    A registry mirror or a proxy configured on the daemon can serve a stale
+    image for a tag that has already moved, which looks from the outside exactly
+    like the app refusing to update. It is invisible from anywhere else in
+    Kayak, so it is worth stating here.
+    """
+    try:
+        import docker as docker_sdk
+
+        info = docker_sdk.from_env().info()
+    except Exception as error:  # noqa: BLE001 - any failure is just "unavailable"
+        return f"unavailable ({error})"
+
+    mirrors = (info.get("RegistryConfig") or {}).get("Mirrors") or []
+    return "\n".join(
+        [
+            f"server version:   {info.get('ServerVersion')}",
+            f"os/arch:          {info.get('OperatingSystem')} {info.get('Architecture')}",
+            f"registry mirrors: {', '.join(mirrors) if mirrors else 'none'}",
+            f"http proxy:       {info.get('HttpProxy') or 'none'}",
+        ]
+    )
+
+
 def _section(title: str, body: str) -> str:
     return f"\n===== {title} =====\n{body.strip() or '(nothing)'}\n"
 
@@ -134,6 +160,7 @@ def build_bundle() -> str:
             "\n",
             _section("Versions", header),
             _section("GPU inference", metal_lines),
+            _section("Docker", _docker_environment()),
             _section("Launcher log", "\n".join(_launcher_log())),
             _section("Kayak server log", "\n".join(recent_logs())),
         ]

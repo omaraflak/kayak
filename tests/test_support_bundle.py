@@ -80,3 +80,15 @@ def test_undecodable_launcher_log_does_not_break_the_bundle(data_dir):
     (control / support.LAUNCHER_LOG).write_bytes(b"good line\n\xff\xfe broken\n")
 
     assert "good line" in support.build_bundle()
+
+
+def test_docker_section_survives_an_unreachable_daemon(data_dir, monkeypatch):
+    """The bundle is most needed when something is broken, including Docker."""
+    monkeypatch.setattr(
+        support, "_docker_environment", lambda: "unavailable (cannot connect)"
+    )
+
+    bundle = support.build_bundle()
+
+    assert "===== Docker =====" in bundle
+    assert "unavailable" in bundle
