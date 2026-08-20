@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Loader2, LockKeyhole } from 'lucide-react';
+import { Loader2, LockKeyhole, PlugZap } from 'lucide-react';
 import { api, setStoredAuthToken } from '../api/client';
 
 /**
@@ -10,7 +10,9 @@ import { api, setStoredAuthToken } from '../api/client';
  * that EventSource streams, which cannot send headers, authenticate too.
  */
 export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [state, setState] = useState<'checking' | 'required' | 'ready'>('checking');
+  const [state, setState] = useState<'checking' | 'required' | 'ready' | 'unreachable'>(
+    'checking'
+  );
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -20,15 +22,26 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
       const status = await api.getAuthStatus();
       setState(!status.auth_required || status.authenticated ? 'ready' : 'required');
     } catch {
-      // A server that cannot answer the status probe is treated as reachable but
-      // unauthenticated rather than blocking the UI outright.
-      setState('required');
+      // A server that did not answer is a different problem from one that
+      // wants a password, and conflating them was its own trap: authentication
+      // is off unless KAYAK_AUTH_TOKEN is set, so a failed probe produced a
+      // prompt that no password could satisfy and no amount of waiting cleared.
+      setState('unreachable');
     }
   };
 
   useEffect(() => {
     checkStatus();
   }, []);
+
+  // The server is usually only briefly away -- restarted by an update, or still
+  // starting -- so this recovers on its own rather than leaving the user on a
+  // screen whose only option is to reload.
+  useEffect(() => {
+    if (state !== 'unreachable') return;
+    const timer = setInterval(checkStatus, 2000);
+    return () => clearInterval(timer);
+  }, [state]);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -52,6 +65,24 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
     return (
       <div className="flex h-full w-full items-center justify-center bg-md-surface">
         <Loader2 className="w-5 h-5 animate-spin text-md-on-surface-variant" />
+      </div>
+    );
+  }
+
+  if (state === 'unreachable') {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-md-surface p-8">
+        <div className="max-w-sm text-center space-y-3">
+          <PlugZap className="w-6 h-6 text-md-on-surface-variant mx-auto" />
+          <h1 className="text-sm font-bold text-md-on-surface">Waiting for Kayak</h1>
+          <p className="text-[11px] text-md-on-surface-variant leading-relaxed">
+            The Kayak server is not answering yet. This happens while it starts or
+            restarts after an update, and clears on its own.
+          </p>
+          <div className="flex items-center justify-center gap-1.5 text-[11px] text-md-on-surface-variant">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Retrying
+          </div>
+        </div>
       </div>
     );
   }
