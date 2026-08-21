@@ -7,6 +7,7 @@ while a single agent waits on a build or a test run.
 """
 
 import asyncio
+from functools import partial
 import json
 from pathlib import Path
 import queue
@@ -792,30 +793,50 @@ class SandboxManager:
         restart the owned set is empty while the previous run's containers are still
         running, so scoping this to them left orphans accumulating with each restart
         until someone noticed and pruned them by hand.
+
+        They are stopped concurrently because the time this takes is a hard budget,
+        not a preference: the whole shutdown has to finish inside the grace period the
+        daemon allows before it kills the server outright, and that period is a local
+        Docker setting that has been observed as low as three seconds. Stopping in
+        sequence spent two of those seconds per sandbox, so a busy install ran out of
+        time and left the rest running.
         """
-        for container_id in list(self._owned_containers):
-            await self.stop_sandbox(container_id)
+        owned = list(self._owned_containers)
+        for container_id in owned:
+            self._discard_python_session(container_id)
 
         if not self._docker_available or not self._client:
             return
         client = self._client
 
-        def _stop_strays() -> None:
+        def _targets() -> list[str]:
+            found = list(owned)
             try:
-                containers = client.containers.list(
-                    filters={"name": SANDBOX_NAME_PREFIX, "status": "running"}
+                found.extend(
+                    container.id
+                    for container in client.containers.list(
+                        filters={"name": SANDBOX_NAME_PREFIX, "status": "running"}
+                    )
                 )
             except Exception:
-                return
-            for container in containers:
-                try:
-                    container.stop(timeout=2)
-                except Exception:
-                    # One container refusing to stop must not strand the rest,
-                    # and shutdown is already underway.
-                    continue
+                pass
+            return list(dict.fromkeys(found))
 
-        await self._run_blocking(_stop_strays)
+        def _stop(container_id: str) -> None:
+            try:
+                # A shorter grace than elsewhere: the sandbox is being stopped, not
+                # destroyed, so nothing is lost by killing one that ignores the
+                # signal, and the whole shutdown is racing the daemon's own timer.
+                client.containers.get(container_id).stop(timeout=1)
+            except Exception:
+                # One container refusing to stop must not strand the rest, and
+                # shutdown is already underway.
+                pass
+
+        targets = await self._run_blocking(_targets)
+        await asyncio.gather(
+            *(self._run_blocking(partial(_stop, container_id)) for container_id in targets)
+        )
 
 
 sandbox_manager = SandboxManager()

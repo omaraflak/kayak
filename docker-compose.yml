@@ -5,6 +5,10 @@ services:
       dockerfile: Dockerfile
     container_name: kayak-server
     restart: unless-stopped
+    # The server stops its sandbox containers on the way down, which does not fit
+    # in the daemon's default grace period on every machine. Being killed part-way
+    # through leaves sandboxes running after the server is gone.
+    stop_grace_period: 30s
     ports:
       # Published to loopback only: agents get shell access inside this container and,
       # via the mounted Docker socket, control of the host daemon. Change to

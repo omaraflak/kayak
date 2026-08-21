@@ -47,4 +47,15 @@ ENV KAYAK_IN_DOCKER=true
 
 EXPOSE 8000
 
-CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# `--timeout-graceful-shutdown` is what lets the app actually shut down. The UI
+# holds a server-sent-events stream open for as long as it is on screen, and
+# uvicorn's default is to wait forever for open connections to close before
+# running the shutdown hook. A stream nobody is going to close means that hook
+# never runs, so the sandbox containers it stops outlived every quit.
+#
+# One second rather than something more generous: waiting achieves nothing for the
+# streams, which will not close on their own, and everything after this point has
+# to finish inside the grace period the daemon allows -- as little as three
+# seconds on a stock Docker Desktop.
+CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000", \
+     "--timeout-graceful-shutdown", "1"]
