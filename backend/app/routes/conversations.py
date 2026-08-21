@@ -225,10 +225,33 @@ async def get_all_conversations() -> List[Conversation]:
 async def get_conversation_details(conversation_id: str) -> Dict[str, Any]:
     """Returns conversation metadata and full message history."""
     conversation = await _load_conversation(conversation_id)
+    _revive_sandbox(conversation)
     return {
         "conversation": conversation,
         "messages": await get_messages(conversation_id),
     }
+
+
+def _revive_sandbox(conversation: Conversation) -> None:
+    """Starts the conversation's sandbox again, in the background.
+
+    Sandboxes are stopped rather than destroyed when the server shuts down, so
+    opening a conversation after a restart finds a container that still holds
+    everything the agent installed but is not running. Starting it here means the
+    terminal and the agent's shell are ready by the time they are used.
+
+    Deliberately fire-and-forget and deliberately never creating anything: reading
+    a conversation must not wait on Docker, and a conversation with no container of
+    its own -- a sub-agent, which shares its parent's -- has nothing to revive.
+    """
+    if not conversation.container_id or conversation.parent_conversation_id:
+        return
+
+    from backend.app.main import track_background_task
+
+    track_background_task(
+        asyncio.create_task(sandbox_manager.ensure_running(conversation.container_id))
+    )
 
 
 @router.delete("/{conversation_id}")
