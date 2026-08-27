@@ -1,6 +1,7 @@
 import asyncio
 import re
 import time
+import uuid
 from pathlib import Path
 import shutil
 import threading
@@ -50,6 +51,65 @@ _MAX_CPU_KVCACHE_GIB = 8
 _CPU_RUNTIME_RESERVE_GIB = 5
 #: Used when Docker will not say how much memory it has.
 _FALLBACK_CPU_KVCACHE_GIB = 1
+
+#: Which vLLM tool-call parser understands each model family's output format.
+#: Ordered, first match wins, so more specific names must precede the family
+#: catch-all ("deepseek-v3.1" before "deepseek"). Matched against the lowercased
+#: model id. Parser names must exist in vLLM's registry (vllm/tool_parsers) —
+#: an unknown name stops the server from starting at all.
+#:
+#: The launcher's Metal path (kayak-launcher, src-tauri/src/metal.rs) carries
+#: the same table; the two must agree so a model behaves the same whichever
+#: backend serves it.
+_TOOL_PARSER_RULES: Tuple[Tuple[str, str], ...] = (
+    ("qwen3-coder", "qwen3_coder"),
+    ("gpt-oss", "openai"),
+    # R1 distills keep their base model's chat template, not DeepSeek's.
+    ("deepseek-r1-distill-llama", "llama3_json"),
+    ("deepseek-r1-distill", "hermes"),
+    ("deepseek-v3.2", "deepseek_v32"),
+    ("deepseek-v3.1", "deepseek_v31"),
+    ("deepseek-v4", "deepseek_v4"),
+    ("deepseek", "deepseek_v3"),
+    ("glm-4.7", "glm47"),
+    ("glm", "glm45"),
+    ("granite-20b-fc", "granite-20b-fc"),
+    ("granite-4", "granite4"),
+    ("granite", "granite"),
+    ("phi-4-mini", "phi4_mini_json"),
+    ("phi4-mini", "phi4_mini_json"),
+    ("internlm", "internlm"),
+    ("kimi-k3", "kimi_k3"),
+    ("kimi", "kimi_k2"),
+    ("llama-4", "llama4_pythonic"),
+    ("llama4", "llama4_pythonic"),
+    ("llama", "llama3_json"),
+    ("mistral", "mistral"),
+    ("jamba", "jamba"),
+    ("gemma-4", "gemma4"),
+    ("seed-oss", "seed_oss"),
+    ("hunyuan", "hunyuan_a13b"),
+    ("minimax-m3", "minimax_m3"),
+    ("minimax", "minimax_m2"),
+    ("ernie", "ernie45"),
+    ("olmo-3", "olmo3"),
+    ("olmo3", "olmo3"),
+)
+
+
+def tool_call_parser(model_id: str) -> str:
+    """The vLLM tool-call parser for a model, by family.
+
+    Falls back to "hermes", which matches the format Qwen and most other
+    open models emit. A mismatched parser does not crash the server; it just
+    leaves tool calls unrecognised in the plain text of the reply.
+    """
+    lowered = model_id.lower()
+    for needle, parser in _TOOL_PARSER_RULES:
+        if needle in lowered:
+            return parser
+    return "hermes"
+
 
 #: Lines like "ValueError: Available memory on node 0 ... is less than requested".
 _ERROR_LINE = re.compile(r"\b([A-Za-z_]*(?:Error|Exception)):\s*(\S.*)$")
@@ -256,6 +316,9 @@ class VLLMManager:
                 self._status.model_id == request.model_id
                 and self._status.state in _ACTIVE_STATES
                 and metal_status.state == "ready"
+                # "ready" alone is not enough: the launcher may still be
+                # reporting on a different model it was serving until now.
+                and metal_status.model == request.model_id
             ):
                 return self.get_status()
 
@@ -272,19 +335,26 @@ class VLLMManager:
             self._broadcast({"type": "status", "data": self._status.model_dump()})
             self._add_log(f"Requesting launcher to serve MLX model {request.model_id} on Apple GPU...")
 
-            metal.write_desired(running=True, model=request.model_id)
+            # The token lets the monitor tell a status answering this request
+            # from a stale one: the launcher reconciles every couple of
+            # seconds, and until it does, the status file still describes the
+            # previous server — often as "ready".
+            request_token = uuid.uuid4().hex
+            metal.write_desired(running=True, model=request.model_id, request=request_token)
 
             if self._metal_monitor_task and not self._metal_monitor_task.done():
                 self._metal_monitor_task.cancel()
 
             self._metal_monitor_task = asyncio.create_task(
-                self._run_metal_deployment(request.model_id)
+                self._run_metal_deployment(request.model_id, request_token)
             )
             return self.get_status()
 
-        # 2. For non-MLX models, stop Metal if it was running
+        # 2. For non-MLX models, stop Metal if it was, or may still be, running
         metal_status = metal.read_status()
-        if metal_status.supported and metal_status.state != "stopped":
+        if (metal_status.supported and metal_status.state != "stopped") or (
+            not metal_status.supported and metal.status_path().exists()
+        ):
             metal.write_desired(running=False)
             if self._metal_monitor_task and not self._metal_monitor_task.done():
                 self._metal_monitor_task.cancel()
@@ -333,10 +403,26 @@ class VLLMManager:
     async def _run_metal_deployment(
         self,
         model_id: str,
+        request_token: Optional[str] = None,
         timeout_seconds: int = HEALTH_TIMEOUT_SECONDS,
     ) -> None:
-        """Monitors launcher status while starting a Metal server."""
+        """Monitors launcher status while starting a Metal server.
+
+        Only statuses that answer *this* deployment are acted on. The launcher
+        reconciles on a delay, so the first polls routinely read a file still
+        describing the previous server — trusting its "ready" is exactly the
+        bug where a model showed as serving the instant start was clicked.
+        A launcher new enough to echo request tokens is matched on the token;
+        an older one is matched on the model id, which still filters out
+        statuses about a different model.
+        """
         deadline = time.monotonic() + timeout_seconds
+
+        def answers_this_deployment(status) -> bool:
+            if request_token and status.acknowledges_requests:
+                return status.request == request_token
+            return status.model == model_id
+
         try:
             while time.monotonic() < deadline:
                 await asyncio.sleep(1.0)
@@ -348,6 +434,9 @@ class VLLMManager:
                     VLLMServerState.IDLE,
                 ):
                     return
+
+                if not answers_this_deployment(metal_status):
+                    continue
 
                 if metal_status.state == "ready":
                     self._status.port = metal_status.port or settings.VLLM_PORT
@@ -493,15 +582,9 @@ class VLLMManager:
                 cmd_args.extend(["--max-model-len", str(request.max_model_len)])
 
             # Enable auto tool calling support for OpenAI-compatible endpoint
-            tool_parser = "hermes"
-            if "llama" in request.model_id.lower():
-                tool_parser = "llama3_json"
-            elif "mistral" in request.model_id.lower():
-                tool_parser = "mistral"
-
             cmd_args.extend([
                 "--enable-auto-tool-choice",
-                "--tool-call-parser", tool_parser,
+                "--tool-call-parser", tool_call_parser(request.model_id),
             ])
 
             self._update_status(
@@ -741,8 +824,11 @@ class VLLMManager:
                 pass
             self._metal_monitor_task = None
 
+        # Written whenever a launcher has ever reported here, not only when the
+        # current status says supported: a stale or unreadable status must not
+        # leave "keep running" on disk for the launcher to act on later.
         metal_status = metal.read_status()
-        if metal_status.supported:
+        if metal_status.supported or metal.status_path().exists():
             metal.write_desired(running=False)
 
         if self._monitor_task and not self._monitor_task.done():
@@ -776,6 +862,14 @@ class VLLMManager:
         # 0. Check Metal status first if supported
         metal_status = metal.read_status()
         if metal_status.supported:
+            # While a Metal deployment is in flight, its monitor task owns the
+            # status: the file on disk lags the launcher's reconcile loop and
+            # can still describe the previous server. Syncing from it here is
+            # how a freshly requested model showed as "serving" instantly.
+            if self._metal_monitor_task and not self._metal_monitor_task.done():
+                self._status.logs_tail = self._log_history[-30:]
+                return self._status
+
             if metal_status.state == "ready" and metal_status.model:
                 if self._status.state != VLLMServerState.READY or self._status.model_id != metal_status.model:
                     self._status.state = VLLMServerState.READY
