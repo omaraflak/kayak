@@ -250,6 +250,105 @@ class TestMetalIntegration:
         assert models[0]["id"] == "mlx-community/Qwen2.5-7B"
         assert models[0]["owned_by"] == "vllm-metal"
 
+    def test_monitor_ignores_a_status_about_another_model(self, manager, monkeypatch):
+        """The launcher reconciles on a delay, so right after a start request
+        the status file still describes the previous server — often as
+        "ready". Acting on it is the bug where a model showed as serving the
+        moment start was clicked, before anything was listening."""
+        from backend.app.vllm import metal
+        from backend.app.vllm.models import MetalStatus
+
+        responses = [
+            MetalStatus(supported=True, state="ready", model="mlx-community/Old"),
+            MetalStatus(supported=True, state="ready", model="mlx-community/New"),
+        ]
+        monkeypatch.setattr(
+            metal, "read_status", lambda: responses.pop(0) if len(responses) > 1 else responses[0]
+        )
+
+        async def instant_sleep(_delay):
+            pass
+
+        monkeypatch.setattr("backend.app.vllm.manager.asyncio.sleep", instant_sleep)
+
+        manager._status.model_id = "mlx-community/New"
+        manager._status.state = VLLMServerState.LOADING
+        seen_states = []
+        original = manager._update_status
+
+        def record(**kwargs):
+            seen_states.append(kwargs.get("state"))
+            original(**kwargs)
+
+        manager._update_status = record
+        asyncio.run(manager._run_metal_deployment("mlx-community/New", timeout_seconds=30))
+
+        # The stale "ready" for the old model must not have produced a READY;
+        # only the status naming the new model may.
+        assert seen_states == [VLLMServerState.READY]
+        assert manager._status.model_id == "mlx-community/New"
+
+    def test_monitor_waits_for_its_own_request_to_be_answered(self, manager, monkeypatch):
+        """With a launcher new enough to echo tokens, even a "ready" for the
+        right model is ignored until it carries this deployment's token — the
+        file may predate the restart that was just asked for."""
+        from backend.app.vllm import metal
+        from backend.app.vllm.models import MetalStatus
+
+        responses = [
+            MetalStatus(
+                supported=True, state="ready", model="mlx-community/M",
+                request="stale", acknowledges_requests=True,
+            ),
+            MetalStatus(
+                supported=True, state="ready", model="mlx-community/M",
+                request="tok", acknowledges_requests=True,
+            ),
+        ]
+        monkeypatch.setattr(
+            metal, "read_status", lambda: responses.pop(0) if len(responses) > 1 else responses[0]
+        )
+
+        async def instant_sleep(_delay):
+            pass
+
+        monkeypatch.setattr("backend.app.vllm.manager.asyncio.sleep", instant_sleep)
+
+        manager._status.model_id = "mlx-community/M"
+        manager._status.state = VLLMServerState.LOADING
+        asyncio.run(
+            manager._run_metal_deployment("mlx-community/M", request_token="tok", timeout_seconds=30)
+        )
+
+        assert manager._status.state == VLLMServerState.READY
+
+    def test_check_and_sync_defers_to_a_deployment_in_flight(self, manager, monkeypatch):
+        """While a Metal deployment is running, a lagging status file must not
+        overwrite the in-flight state with the previous server's "ready"."""
+        from backend.app.vllm import metal
+        from backend.app.vllm.models import MetalStatus, VLLMDeploymentProgress
+
+        monkeypatch.setattr(
+            metal,
+            "read_status",
+            lambda: MetalStatus(supported=True, state="ready", model="mlx-community/Old"),
+        )
+
+        async def scenario():
+            manager._status = VLLMDeploymentProgress(
+                model_id="mlx-community/New", state=VLLMServerState.LOADING
+            )
+            manager._metal_monitor_task = asyncio.create_task(asyncio.sleep(30))
+            try:
+                return await manager.check_and_sync_status()
+            finally:
+                manager._metal_monitor_task.cancel()
+
+        status = asyncio.run(scenario())
+
+        assert status.state == VLLMServerState.LOADING
+        assert status.model_id == "mlx-community/New"
+
     def test_stop_server_stops_metal_when_supported(self, manager, tmp_path, monkeypatch):
         from backend.app.vllm import metal
         from backend.app.vllm.models import MetalStatus

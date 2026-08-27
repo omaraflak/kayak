@@ -6,6 +6,8 @@ cases that matter are the degraded ones.
 """
 
 import json
+import os
+import time
 
 import pytest
 
@@ -118,6 +120,52 @@ def test_accepts_mlx_repositories(model_id):
 def test_rejects_anything_metal_cannot_serve(model_id):
     """These fail minutes into a download, so they are refused before asking."""
     assert metal.is_mlx_model(model_id) is False
+
+
+def test_a_stale_status_is_not_trusted(control):
+    """A launcher rewrites this file every few seconds; one untouched for a
+    minute was written by a launcher that is gone, and its "ready" describes a
+    server that no longer exists. Trusting it showed models as serving — send
+    button and all — with nothing listening."""
+    write_status(
+        control,
+        {"metal": {"supported": True, "state": "ready", "model": "mlx-community/X"}},
+    )
+    old = time.time() - metal.STALE_AFTER_SECONDS - 60
+    os.utime(control / metal.STATUS_FILENAME, (old, old))
+
+    status = metal.read_status()
+
+    assert status.supported is False
+    assert status.state == "stopped"
+    assert "stopped reporting" in (status.detail or "")
+
+
+def test_request_echo_is_parsed(control):
+    write_status(
+        control,
+        {"metal": {"supported": True, "state": "ready", "model": "m", "request": "tok"}},
+    )
+
+    status = metal.read_status()
+
+    assert status.request == "tok"
+    assert status.acknowledges_requests is True
+
+
+def test_an_older_launcher_does_not_acknowledge_requests(control):
+    """Launchers predating the token never write the key, even as null."""
+    write_status(control, {"metal": {"supported": True, "state": "ready", "model": "m"}})
+
+    assert metal.read_status().acknowledges_requests is False
+
+
+def test_desired_state_carries_the_request_token(control):
+    metal.write_desired(running=True, model="mlx-community/X", request="tok")
+
+    payload = json.loads((control / metal.DESIRED_FILENAME).read_text(encoding="utf-8"))
+
+    assert payload["metal"]["request"] == "tok"
 
 
 def test_detail_is_read_from_the_launcher(control):

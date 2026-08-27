@@ -89,6 +89,14 @@ class MetalStatus(BaseModel):
     #: an Intel build of the launcher running under Rosetta. Distinct from
     #: `error`, which describes a start that was attempted and failed.
     detail: Optional[str] = None
+    #: The start-request token this status answers, echoed by the launcher.
+    #: A "ready" carrying a token other than the one just written describes
+    #: the previous server, not the one being started.
+    request: Optional[str] = None
+    #: Whether the launcher is new enough to echo request tokens at all.
+    #: Older launchers never write the key, and their statuses are matched by
+    #: model id instead.
+    acknowledges_requests: bool = False
 
 
 class MetalStartRequest(BaseModel):

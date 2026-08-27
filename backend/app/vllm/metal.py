@@ -19,6 +19,7 @@ import logging
 import os
 from pathlib import Path
 import tempfile
+import time
 from typing import Optional
 
 from backend.app.config import settings
@@ -30,6 +31,12 @@ logger = logging.getLogger(__name__)
 CONTROL_DIRNAME = ".launcher"
 DESIRED_FILENAME = "desired.json"
 STATUS_FILENAME = "status.json"
+
+#: A running launcher rewrites the status file every couple of seconds, so a
+#: file untouched for this long means no launcher is watching. Trusting it
+#: anyway is how a "ready" written before the launcher quit kept a model
+#: looking served — with a send button — when nothing was listening at all.
+STALE_AFTER_SECONDS = 15
 
 
 def control_dir() -> Path:
@@ -51,12 +58,25 @@ def read_status() -> MetalStatus:
     from docker-compose, or an older launcher without Metal support -- which is
     reported as unsupported so the UI hides an option that cannot work.
     """
+    path = status_path()
     try:
-        raw = status_path().read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8")
+        age = time.time() - path.stat().st_mtime
     except OSError:
         # Absent is the normal case without a launcher, so this is not logged;
         # it would be one line every poll.
         return MetalStatus()
+
+    if age > STALE_AFTER_SECONDS:
+        # The launcher that wrote this is no longer running (or no longer
+        # responding), so nothing in the file can be acted on. Reported as
+        # unsupported — the same as no launcher at all — with the reason.
+        return MetalStatus(
+            detail=(
+                "The Kayak desktop app has stopped reporting. Make sure it is "
+                "running to use the GPU."
+            )
+        )
 
     try:
         payload = json.loads(raw).get("metal", {})
@@ -76,18 +96,29 @@ def read_status() -> MetalStatus:
         port=int(payload.get("port") or 0),
         error=payload.get("error"),
         detail=payload.get("detail"),
+        request=payload.get("request"),
+        # Key presence, not value: a launcher new enough to echo requests
+        # writes the key on every status, null included.
+        acknowledges_requests="request" in payload,
     )
 
 
-def write_desired(running: bool, model: Optional[str] = None) -> None:
+def write_desired(
+    running: bool, model: Optional[str] = None, request: Optional[str] = None
+) -> None:
     """Records the state the launcher should bring about.
+
+    The ``request`` token identifies this particular ask; the launcher echoes
+    it in every status it writes afterwards, which is what lets the caller
+    tell "ready, answering your request" from a stale "ready" describing the
+    server that ran before the request was made.
 
     Written atomically because the launcher polls this file continuously and
     must never read a half-written document as "stop everything".
     """
     directory = control_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    payload = {"metal": {"running": running, "model": model}}
+    payload = {"metal": {"running": running, "model": model, "request": request}}
 
     handle, temp_name = tempfile.mkstemp(dir=str(directory), prefix=f".{DESIRED_FILENAME}.")
     temp_path = Path(temp_name)
