@@ -63,11 +63,11 @@ async def stop_vllm_server() -> Dict[str, str]:
         Status confirmation dictionary.
     """
     await vllm_manager.stop_server()
-    return {"status": "stopped", "message": "vLLM server container stopped."}
+    return {"status": "stopped", "message": "vLLM server stopped."}
 
 
 @router.get("/models")
-async def get_vllm_served_models():
+async def get_vllm_served_models() -> List[Dict[str, Any]]:
     """Returns the list of active models served by the running vLLM server."""
     return await vllm_manager.list_served_models()
 
@@ -164,7 +164,7 @@ async def delete_cached_model(repo_id: str) -> Dict[str, object]:
 
 
 @router.get("/events")
-async def stream_vllm_events():
+async def stream_vllm_events() -> StreamingResponse:
     """Server-Sent Events (SSE) endpoint providing real-time deployment status and streaming logs."""
     queue = vllm_manager.subscribe()
 

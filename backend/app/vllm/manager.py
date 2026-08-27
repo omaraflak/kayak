@@ -143,7 +143,7 @@ class VLLMManager:
         self._log_stop_event: Optional[threading.Event] = None
         self._init_docker()
 
-    def _init_docker(self):
+    def _init_docker(self) -> None:
         try:
             self._client = docker.from_env()
             self._client.ping()
@@ -186,11 +186,11 @@ class VLLMManager:
         queue.put_nowait({"type": "status", "data": self.get_status().model_dump()})
         return queue
 
-    def unsubscribe(self, queue: asyncio.Queue):
+    def unsubscribe(self, queue: asyncio.Queue) -> None:
         """Unsubscribes an event queue."""
         self._listeners.discard(queue)
 
-    def _broadcast(self, data: Dict[str, Any]):
+    def _broadcast(self, data: Dict[str, Any]) -> None:
         """Dispatches event to all active SSE queues."""
         for queue in list(self._listeners):
             try:
@@ -198,7 +198,7 @@ class VLLMManager:
             except asyncio.QueueFull:
                 pass
 
-    def _add_log(self, line: str):
+    def _add_log(self, line: str) -> None:
         """Appends a line to the logs buffer and broadcasts to subscribers."""
         clean_line = line.strip()
         if not clean_line:
@@ -216,7 +216,7 @@ class VLLMManager:
         message: str,
         error: Optional[str] = None,
         exit_code: Optional[int] = None,
-    ):
+    ) -> None:
         """Updates internal telemetry and broadcasts to frontend."""
         self._status.state = state
         self._status.message = message
@@ -334,7 +334,7 @@ class VLLMManager:
         self,
         model_id: str,
         timeout_seconds: int = HEALTH_TIMEOUT_SECONDS,
-    ):
+    ) -> None:
         """Monitors launcher status while starting a Metal server."""
         deadline = time.monotonic() + timeout_seconds
         try:
@@ -386,7 +386,7 @@ class VLLMManager:
         except asyncio.CancelledError:
             pass
 
-    async def _run_deployment(self, request: VLLMDeployRequest, hf_cache_dir: Path):
+    async def _run_deployment(self, request: VLLMDeployRequest, hf_cache_dir: Path) -> None:
         """Asynchronous runner that pulls images, starts container, and polls health."""
         try:
             loop = asyncio.get_running_loop()
@@ -575,7 +575,7 @@ class VLLMManager:
         container: Any,
         loop: asyncio.AbstractEventLoop,
         stop_event: threading.Event,
-    ):
+    ) -> None:
         """Streams container logs in a separate OS thread to avoid blocking asyncio event loop."""
         def _worker():
             try:
@@ -624,7 +624,7 @@ class VLLMManager:
             bool(state.get("OOMKilled")),
         )
 
-    def _report_container_exit(self, exit_code: Optional[int], oom_killed: bool):
+    def _report_container_exit(self, exit_code: Optional[int], oom_killed: bool) -> None:
         """Moves status to ERROR after the container stopped on its own.
 
         vLLM most often dies because the model did not fit, and it says so on the way
@@ -666,7 +666,7 @@ class VLLMManager:
         self,
         model_id: str,
         timeout_seconds: int = HEALTH_TIMEOUT_SECONDS,
-    ):
+    ) -> None:
         """Waits for the vLLM endpoint to answer, or for the container to die trying.
 
         This is the sole mechanism for transitioning to READY state. It bounds itself on
@@ -727,7 +727,7 @@ class VLLMManager:
             ),
         )
 
-    async def stop_server(self):
+    async def stop_server(self) -> None:
         """Stops and removes the running vLLM container or Metal server."""
         if self._log_stop_event:
             self._log_stop_event.set()

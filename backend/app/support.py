@@ -68,7 +68,7 @@ def recent_logs() -> List[str]:
 
 def _launcher_log() -> List[str]:
     """Reads the tail of the launcher's log, when a launcher is running."""
-    path = settings.DATA_DIR / metal.CONTROL_DIRNAME / LAUNCHER_LOG
+    path = metal.control_dir() / LAUNCHER_LOG
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -76,17 +76,15 @@ def _launcher_log() -> List[str]:
     return lines[-LAUNCHER_LOG_LINES:]
 
 
-def versions() -> dict:
+def versions() -> dict[str, Optional[str]]:
     """Reports the versions of both installed pieces.
 
     Kayak's own version is baked in at build time; the launcher's arrives
     through the control file, since it is a separate program.
     """
-    launcher = None
+    launcher: Optional[str] = None
     try:
-        raw = (settings.DATA_DIR / metal.CONTROL_DIRNAME / metal.STATUS_FILENAME).read_text(
-            encoding="utf-8"
-        )
+        raw = metal.status_path().read_text(encoding="utf-8")
         launcher = (json.loads(raw).get("versions") or {}).get("launcher")
     except (OSError, json.JSONDecodeError, AttributeError):
         pass

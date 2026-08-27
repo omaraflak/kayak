@@ -14,8 +14,13 @@ from backend.app.database import (
     get_messages,
     update_task,
 )
-from backend.app.models import TaskStatus
-from backend.app.models import ToolCategory, ToolRisk
+from backend.app.models import (
+    MessageRole,
+    TaskStatus,
+    TaskType,
+    ToolCategory,
+    ToolRisk,
+)
 from backend.app.tools.metadata import tool_metadata
 
 logger = logging.getLogger(__name__)
@@ -146,13 +151,13 @@ async def spawn_subagent(
 
     await add_message(
         conversation_id=child_conv.id,
-        role="user",
+        role=MessageRole.USER,
         content=prompt,
     )
 
     task = await create_task(
         conversation_id=conversation_id,
-        task_type="subagent",
+        task_type=TaskType.SUBAGENT,
         name=f"SubAgent [{agent_id}]",
         command=prompt,
         subagent_conversation_id=child_conv.id,

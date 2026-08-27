@@ -216,13 +216,20 @@ def _row_to_task(row: aiosqlite.Row) -> BackgroundTask:
 
 def _row_to_message(row: aiosqlite.Row) -> Message:
     """Converts a database row to a Message model."""
+    tool_calls = None
+    if row["tool_calls"]:
+        try:
+            tool_calls = json.loads(row["tool_calls"])
+        except (json.JSONDecodeError, TypeError):
+            tool_calls = None
+
     return Message(
         id=row["id"],
         conversation_id=row["conversation_id"],
         role=MessageRole(row["role"]),
         content=row["content"],
         thinking=row["thinking"] if "thinking" in row.keys() else None,
-        tool_calls=json.loads(row["tool_calls"]) if row["tool_calls"] else None,
+        tool_calls=tool_calls,
         tool_call_id=row["tool_call_id"],
         name=row["name"],
         created_at=row["created_at"],

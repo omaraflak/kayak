@@ -247,11 +247,7 @@ def _revive_sandbox(conversation: Conversation) -> None:
     if not conversation.container_id or conversation.parent_conversation_id:
         return
 
-    from backend.app.main import track_background_task
-
-    track_background_task(
-        asyncio.create_task(sandbox_manager.ensure_running(conversation.container_id))
-    )
+    _spawn_side_task(sandbox_manager.ensure_running(conversation.container_id))
 
 
 @router.delete("/{conversation_id}")
