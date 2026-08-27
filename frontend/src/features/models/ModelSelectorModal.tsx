@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { ProviderModels, HuggingFaceModelSearchResult } from '../../types';
+import { ProviderModels, HuggingFaceModelSearchResult, MetalStatus } from '../../types';
 import { api } from '../../api/client';
 import { useVLLMStatus, VLLM_LOADING_STATES } from '../../context/VLLMStatusContext';
 import { VLLMDeploymentModal } from './VLLMDeploymentModal';
 import { HuggingFaceCatalog } from './HuggingFaceCatalog';
+import { isMlxModel } from './metalModels';
 import {
   X,
   Search,
@@ -40,6 +41,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
   const [candidateModel, setCandidateModel] = useState<string>(selectedModel);
   const [candidateHfModel, setCandidateHfModel] = useState<HuggingFaceModelSearchResult | null>(null);
   const [candidateHfMode, setCandidateHfMode] = useState<'hf' | 'vllm' | null>(null);
+  const [metalStatus, setMetalStatus] = useState<MetalStatus | null>(null);
 
   // vLLM Deployment Modal State
   const [isVLLMDeployModalOpen, setIsVLLMDeployModalOpen] = useState<boolean>(false);
@@ -62,8 +64,12 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
   const loadModelProviders = async () => {
     setIsLoading(true);
     try {
-      const data = await api.listModels();
-      setProviders(data);
+      const [data, metal] = await Promise.allSettled([
+        api.listModels(),
+        api.getMetalStatus(),
+      ]);
+      if (data.status === 'fulfilled') setProviders(data.value);
+      if (metal.status === 'fulfilled') setMetalStatus(metal.value);
     } catch (error) {
       console.error('Failed to load models:', error);
     } finally {
@@ -299,6 +305,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                 }}
                 activeVllmModelId={vllmStatus?.model_id}
                 isVllmLoading={VLLM_LOADING_STATES.includes(vllmStatus?.state || '')}
+                metalSupported={metalStatus?.supported ?? false}
               />
             )}
           </div>
@@ -312,7 +319,9 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
               </code>
               {candidateHfMode === 'vllm' && (
                 <span className="text-[11px] font-semibold text-md-on-tertiary-container bg-md-tertiary-container px-2 py-0.5 rounded-lg border border-md-outline-variant">
-                  (vLLM Container Deployment)
+                  {metalStatus?.supported && isMlxModel(candidateModel.replace(/^vllm\//, ''))
+                    ? '(Apple GPU Metal Deployment)'
+                    : '(vLLM Container Deployment)'}
                 </span>
               )}
             </div>

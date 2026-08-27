@@ -11,6 +11,7 @@ import httpx
 from backend.app.config import settings
 from backend.app.docker_utils import DockerPathResolver
 from backend.app.vllm import cache as model_cache
+from backend.app.vllm import metal
 from backend.app.vllm.hardware import probe_host_capability
 from backend.app.vllm.models import (
     CachedModel,
@@ -138,6 +139,7 @@ class VLLMManager:
         self._log_history: List[str] = []
         self._listeners: Set[asyncio.Queue] = set()
         self._monitor_task: Optional[asyncio.Task] = None
+        self._metal_monitor_task: Optional[asyncio.Task] = None
         self._log_stop_event: Optional[threading.Event] = None
         self._init_docker()
 
@@ -231,7 +233,7 @@ class VLLMManager:
         return self._status
 
     async def deploy_model(self, request: VLLMDeployRequest) -> VLLMDeploymentProgress:
-        """Deploys a Hugging Face model on local vLLM inside a Docker container.
+        """Deploys a Hugging Face model on local vLLM or Apple GPU Metal via launcher.
 
         Args:
             request: Configuration parameters for the vLLM server.
@@ -239,6 +241,54 @@ class VLLMManager:
         Returns:
             Current deployment status.
         """
+        # 1. Handle MLX models on Apple Silicon
+        if metal.is_mlx_model(request.model_id):
+            metal_status = metal.read_status()
+            if not metal_status.supported:
+                self._update_status(
+                    state=VLLMServerState.ERROR,
+                    message=f"Cannot deploy {request.model_id}: MLX models require Apple Silicon and the Kayak desktop launcher.",
+                    error="Metal inference is not supported on this machine.",
+                )
+                return self.get_status()
+
+            if (
+                self._status.model_id == request.model_id
+                and self._status.state in _ACTIVE_STATES
+                and metal_status.state == "ready"
+            ):
+                return self.get_status()
+
+            await self.stop_server()
+
+            self._log_history.clear()
+            self._status = VLLMDeploymentProgress(
+                model_id=request.model_id,
+                state=VLLMServerState.STARTING_CONTAINER,
+                message=f"Starting Metal server for {request.model_id}...",
+                port=metal_status.port or settings.VLLM_PORT,
+                endpoint=settings.VLLM_API_BASE,
+            )
+            self._broadcast({"type": "status", "data": self._status.model_dump()})
+            self._add_log(f"Requesting launcher to serve MLX model {request.model_id} on Apple GPU...")
+
+            metal.write_desired(running=True, model=request.model_id)
+
+            if self._metal_monitor_task and not self._metal_monitor_task.done():
+                self._metal_monitor_task.cancel()
+
+            self._metal_monitor_task = asyncio.create_task(
+                self._run_metal_deployment(request.model_id)
+            )
+            return self.get_status()
+
+        # 2. For non-MLX models, stop Metal if it was running
+        metal_status = metal.read_status()
+        if metal_status.supported and metal_status.state != "stopped":
+            metal.write_desired(running=False)
+            if self._metal_monitor_task and not self._metal_monitor_task.done():
+                self._metal_monitor_task.cancel()
+
         if not self._docker_available or not self._client:
             self._update_status(
                 state=VLLMServerState.ERROR,
@@ -279,6 +329,62 @@ class VLLMManager:
             self._run_deployment(request, hf_cache_dir)
         )
         return self.get_status()
+
+    async def _run_metal_deployment(
+        self,
+        model_id: str,
+        timeout_seconds: int = HEALTH_TIMEOUT_SECONDS,
+    ):
+        """Monitors launcher status while starting a Metal server."""
+        deadline = time.monotonic() + timeout_seconds
+        try:
+            while time.monotonic() < deadline:
+                await asyncio.sleep(1.0)
+                metal_status = metal.read_status()
+
+                # Bail if deployment was cancelled or stopped
+                if self._status.state in (
+                    VLLMServerState.STOPPED,
+                    VLLMServerState.IDLE,
+                ):
+                    return
+
+                if metal_status.state == "ready":
+                    self._status.port = metal_status.port or settings.VLLM_PORT
+                    self._status.endpoint = settings.VLLM_API_BASE
+                    self._update_status(
+                        state=VLLMServerState.READY,
+                        message=f"Metal server is healthy and serving {model_id}",
+                    )
+                    self._add_log(f"✓ Metal server is ready and serving {model_id}.")
+                    return
+                elif metal_status.state == "installing":
+                    msg = f"Installing Metal environment for {model_id}..."
+                    if self._status.message != msg:
+                        self._update_status(state=VLLMServerState.LOADING, message=msg)
+                        self._add_log(f"Metal status: {msg}")
+                elif metal_status.state == "starting":
+                    msg = f"Starting Metal server for {model_id}..."
+                    if self._status.message != msg:
+                        self._update_status(state=VLLMServerState.LOADING, message=msg)
+                        self._add_log(f"Metal status: {msg}")
+                elif metal_status.state == "error":
+                    err_msg = metal_status.error or "Metal server encountered an error."
+                    self._update_status(
+                        state=VLLMServerState.ERROR,
+                        message=f"Failed to start Metal server for {model_id}",
+                        error=err_msg,
+                    )
+                    self._add_log(f"✗ Metal server error: {err_msg}")
+                    return
+
+            self._update_status(
+                state=VLLMServerState.ERROR,
+                message=f"Metal server did not become ready within {timeout_seconds // 60} minutes",
+                error="Timed out waiting for launcher to start Metal server.",
+            )
+        except asyncio.CancelledError:
+            pass
 
     async def _run_deployment(self, request: VLLMDeployRequest, hf_cache_dir: Path):
         """Asynchronous runner that pulls images, starts container, and polls health."""
@@ -622,15 +728,23 @@ class VLLMManager:
         )
 
     async def stop_server(self):
-        """Stops and removes the running vLLM container."""
+        """Stops and removes the running vLLM container or Metal server."""
         if self._log_stop_event:
             self._log_stop_event.set()
             self._log_stop_event = None
 
-        if not self._docker_available or not self._client:
-            return
+        if self._metal_monitor_task and not self._metal_monitor_task.done():
+            self._metal_monitor_task.cancel()
+            try:
+                await self._metal_monitor_task
+            except asyncio.CancelledError:
+                pass
+            self._metal_monitor_task = None
 
-        # Cancel running monitor task first
+        metal_status = metal.read_status()
+        if metal_status.supported:
+            metal.write_desired(running=False)
+
         if self._monitor_task and not self._monitor_task.done():
             self._monitor_task.cancel()
             try:
@@ -639,16 +753,17 @@ class VLLMManager:
                 pass
             self._monitor_task = None
 
-        def _stop():
-            try:
-                container = self._client.containers.get(self.CONTAINER_NAME)
-                container.stop(timeout=3)
-                container.remove(force=True)
-            except Exception:
-                pass
+        if self._docker_available and self._client:
+            def _stop():
+                try:
+                    container = self._client.containers.get(self.CONTAINER_NAME)
+                    container.stop(timeout=3)
+                    container.remove(force=True)
+                except Exception:
+                    pass
 
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _stop)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _stop)
 
         self._update_status(
             state=VLLMServerState.STOPPED,
@@ -658,6 +773,49 @@ class VLLMManager:
 
     async def check_and_sync_status(self) -> VLLMDeploymentProgress:
         """Inspects Docker and probes the vLLM HTTP endpoint to synchronize internal state."""
+        # 0. Check Metal status first if supported
+        metal_status = metal.read_status()
+        if metal_status.supported:
+            if metal_status.state == "ready" and metal_status.model:
+                if self._status.state != VLLMServerState.READY or self._status.model_id != metal_status.model:
+                    self._status.state = VLLMServerState.READY
+                    self._status.model_id = metal_status.model
+                    self._status.message = f"Metal server is healthy and serving {metal_status.model}"
+                    self._status.port = metal_status.port or settings.VLLM_PORT
+                    self._status.endpoint = settings.VLLM_API_BASE
+                    self._status.container_id = None
+                    self._status.error = None
+                    self._broadcast({"type": "status", "data": self._status.model_dump()})
+                self._status.logs_tail = self._log_history[-30:]
+                return self._status
+            elif metal_status.state in ("installing", "starting") and metal_status.model:
+                if self._status.state not in (VLLMServerState.STARTING_CONTAINER, VLLMServerState.LOADING):
+                    self._status.state = VLLMServerState.LOADING
+                    self._status.model_id = metal_status.model
+                    self._status.message = f"Metal server is {metal_status.state} for {metal_status.model}..."
+                    self._status.port = metal_status.port or settings.VLLM_PORT
+                    self._status.endpoint = settings.VLLM_API_BASE
+                    self._status.container_id = None
+                    self._status.error = None
+                    self._broadcast({"type": "status", "data": self._status.model_dump()})
+                if not self._metal_monitor_task or self._metal_monitor_task.done():
+                    self._metal_monitor_task = asyncio.create_task(
+                        self._run_metal_deployment(metal_status.model)
+                    )
+                self._status.logs_tail = self._log_history[-30:]
+                return self._status
+            elif (
+                metal_status.state == "error"
+                and self._status.state in (VLLMServerState.LOADING, VLLMServerState.STARTING_CONTAINER)
+                and self._status.model_id == metal_status.model
+            ):
+                self._status.state = VLLMServerState.ERROR
+                self._status.message = f"Metal deployment failed for {metal_status.model}"
+                self._status.error = metal_status.error
+                self._broadcast({"type": "status", "data": self._status.model_dump()})
+                self._status.logs_tail = self._log_history[-30:]
+                return self._status
+
         # 1. Probe the HTTP endpoint to see if vLLM is responding
         served_models: List[Dict[str, Any]] = []
         is_endpoint_alive = False
@@ -764,6 +922,10 @@ class VLLMManager:
 
     async def list_served_models(self) -> List[Dict[str, Any]]:
         """Queries the running vLLM OpenAI endpoint for served models."""
+        metal_status = metal.read_status()
+        if metal_status.supported and metal_status.state == "ready" and metal_status.model:
+            return [{"id": metal_status.model, "object": "model", "owned_by": "vllm-metal"}]
+
         async with httpx.AsyncClient(timeout=2.0) as client:
             for url in self._get_endpoint_urls():
                 try:

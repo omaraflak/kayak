@@ -1,9 +1,11 @@
 import logging
+import os
 import re
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 import litellm
-from backend.app.config import settings
+from backend.app.config import default_vllm_api_base, settings
 from backend.app.providers import API_KEY_SETTINGS, get_provider
+from backend.app.vllm import metal
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +214,19 @@ def _build_llm_kwargs(
                 raw_model = raw_model[len(prefix):]
                 break
         kwargs["model"] = f"openai/{raw_model}"
-        kwargs["api_base"] = settings.VLLM_API_BASE
+        api_base = settings.VLLM_API_BASE
+        metal_status = metal.read_status()
+        if (
+            metal_status.supported
+            and metal_status.state == "ready"
+            and metal_status.port
+            and metal_status.port != settings.VLLM_PORT
+            and "VLLM_API_BASE" not in os.environ
+        ):
+            api_base = default_vllm_api_base(
+                metal_status.port, settings.RUNNING_IN_CONTAINER
+            )
+        kwargs["api_base"] = api_base
         kwargs["api_key"] = "EMPTY"
     elif provider:
         api_key = getattr(settings, _PROVIDER_KEY_SETTINGS[provider], "")

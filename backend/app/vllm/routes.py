@@ -33,7 +33,7 @@ async def get_vllm_status() -> VLLMDeploymentProgress:
 
 @router.post("/deploy", response_model=VLLMDeploymentProgress)
 async def deploy_vllm_model(request: VLLMDeployRequest) -> VLLMDeploymentProgress:
-    """Starts a Docker container running vLLM for the requested model and streams download progress.
+    """Starts a Docker container or Metal process running vLLM for the requested model.
 
     Args:
         request: Model identifier and GPU/memory configuration.
@@ -44,12 +44,20 @@ async def deploy_vllm_model(request: VLLMDeployRequest) -> VLLMDeploymentProgres
     if not request.model_id.strip():
         raise HTTPException(status_code=400, detail="Model ID is required.")
 
+    if metal.is_mlx_model(request.model_id):
+        status = metal.read_status()
+        if not status.supported:
+            raise HTTPException(
+                status_code=400,
+                detail="Metal inference needs the Kayak launcher running on an Apple Silicon Mac.",
+            )
+
     return await vllm_manager.deploy_model(request)
 
 
 @router.post("/stop")
 async def stop_vllm_server() -> Dict[str, str]:
-    """Stops and removes the active vLLM Docker container.
+    """Stops and removes the active vLLM Docker container or Metal server.
 
     Returns:
         Status confirmation dictionary.
@@ -110,14 +118,14 @@ async def start_metal(request: MetalStartRequest) -> MetalStatus:
         )
 
     logger.info("Asking the launcher to serve %s on the GPU", model_id)
-    metal.write_desired(running=True, model=model_id)
-    return status
+    await vllm_manager.deploy_model(VLLMDeployRequest(model_id=model_id))
+    return metal.read_status()
 
 
 @router.post("/metal/stop", response_model=MetalStatus)
 async def stop_metal() -> MetalStatus:
     """Asks the launcher to stop the Metal server."""
-    metal.write_desired(running=False)
+    await vllm_manager.stop_server()
     return metal.read_status()
 
 

@@ -62,6 +62,7 @@ def manager(monkeypatch) -> VLLMManager:
     instance._log_history = []
     instance._listeners = set()
     instance._monitor_task = None
+    instance._metal_monitor_task = None
     instance._log_stop_event = None
     return instance
 
@@ -156,3 +157,114 @@ class TestServingGuard:
         manager._status.state = VLLMServerState.STOPPED
 
         assert manager.is_serving("Org/Model") is False
+
+
+class TestMetalIntegration:
+    def test_deploy_mlx_model_when_metal_supported(self, manager, tmp_path, monkeypatch):
+        from backend.app.vllm import metal
+        from backend.app.vllm.models import MetalStatus, VLLMDeployRequest
+
+        monkeypatch.setattr(metal.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(
+            metal,
+            "read_status",
+            lambda: MetalStatus(supported=True, state="ready", model="mlx-community/Qwen2.5-7B"),
+        )
+
+        progress = asyncio.run(
+            manager.deploy_model(VLLMDeployRequest(model_id="mlx-community/Qwen2.5-7B"))
+        )
+
+        assert progress.state in (VLLMServerState.STARTING_CONTAINER, VLLMServerState.LOADING, VLLMServerState.READY)
+        assert progress.model_id == "mlx-community/Qwen2.5-7B"
+
+        # Check desired file was written
+        desired_file = tmp_path / metal.CONTROL_DIRNAME / metal.DESIRED_FILENAME
+        assert desired_file.exists()
+        import json
+        payload = json.loads(desired_file.read_text(encoding="utf-8"))
+        assert payload["metal"]["running"] is True
+        assert payload["metal"]["model"] == "mlx-community/Qwen2.5-7B"
+
+    def test_deploy_mlx_model_when_metal_unsupported(self, manager, monkeypatch):
+        from backend.app.vllm import metal
+        from backend.app.vllm.models import MetalStatus, VLLMDeployRequest
+
+        monkeypatch.setattr(
+            metal,
+            "read_status",
+            lambda: MetalStatus(supported=False),
+        )
+
+        progress = asyncio.run(
+            manager.deploy_model(VLLMDeployRequest(model_id="mlx-community/Qwen2.5-7B"))
+        )
+
+        assert progress.state == VLLMServerState.ERROR
+        assert "MLX models require Apple Silicon" in progress.message
+
+    def test_check_and_sync_status_reports_metal_ready(self, manager, monkeypatch):
+        from backend.app.vllm import metal
+        from backend.app.vllm.models import MetalStatus
+
+        monkeypatch.setattr(
+            metal,
+            "read_status",
+            lambda: MetalStatus(supported=True, state="ready", model="mlx-community/Qwen2.5-7B", port=8001),
+        )
+
+        status = asyncio.run(manager.check_and_sync_status())
+
+        assert status.state == VLLMServerState.READY
+        assert status.model_id == "mlx-community/Qwen2.5-7B"
+        assert status.port == 8001
+
+    def test_check_and_sync_status_reports_metal_starting(self, manager, monkeypatch):
+        from backend.app.vllm import metal
+        from backend.app.vllm.models import MetalStatus
+
+        monkeypatch.setattr(
+            metal,
+            "read_status",
+            lambda: MetalStatus(supported=True, state="starting", model="mlx-community/Qwen2.5-7B"),
+        )
+
+        status = asyncio.run(manager.check_and_sync_status())
+
+        assert status.state == VLLMServerState.LOADING
+        assert status.model_id == "mlx-community/Qwen2.5-7B"
+
+    def test_list_served_models_includes_metal(self, manager, monkeypatch):
+        from backend.app.vllm import metal
+        from backend.app.vllm.models import MetalStatus
+
+        monkeypatch.setattr(
+            metal,
+            "read_status",
+            lambda: MetalStatus(supported=True, state="ready", model="mlx-community/Qwen2.5-7B"),
+        )
+
+        models = asyncio.run(manager.list_served_models())
+
+        assert len(models) == 1
+        assert models[0]["id"] == "mlx-community/Qwen2.5-7B"
+        assert models[0]["owned_by"] == "vllm-metal"
+
+    def test_stop_server_stops_metal_when_supported(self, manager, tmp_path, monkeypatch):
+        from backend.app.vllm import metal
+        from backend.app.vllm.models import MetalStatus
+
+        monkeypatch.setattr(metal.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(
+            metal,
+            "read_status",
+            lambda: MetalStatus(supported=True, state="ready", model="mlx-community/Qwen2.5-7B"),
+        )
+
+        asyncio.run(manager.stop_server())
+
+        desired_file = tmp_path / metal.CONTROL_DIRNAME / metal.DESIRED_FILENAME
+        assert desired_file.exists()
+        import json
+        payload = json.loads(desired_file.read_text(encoding="utf-8"))
+        assert payload["metal"]["running"] is False
