@@ -14,7 +14,10 @@ there is nothing to add to the repository, and nothing to commit.
 
 1. Go to https://app.docker.com/settings/personal-access-tokens
 2. **Generate new token**
-3. Description: `github-actions`, permissions: **Read & Write**
+3. Description: `github-actions`, permissions: **Read, Write & Delete**
+   (Delete is what lets the workflow prune old version tags -- see "Retention"
+   below. With a Read & Write token, publishing still works but the prune step
+   fails and old tags accumulate.)
 4. Copy the token. Docker Hub shows it once and never again.
 
 ### 2. Add both secrets to this repository
@@ -55,6 +58,24 @@ because nothing is cached yet; later runs reuse layers.
 
 You can also trigger it by hand from the Actions tab (**Publish images** → **Run
 workflow**), which publishes `latest` from whatever branch you pick.
+
+## Retention
+
+Only the newest **three** versions are kept, everywhere, and the cleanup runs
+automatically as the last step of every publish:
+
+- **Docker Hub**: after the images are pushed, the workflow deletes full
+  version tags (`1.0.12`-style) older than the newest three, for both
+  `omaraflak/kayak` and `omaraflak/kayak-sandbox`. `latest` and the
+  `major.minor` tags are never touched. This needs the Docker Hub token to
+  have the **Delete** permission.
+- **Launcher binaries**: the kayak-launcher release workflow deletes GitHub
+  releases older than the newest three after each release publishes. Git tags
+  are kept; only the releases and their assets go.
+
+Nothing depends on the pruned artifacts: launchers track `latest` on Docker
+Hub, and the launcher updater reads `latest.json` from the newest GitHub
+release only. The three kept versions exist for manual rollback.
 
 ## Checking it worked
 
