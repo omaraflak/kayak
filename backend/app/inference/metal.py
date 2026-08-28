@@ -23,7 +23,7 @@ import time
 from typing import Optional
 
 from backend.app.config import settings
-from backend.app.vllm.models import MetalStatus
+from backend.app.inference.models import MetalStatus
 
 logger = logging.getLogger(__name__)
 

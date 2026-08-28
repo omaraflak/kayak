@@ -1,0 +1,11 @@
+# Pinned deliberately: this image is versioned by its server contract, so a rebuild
+# months later must produce the same server rather than whatever resolved that day.
+fastapi==0.115.6
+uvicorn==0.34.0
+pydantic==2.10.4
+numpy==1.26.4
+soundfile==0.12.1
+huggingface_hub==0.27.0
+transformers==4.47.1
+datasets==3.2.0
+kokoro==0.9.4

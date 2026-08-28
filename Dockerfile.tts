@@ -1,0 +1,45 @@
+# Kayak's speech server: a runtime, not a model.
+#
+# The model is chosen when the container starts, exactly as with the vLLM image.
+# This exists because no third-party speech image is model-agnostic -- each is built
+# around one or two checkpoints -- and because the speech libraries pin conflicting
+# versions of torch, which is unresolvable in one process but trivial in one image.
+FROM python:3.11-slim
+
+# espeak-ng is Kokoro's grapheme-to-phoneme fallback; libsndfile backs soundfile's
+# WAV/FLAC/OGG writing. Both are needed at runtime, not only to build.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        espeak-ng \
+        libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# The CPU wheel index keeps the image around 2 GB instead of roughly 8 GB of CUDA
+# runtime that a machine without an NVIDIA GPU can never use. Installed first, and
+# on its own layer, so the much smaller requirements below can change without
+# re-downloading it.
+RUN pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.5.1
+
+COPY tts_server/requirements.txt /app/tts_server/requirements.txt
+RUN pip install --no-cache-dir -r /app/tts_server/requirements.txt
+
+# Kokoro's English text processing loads a spaCy model, and downloads it on first
+# use if it is missing. That download lands in site-packages rather than in the
+# mounted weight cache, so without this it would repeat on every container start --
+# measured at 45 seconds and a network round trip before the server could answer.
+RUN python -m spacy download en_core_web_sm
+
+COPY tts_server /app/tts_server
+
+# Weights land in the cache Kayak mounts from the host, shared with every other
+# runtime, so a model downloaded once is not downloaded again.
+ENV HF_HOME=/root/.cache/huggingface \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 8000
+
+ENTRYPOINT ["python", "-m", "tts_server"]
+CMD ["--help"]

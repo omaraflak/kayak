@@ -8,7 +8,8 @@ user quoted trailing interpreter warnings instead of the sentence explaining why
 
 import pytest
 
-from backend.app.vllm.manager import extract_failure_reason, resolve_cpu_kvcache_gib
+from backend.app.inference.manager import extract_failure_reason
+from backend.app.inference.vllm_runtime import resolve_cpu_kvcache_gib
 
 GIB = 1024 ** 3
 
@@ -150,18 +151,18 @@ class TestFailureReasonSkipsRecoveredWarnings:
 
 class TestExtractFittingContext:
     def test_reads_the_length_vllm_says_would_fit(self):
-        from backend.app.vllm.manager import extract_fitting_context
+        from backend.app.inference.vllm_runtime import extract_fitting_context
 
         assert extract_fitting_context(CONTEXT_TOO_LARGE_LOG) == 9344
 
     def test_reports_nothing_for_other_failures(self):
-        from backend.app.vllm.manager import extract_fitting_context
+        from backend.app.inference.vllm_runtime import extract_fitting_context
 
         assert extract_fitting_context(QWEN_FAILURE_LOG) is None
         assert extract_fitting_context([]) is None
 
     def test_a_context_too_small_to_be_useful_is_not_offered(self):
-        from backend.app.vllm.manager import extract_fitting_context
+        from backend.app.inference.vllm_runtime import extract_fitting_context
 
         assert extract_fitting_context(
             ["... the estimated maximum model length is 512. Try ..."]

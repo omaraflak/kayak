@@ -10,7 +10,7 @@ import logging
 import pytest
 
 from backend.app import support
-from backend.app.vllm import metal
+from backend.app.inference import metal
 
 
 @pytest.fixture

@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from typing import List, Optional
 
-from backend.app.vllm.models import GPUDevice, HostCapability
+from backend.app.inference.models import GPUDevice, HostCapability
 
 NVIDIA_SMI_QUERY = [
     "--query-gpu=name,memory.total",

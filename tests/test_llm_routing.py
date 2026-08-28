@@ -83,17 +83,17 @@ class TestVllmApiBaseFollowsTheServer:
 
     def test_a_ready_server_on_a_fallback_port_is_used(self, monkeypatch):
         from backend.app import llm
-        from backend.app.vllm import metal
-        from backend.app.vllm.manager import vllm_manager
-        from backend.app.vllm.models import MetalStatus, VLLMDeploymentProgress, VLLMServerState
+        from backend.app.inference import metal
+        from backend.app.inference.registry import text_manager as vllm_manager
+        from backend.app.inference.models import MetalStatus, DeploymentProgress, ServerState
 
         monkeypatch.setattr(metal, "read_status", lambda: MetalStatus())
         monkeypatch.setattr(
             vllm_manager,
             "get_status",
-            lambda: VLLMDeploymentProgress(
+            lambda: DeploymentProgress(
                 model_id="Org/Model",
-                state=VLLMServerState.READY,
+                state=ServerState.READY,
                 port=8002,
                 endpoint="http://localhost:8002/v1",
             ),
@@ -107,12 +107,12 @@ class TestVllmApiBaseFollowsTheServer:
     def test_without_a_ready_server_the_configured_base_stands(self, monkeypatch):
         from backend.app import llm
         from backend.app.config import settings
-        from backend.app.vllm import metal
-        from backend.app.vllm.manager import vllm_manager
-        from backend.app.vllm.models import MetalStatus, VLLMDeploymentProgress
+        from backend.app.inference import metal
+        from backend.app.inference.registry import text_manager as vllm_manager
+        from backend.app.inference.models import MetalStatus, DeploymentProgress
 
         monkeypatch.setattr(metal, "read_status", lambda: MetalStatus())
-        monkeypatch.setattr(vllm_manager, "get_status", lambda: VLLMDeploymentProgress())
+        monkeypatch.setattr(vllm_manager, "get_status", lambda: DeploymentProgress())
         monkeypatch.delenv("VLLM_API_BASE", raising=False)
 
         kwargs = llm._build_llm_kwargs("vllm/Org/Model", messages=[])

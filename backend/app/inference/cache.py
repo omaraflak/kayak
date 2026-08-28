@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
-from backend.app.vllm.models import CachedModel
+from backend.app.inference.models import CachedModel
 
 # Hugging Face stores each repository as `<cache>/hub/models--Org--Name`, with real file
 # content under `blobs/` and `snapshots/<revision>/` holding symlinks into it.

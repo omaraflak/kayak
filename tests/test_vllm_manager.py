@@ -5,8 +5,9 @@ import pytest
 
 from docker.errors import APIError
 
-from backend.app.vllm.manager import VLLMManager
-from backend.app.vllm.models import VLLMDeploymentProgress, VLLMServerState
+from backend.app.inference.manager import ServerManager, StatusBroadcaster
+from backend.app.inference.models import DeploymentProgress, ServerState
+from backend.app.inference.vllm_runtime import VLLMRuntime
 
 
 class FakeContainer:
@@ -53,11 +54,13 @@ class UnreachableClient:
 
 
 @pytest.fixture
-def manager(monkeypatch) -> VLLMManager:
+def manager(monkeypatch) -> ServerManager:
     """A manager with Docker stubbed out and no live endpoint."""
-    monkeypatch.setattr("backend.app.vllm.manager.httpx.AsyncClient", UnreachableClient)
+    monkeypatch.setattr("backend.app.inference.manager.httpx.AsyncClient", UnreachableClient)
 
-    instance = VLLMManager.__new__(VLLMManager)
+    instance = ServerManager.__new__(ServerManager)
+    instance._runtime = VLLMRuntime()
+    instance._broadcaster = StatusBroadcaster()
     instance._init_state()
     instance._docker_available = True
     return instance
@@ -72,12 +75,12 @@ class TestCrashedContainerIsReported:
 
     def test_a_container_that_exited_while_loading_becomes_an_error(self, manager):
         manager._client = FakeDockerClient(FakeContainer("exited", exit_code=1))
-        manager._status.state = VLLMServerState.LOADING
+        manager._status.state = ServerState.LOADING
         manager._status.model_id = "Org/Model"
 
         status = asyncio.run(manager.check_and_sync_status())
 
-        assert status.state == VLLMServerState.ERROR
+        assert status.state == ServerState.ERROR
         assert status.exit_code == 1
         assert "exited with code 1" in (status.error or "")
 
@@ -85,80 +88,80 @@ class TestCrashedContainerIsReported:
         manager._client = FakeDockerClient(
             FakeContainer("exited", exit_code=137, oom_killed=True)
         )
-        manager._status.state = VLLMServerState.STARTING_CONTAINER
+        manager._status.state = ServerState.STARTING_CONTAINER
 
         status = asyncio.run(manager.check_and_sync_status())
 
-        assert status.state == VLLMServerState.ERROR
+        assert status.state == ServerState.ERROR
         # The remedy belongs in the message; the exit code alone explains nothing.
         assert "memory" in (status.error or "").lower()
         assert "max-model-len" in (status.error or "")
 
     def test_a_running_container_still_reports_as_initializing(self, manager):
         manager._client = FakeDockerClient(FakeContainer("running"))
-        manager._status.state = VLLMServerState.LOADING
+        manager._status.state = ServerState.LOADING
 
         status = asyncio.run(manager.check_and_sync_status())
 
-        assert status.state == VLLMServerState.LOADING
+        assert status.state == ServerState.LOADING
 
     def test_an_idle_manager_with_no_container_stays_idle(self, manager):
         manager._client = FakeDockerClient(None)
 
         status = asyncio.run(manager.check_and_sync_status())
 
-        assert status.state == VLLMServerState.IDLE
+        assert status.state == ServerState.IDLE
 
     def test_a_ready_server_that_stops_answering_is_reported_stopped(self, manager):
         manager._client = FakeDockerClient(None)
-        manager._status.state = VLLMServerState.READY
+        manager._status.state = ServerState.READY
         manager._status.model_id = "Org/Model"
 
         status = asyncio.run(manager.check_and_sync_status())
 
-        assert status.state == VLLMServerState.STOPPED
+        assert status.state == ServerState.STOPPED
 
     def test_a_serving_model_that_crashes_reports_why(self, manager):
         # A long context can exhaust memory well after the server came up healthy.
         manager._client = FakeDockerClient(
             FakeContainer("exited", exit_code=137, oom_killed=True)
         )
-        manager._status.state = VLLMServerState.READY
+        manager._status.state = ServerState.READY
         manager._status.model_id = "Org/Model"
 
         status = asyncio.run(manager.check_and_sync_status())
 
-        assert status.state == VLLMServerState.ERROR
+        assert status.state == ServerState.ERROR
         assert "memory" in (status.error or "").lower()
 
     def test_an_orderly_shutdown_is_not_an_error(self, manager):
         manager._client = FakeDockerClient(FakeContainer("exited", exit_code=0))
-        manager._status.state = VLLMServerState.READY
+        manager._status.state = ServerState.READY
 
         status = asyncio.run(manager.check_and_sync_status())
 
-        assert status.state == VLLMServerState.STOPPED
+        assert status.state == ServerState.STOPPED
 
 
 class TestServingGuard:
     def test_weights_in_use_are_recognized(self, manager):
         manager._status.model_id = "Org/Model"
-        manager._status.state = VLLMServerState.READY
+        manager._status.state = ServerState.READY
 
         assert manager.is_serving("Org/Model") is True
         assert manager.is_serving("Org/Other") is False
 
     def test_a_stopped_server_does_not_hold_its_weights(self, manager):
         manager._status.model_id = "Org/Model"
-        manager._status.state = VLLMServerState.STOPPED
+        manager._status.state = ServerState.STOPPED
 
         assert manager.is_serving("Org/Model") is False
 
 
 class TestMetalIntegration:
     def test_deploy_mlx_model_when_metal_supported(self, manager, tmp_path, monkeypatch):
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus, VLLMDeployRequest
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus, DeployRequest
 
         monkeypatch.setattr(metal.settings, "DATA_DIR", tmp_path)
         monkeypatch.setattr(
@@ -168,10 +171,10 @@ class TestMetalIntegration:
         )
 
         progress = asyncio.run(
-            manager.deploy_model(VLLMDeployRequest(model_id="mlx-community/Qwen2.5-7B"))
+            manager.deploy_model(DeployRequest(model_id="mlx-community/Qwen2.5-7B"))
         )
 
-        assert progress.state in (VLLMServerState.STARTING_CONTAINER, VLLMServerState.LOADING, VLLMServerState.READY)
+        assert progress.state in (ServerState.STARTING_CONTAINER, ServerState.LOADING, ServerState.READY)
         assert progress.model_id == "mlx-community/Qwen2.5-7B"
 
         # Check desired file was written
@@ -183,8 +186,8 @@ class TestMetalIntegration:
         assert payload["metal"]["model"] == "mlx-community/Qwen2.5-7B"
 
     def test_deploy_mlx_model_when_metal_unsupported(self, manager, monkeypatch):
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus, VLLMDeployRequest
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus, DeployRequest
 
         monkeypatch.setattr(
             metal,
@@ -193,15 +196,15 @@ class TestMetalIntegration:
         )
 
         progress = asyncio.run(
-            manager.deploy_model(VLLMDeployRequest(model_id="mlx-community/Qwen2.5-7B"))
+            manager.deploy_model(DeployRequest(model_id="mlx-community/Qwen2.5-7B"))
         )
 
-        assert progress.state == VLLMServerState.ERROR
+        assert progress.state == ServerState.ERROR
         assert "MLX models require Apple Silicon" in progress.message
 
     def test_check_and_sync_status_reports_metal_ready(self, manager, monkeypatch):
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus
 
         monkeypatch.setattr(
             metal,
@@ -211,13 +214,13 @@ class TestMetalIntegration:
 
         status = asyncio.run(manager.check_and_sync_status())
 
-        assert status.state == VLLMServerState.READY
+        assert status.state == ServerState.READY
         assert status.model_id == "mlx-community/Qwen2.5-7B"
         assert status.port == 8001
 
     def test_check_and_sync_status_reports_metal_starting(self, manager, monkeypatch):
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus
 
         monkeypatch.setattr(
             metal,
@@ -227,7 +230,7 @@ class TestMetalIntegration:
 
         status = asyncio.run(manager.check_and_sync_status())
 
-        assert status.state == VLLMServerState.LOADING
+        assert status.state == ServerState.LOADING
         assert status.model_id == "mlx-community/Qwen2.5-7B"
 
     def test_monitor_ignores_a_status_about_another_model(self, manager, monkeypatch):
@@ -235,8 +238,8 @@ class TestMetalIntegration:
         the status file still describes the previous server — often as
         "ready". Acting on it is the bug where a model showed as serving the
         moment start was clicked, before anything was listening."""
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus
 
         responses = [
             MetalStatus(supported=True, state="ready", model="mlx-community/Old"),
@@ -249,10 +252,10 @@ class TestMetalIntegration:
         async def instant_sleep(_delay):
             pass
 
-        monkeypatch.setattr("backend.app.vllm.manager.asyncio.sleep", instant_sleep)
+        monkeypatch.setattr("backend.app.inference.manager.asyncio.sleep", instant_sleep)
 
         manager._status.model_id = "mlx-community/New"
-        manager._status.state = VLLMServerState.LOADING
+        manager._status.state = ServerState.LOADING
         seen_states = []
         original = manager._update_status
 
@@ -265,15 +268,15 @@ class TestMetalIntegration:
 
         # The stale "ready" for the old model must not have produced a READY;
         # only the status naming the new model may.
-        assert seen_states == [VLLMServerState.READY]
+        assert seen_states == [ServerState.READY]
         assert manager._status.model_id == "mlx-community/New"
 
     def test_monitor_waits_for_its_own_request_to_be_answered(self, manager, monkeypatch):
         """With a launcher new enough to echo tokens, even a "ready" for the
         right model is ignored until it carries this deployment's token — the
         file may predate the restart that was just asked for."""
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus
 
         responses = [
             MetalStatus(
@@ -292,21 +295,21 @@ class TestMetalIntegration:
         async def instant_sleep(_delay):
             pass
 
-        monkeypatch.setattr("backend.app.vllm.manager.asyncio.sleep", instant_sleep)
+        monkeypatch.setattr("backend.app.inference.manager.asyncio.sleep", instant_sleep)
 
         manager._status.model_id = "mlx-community/M"
-        manager._status.state = VLLMServerState.LOADING
+        manager._status.state = ServerState.LOADING
         asyncio.run(
             manager._run_metal_deployment("mlx-community/M", request_token="tok", timeout_seconds=30)
         )
 
-        assert manager._status.state == VLLMServerState.READY
+        assert manager._status.state == ServerState.READY
 
     def test_check_and_sync_defers_to_a_deployment_in_flight(self, manager, monkeypatch):
         """While a Metal deployment is running, a lagging status file must not
         overwrite the in-flight state with the previous server's "ready"."""
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus, VLLMDeploymentProgress
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus, DeploymentProgress
 
         monkeypatch.setattr(
             metal,
@@ -315,8 +318,8 @@ class TestMetalIntegration:
         )
 
         async def scenario():
-            manager._status = VLLMDeploymentProgress(
-                model_id="mlx-community/New", state=VLLMServerState.LOADING
+            manager._status = DeploymentProgress(
+                model_id="mlx-community/New", state=ServerState.LOADING
             )
             manager._metal_monitor_task = asyncio.create_task(asyncio.sleep(30))
             try:
@@ -326,15 +329,15 @@ class TestMetalIntegration:
 
         status = asyncio.run(scenario())
 
-        assert status.state == VLLMServerState.LOADING
+        assert status.state == ServerState.LOADING
         assert status.model_id == "mlx-community/New"
 
     def test_concurrent_deploys_serialize_and_the_last_one_wins(self, manager, tmp_path, monkeypatch):
         """Two rapid start clicks used to race two deployment runners against each
         other. Serialized, the second supersedes the first and only the second's
         monitor may write status."""
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus, VLLMDeployRequest
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus, DeployRequest
 
         monkeypatch.setattr(metal.settings, "DATA_DIR", tmp_path)
         monkeypatch.setattr(
@@ -348,12 +351,12 @@ class TestMetalIntegration:
         async def quick_sleep(_delay):
             await real_sleep(0)
 
-        monkeypatch.setattr("backend.app.vllm.manager.asyncio.sleep", quick_sleep)
+        monkeypatch.setattr("backend.app.inference.manager.asyncio.sleep", quick_sleep)
 
         async def scenario():
             await asyncio.gather(
-                manager.deploy_model(VLLMDeployRequest(model_id="mlx-community/A")),
-                manager.deploy_model(VLLMDeployRequest(model_id="mlx-community/B")),
+                manager.deploy_model(DeployRequest(model_id="mlx-community/A")),
+                manager.deploy_model(DeployRequest(model_id="mlx-community/B")),
             )
             await asyncio.wait_for(manager._metal_monitor_task, timeout=5)
             return manager.get_status()
@@ -361,7 +364,7 @@ class TestMetalIntegration:
         status = asyncio.run(scenario())
 
         assert status.model_id == "mlx-community/B"
-        assert status.state == VLLMServerState.READY
+        assert status.state == ServerState.READY
 
         import json
         desired_file = tmp_path / metal.CONTROL_DIRNAME / metal.DESIRED_FILENAME
@@ -371,8 +374,8 @@ class TestMetalIntegration:
     def test_stop_supersedes_an_in_flight_deployment(self, manager, tmp_path, monkeypatch):
         """Stopping mid-deployment must silence the deployment's monitor: it used to
         keep running and could flip the status back after the stop."""
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus, VLLMDeployRequest
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus, DeployRequest
 
         monkeypatch.setattr(metal.settings, "DATA_DIR", tmp_path)
         monkeypatch.setattr(
@@ -386,10 +389,10 @@ class TestMetalIntegration:
         async def quick_sleep(_delay):
             await real_sleep(0)
 
-        monkeypatch.setattr("backend.app.vllm.manager.asyncio.sleep", quick_sleep)
+        monkeypatch.setattr("backend.app.inference.manager.asyncio.sleep", quick_sleep)
 
         async def scenario():
-            await manager.deploy_model(VLLMDeployRequest(model_id="mlx-community/A"))
+            await manager.deploy_model(DeployRequest(model_id="mlx-community/A"))
             monitor = manager._metal_monitor_task
             await manager.stop_server()
             # Give a still-running monitor every chance to misbehave.
@@ -400,7 +403,7 @@ class TestMetalIntegration:
         monitor = asyncio.run(scenario())
 
         assert monitor.done()
-        assert manager.get_status().state == VLLMServerState.STOPPED
+        assert manager.get_status().state == ServerState.STOPPED
 
         import json
         desired_file = tmp_path / metal.CONTROL_DIRNAME / metal.DESIRED_FILENAME
@@ -408,8 +411,8 @@ class TestMetalIntegration:
         assert payload["metal"]["running"] is False
 
     def test_superseded_monitor_never_writes_status(self, manager, monkeypatch):
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus
 
         monkeypatch.setattr(
             metal,
@@ -420,9 +423,9 @@ class TestMetalIntegration:
         async def instant_sleep(_delay):
             pass
 
-        monkeypatch.setattr("backend.app.vllm.manager.asyncio.sleep", instant_sleep)
+        monkeypatch.setattr("backend.app.inference.manager.asyncio.sleep", instant_sleep)
 
-        manager._status.state = VLLMServerState.LOADING
+        manager._status.state = ServerState.LOADING
         manager._status.model_id = "mlx-community/M"
         stale_generation = manager._deploy_generation
         manager._deploy_generation += 1  # a stop or newer deploy has happened
@@ -433,14 +436,14 @@ class TestMetalIntegration:
             )
         )
 
-        assert manager.get_status().state == VLLMServerState.LOADING
+        assert manager.get_status().state == ServerState.LOADING
 
     def test_check_and_sync_defers_to_a_docker_deployment_in_flight(self, manager, monkeypatch):
         """A lagging Metal status file must not clobber an in-flight *Docker*
         deployment either: right after switching from a Metal model to a container
         model, the file still says "ready" for the old server."""
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus
 
         monkeypatch.setattr(
             metal,
@@ -449,8 +452,8 @@ class TestMetalIntegration:
         )
 
         async def scenario():
-            manager._status = VLLMDeploymentProgress(
-                model_id="Org/New", state=VLLMServerState.LOADING
+            manager._status = DeploymentProgress(
+                model_id="Org/New", state=ServerState.LOADING
             )
             manager._monitor_task = asyncio.create_task(asyncio.sleep(30))
             try:
@@ -460,12 +463,12 @@ class TestMetalIntegration:
 
         status = asyncio.run(scenario())
 
-        assert status.state == VLLMServerState.LOADING
+        assert status.state == ServerState.LOADING
         assert status.model_id == "Org/New"
 
     def test_stop_server_stops_metal_when_supported(self, manager, tmp_path, monkeypatch):
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus
 
         monkeypatch.setattr(metal.settings, "DATA_DIR", tmp_path)
         monkeypatch.setattr(
@@ -514,24 +517,24 @@ class TestHealthPollVerifiesTheModel:
     poll must insist the answer names the model being deployed."""
 
     def test_ready_when_the_endpoint_serves_the_requested_model(self, manager, monkeypatch):
-        monkeypatch.setattr("backend.app.vllm.manager.httpx.AsyncClient", ModelListClient)
+        monkeypatch.setattr("backend.app.inference.manager.httpx.AsyncClient", ModelListClient)
         ModelListClient.payload = {"data": [{"id": "Org/Model", "object": "model"}]}
 
         async def instant_sleep(_delay):
             pass
 
-        monkeypatch.setattr("backend.app.vllm.manager.asyncio.sleep", instant_sleep)
+        monkeypatch.setattr("backend.app.inference.manager.asyncio.sleep", instant_sleep)
 
         manager._client = FakeDockerClient(FakeContainer("running"))
-        manager._status.state = VLLMServerState.LOADING
+        manager._status.state = ServerState.LOADING
         manager._status.model_id = "Org/Model"
 
         asyncio.run(manager._poll_health_endpoint("Org/Model", timeout_seconds=30))
 
-        assert manager.get_status().state == VLLMServerState.READY
+        assert manager.get_status().state == ServerState.READY
 
     def test_an_answer_for_another_model_is_not_ready(self, manager, monkeypatch):
-        monkeypatch.setattr("backend.app.vllm.manager.httpx.AsyncClient", ModelListClient)
+        monkeypatch.setattr("backend.app.inference.manager.httpx.AsyncClient", ModelListClient)
         ModelListClient.payload = {"data": [{"id": "Org/Previous", "object": "model"}]}
 
         iterations = 0
@@ -544,15 +547,15 @@ class TestHealthPollVerifiesTheModel:
                 # wait out the wall-clock deadline.
                 manager._deploy_generation += 1
 
-        monkeypatch.setattr("backend.app.vllm.manager.asyncio.sleep", counting_sleep)
+        monkeypatch.setattr("backend.app.inference.manager.asyncio.sleep", counting_sleep)
 
         manager._client = FakeDockerClient(FakeContainer("running"))
-        manager._status.state = VLLMServerState.LOADING
+        manager._status.state = ServerState.LOADING
         manager._status.model_id = "Org/Model"
 
         asyncio.run(manager._poll_health_endpoint("Org/Model", timeout_seconds=30))
 
-        assert manager.get_status().state == VLLMServerState.LOADING
+        assert manager.get_status().state == ServerState.LOADING
 
     def test_endpoint_serves_model_handles_malformed_payloads(self, manager):
         serves = manager._endpoint_serves_model
@@ -568,9 +571,9 @@ class TestForceRestart:
     @pytest.fixture
     def docker_manager(self, manager, tmp_path, monkeypatch):
         """A manager whose docker deployment runner is recorded rather than run."""
-        from backend.app.vllm import manager as manager_module
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus
+        from backend.app.inference import manager as manager_module
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus
 
         monkeypatch.setattr(manager_module.settings, "DATA_DIR", tmp_path)
         monkeypatch.setattr(metal, "read_status", lambda: MetalStatus())
@@ -586,31 +589,31 @@ class TestForceRestart:
         return manager
 
     def test_a_bare_deploy_of_the_active_model_is_a_no_op(self, docker_manager):
-        from backend.app.vllm.models import VLLMDeployRequest
+        from backend.app.inference.models import DeployRequest
 
-        docker_manager._status.state = VLLMServerState.READY
+        docker_manager._status.state = ServerState.READY
         docker_manager._status.model_id = "Org/Model"
 
         status = asyncio.run(
-            docker_manager.deploy_model(VLLMDeployRequest(model_id="Org/Model"))
+            docker_manager.deploy_model(DeployRequest(model_id="Org/Model"))
         )
 
-        assert status.state == VLLMServerState.READY
+        assert status.state == ServerState.READY
         assert docker_manager.deploy_calls == []
 
     def test_force_restart_redeploys_the_active_model(self, docker_manager):
-        from backend.app.vllm.models import VLLMDeployRequest
+        from backend.app.inference.models import DeployRequest
 
-        docker_manager._status.state = VLLMServerState.READY
+        docker_manager._status.state = ServerState.READY
         docker_manager._status.model_id = "Org/Model"
 
         status = asyncio.run(
             docker_manager.deploy_model(
-                VLLMDeployRequest(model_id="Org/Model", max_model_len=4096, force_restart=True)
+                DeployRequest(model_id="Org/Model", max_model_len=4096, force_restart=True)
             )
         )
 
-        assert status.state == VLLMServerState.STARTING_CONTAINER
+        assert status.state == ServerState.STARTING_CONTAINER
         assert [call[0] for call in docker_manager.deploy_calls] == ["Org/Model"]
 
 
@@ -633,7 +636,7 @@ class TestInfrastructureResilience:
         """A slow SSE consumer must lose old events, never the latest one -- dropping
         the final "ready" left that tab showing a deployment in progress forever."""
         queue: asyncio.Queue = asyncio.Queue(maxsize=2)
-        manager._listeners.add(queue)
+        manager._broadcaster._listeners.add(queue)
 
         for index in range(4):
             manager._broadcast({"type": "status", "index": index})
@@ -648,8 +651,8 @@ class TestInfrastructureResilience:
 
 class TestMetalCrashAfterReady:
     def test_a_metal_server_that_errors_while_serving_reports_the_reason(self, manager, monkeypatch):
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus
 
         monkeypatch.setattr(
             metal,
@@ -662,12 +665,12 @@ class TestMetalCrashAfterReady:
             ),
         )
 
-        manager._status.state = VLLMServerState.READY
+        manager._status.state = ServerState.READY
         manager._status.model_id = "mlx-community/M"
 
         status = asyncio.run(manager.check_and_sync_status())
 
-        assert status.state == VLLMServerState.ERROR
+        assert status.state == ServerState.ERROR
         assert "out of memory" in (status.error or "")
 
 
@@ -680,44 +683,52 @@ class TestContextRetryDecision:
     )
 
     def test_a_default_context_failure_retries_with_what_fits(self, manager):
-        from backend.app.vllm.models import VLLMDeployRequest
+        from backend.app.inference.models import DeployRequest
 
-        manager._status.state = VLLMServerState.ERROR
+        manager._status.state = ServerState.ERROR
         manager._log_history = [self.FITTING_LINE]
 
-        retry = manager._context_retry_request(VLLMDeployRequest(model_id="Org/M"))
+        retry = manager._runtime.retry_request(
+            DeployRequest(model_id="Org/M"), manager._status, manager._log_history
+        )
 
         assert retry is not None
         assert retry.max_model_len == 9344
         assert retry.force_restart is True
 
     def test_an_explicit_context_choice_is_never_overridden(self, manager):
-        from backend.app.vllm.models import VLLMDeployRequest
+        from backend.app.inference.models import DeployRequest
 
-        manager._status.state = VLLMServerState.ERROR
+        manager._status.state = ServerState.ERROR
         manager._log_history = [self.FITTING_LINE]
 
-        retry = manager._context_retry_request(
-            VLLMDeployRequest(model_id="Org/M", max_model_len=32768)
+        retry = manager._runtime.retry_request(
+            DeployRequest(model_id="Org/M", max_model_len=32768),
+            manager._status,
+            manager._log_history,
         )
 
         assert retry is None
 
     def test_other_failures_do_not_retry(self, manager):
-        from backend.app.vllm.models import VLLMDeployRequest
+        from backend.app.inference.models import DeployRequest
 
-        manager._status.state = VLLMServerState.ERROR
+        manager._status.state = ServerState.ERROR
         manager._log_history = ["RuntimeError: something unrelated"]
 
-        assert manager._context_retry_request(VLLMDeployRequest(model_id="Org/M")) is None
+        assert manager._runtime.retry_request(
+            DeployRequest(model_id="Org/M"), manager._status, manager._log_history
+        ) is None
 
     def test_a_successful_deployment_does_not_retry(self, manager):
-        from backend.app.vllm.models import VLLMDeployRequest
+        from backend.app.inference.models import DeployRequest
 
-        manager._status.state = VLLMServerState.READY
+        manager._status.state = ServerState.READY
         manager._log_history = [self.FITTING_LINE]
 
-        assert manager._context_retry_request(VLLMDeployRequest(model_id="Org/M")) is None
+        assert manager._runtime.retry_request(
+            DeployRequest(model_id="Org/M"), manager._status, manager._log_history
+        ) is None
 
 
 class TestContainerResourceLimits:
@@ -750,8 +761,8 @@ class TestContainerResourceLimits:
             return {"MemTotal": 32 * 1024 ** 3, "NCPU": 16}
 
     def test_memory_and_cpu_limits_are_applied_to_the_container(self, manager, tmp_path, monkeypatch):
-        from backend.app.vllm import manager as manager_module
-        from backend.app.vllm.models import VLLMDeployRequest
+        from backend.app.inference import manager as manager_module
+        from backend.app.inference.models import DeployRequest
 
         monkeypatch.setattr(manager_module.settings, "DATA_DIR", tmp_path)
         monkeypatch.setattr(manager_module.shutil, "which", lambda _name: None)  # CPU path
@@ -764,7 +775,7 @@ class TestContainerResourceLimits:
         docker_client = self.RecordingDocker()
         manager._client = docker_client
 
-        request = VLLMDeployRequest(
+        request = DeployRequest(
             model_id="Org/Model", memory_limit_gb=12, cpu_limit=6
         )
 
@@ -781,8 +792,8 @@ class TestContainerResourceLimits:
         assert docker_client.run_kwargs["environment"]["VLLM_CPU_KVCACHE_SPACE"] == "3"
 
     def test_without_limits_the_container_is_unbounded(self, manager, tmp_path, monkeypatch):
-        from backend.app.vllm import manager as manager_module
-        from backend.app.vllm.models import VLLMDeployRequest
+        from backend.app.inference import manager as manager_module
+        from backend.app.inference.models import DeployRequest
 
         monkeypatch.setattr(manager_module.settings, "DATA_DIR", tmp_path)
         monkeypatch.setattr(manager_module.shutil, "which", lambda _name: None)
@@ -798,7 +809,7 @@ class TestContainerResourceLimits:
         async def scenario():
             generation = manager._deploy_generation
             await manager._run_deployment(
-                VLLMDeployRequest(model_id="Org/Model"), tmp_path, generation
+                DeployRequest(model_id="Org/Model"), tmp_path, generation
             )
 
         asyncio.run(scenario())
@@ -849,7 +860,7 @@ class TestPortFallback:
 
     @pytest.fixture
     def deploy_env(self, manager, tmp_path, monkeypatch):
-        from backend.app.vllm import manager as manager_module
+        from backend.app.inference import manager as manager_module
 
         monkeypatch.setattr(manager_module.settings, "DATA_DIR", tmp_path)
         monkeypatch.setattr(manager_module.shutil, "which", lambda _name: None)
@@ -861,7 +872,7 @@ class TestPortFallback:
         return manager_module
 
     def test_a_taken_port_falls_through_to_the_next_free_one(self, manager, tmp_path, deploy_env):
-        from backend.app.vllm.models import VLLMDeployRequest
+        from backend.app.inference.models import DeployRequest
 
         base_port = deploy_env.settings.VLLM_PORT
         docker_client = self.PortSqueezedDocker(taken_ports=[base_port])
@@ -869,7 +880,7 @@ class TestPortFallback:
 
         asyncio.run(
             manager._run_deployment(
-                VLLMDeployRequest(model_id="Org/Model"), tmp_path, manager._deploy_generation
+                DeployRequest(model_id="Org/Model"), tmp_path, manager._deploy_generation
             )
         )
 
@@ -877,7 +888,7 @@ class TestPortFallback:
         assert docker_client.run_kwargs["ports"]["8000/tcp"] == base_port + 1
 
     def test_running_out_of_ports_reports_an_error(self, manager, tmp_path, deploy_env):
-        from backend.app.vllm.models import VLLMDeployRequest
+        from backend.app.inference.models import DeployRequest
 
         base_port = deploy_env.settings.VLLM_PORT
         taken = range(base_port, base_port + manager.PORT_FALLBACK_ATTEMPTS)
@@ -885,11 +896,11 @@ class TestPortFallback:
 
         asyncio.run(
             manager._run_deployment(
-                VLLMDeployRequest(model_id="Org/Model"), tmp_path, manager._deploy_generation
+                DeployRequest(model_id="Org/Model"), tmp_path, manager._deploy_generation
             )
         )
 
-        assert manager.get_status().state == VLLMServerState.ERROR
+        assert manager.get_status().state == ServerState.ERROR
         assert "No free port" in (manager.get_status().error or "")
 
     def test_api_base_follows_the_chosen_port(self, manager):
@@ -922,8 +933,8 @@ class TestSyncAdoptsTheContainersPort:
         """After a backend restart, the running container may be published on a
         fallback port; assuming the configured default pointed status, probes,
         and chat routing at the wrong address."""
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus
 
         monkeypatch.setattr(metal, "read_status", lambda: MetalStatus())
 
@@ -932,11 +943,11 @@ class TestSyncAdoptsTheContainersPort:
             "Ports": {"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8002"}]}
         }
         manager._client = FakeDockerClient(container)
-        manager._status.state = VLLMServerState.STOPPED
+        manager._status.state = ServerState.STOPPED
 
         status = asyncio.run(manager.check_and_sync_status())
 
-        assert status.state == VLLMServerState.LOADING
+        assert status.state == ServerState.LOADING
         assert status.port == 8002
         assert ":8002" in status.endpoint
 

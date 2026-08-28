@@ -5,8 +5,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 import litellm
 from backend.app.config import default_vllm_api_base, settings
 from backend.app.providers import API_KEY_SETTINGS, get_provider
-from backend.app.vllm import metal
-from backend.app.vllm.models import VLLMServerState
+from backend.app.inference import metal
+from backend.app.inference.models import ServerState
 
 logger = logging.getLogger(__name__)
 
@@ -232,11 +232,11 @@ def _build_llm_kwargs(
             # configured one was taken -- on launcher installs Kayak itself
             # occupies the default. The manager's status carries where the
             # server actually answers.
-            from backend.app.vllm.manager import vllm_manager
+            from backend.app.inference import registry as inference_registry
 
-            manager_status = vllm_manager.get_status()
+            manager_status = inference_registry.text_manager.get_status()
             if (
-                manager_status.state == VLLMServerState.READY
+                manager_status.state == ServerState.READY
                 and manager_status.endpoint
             ):
                 api_base = manager_status.endpoint

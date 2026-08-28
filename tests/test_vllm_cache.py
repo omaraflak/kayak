@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.app.vllm.cache import (
+from backend.app.inference.cache import (
     CachePathError,
     directory_size_bytes,
     list_cached_models,

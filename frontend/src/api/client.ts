@@ -12,6 +12,8 @@ import {
   ToolCategoryInfo,
   VLLMDeploymentProgress,
   VLLMDeployRequest,
+  Modality,
+  RuntimeDescriptor,
   HostCapability,
   InstalledVersions,
   MetalStatus,
@@ -304,18 +306,30 @@ export const api = {
   searchHuggingFaceModels: (query: string): Promise<HuggingFaceModelSearchResult[]> =>
     fetchJSON(`${API_BASE}/models/huggingface/search?query=${encodeURIComponent(query)}`),
 
-  // vLLM Local Container Orchestration
-  getVLLMStatus: (): Promise<VLLMDeploymentProgress> =>
-    fetchJSON(`${API_BASE}/vllm/status`),
+  // Local model servers, one per modality.
 
-  deployVLLMModel: (data: VLLMDeployRequest): Promise<VLLMDeploymentProgress> =>
-    fetchJSONPost(`${API_BASE}/vllm/deploy`, data),
+  /** What each local runtime serves and can be told, so no client hardcodes it. */
+  listInferenceRuntimes: (): Promise<RuntimeDescriptor[]> =>
+    fetchJSON(`${API_BASE}/inference/runtimes`),
 
-  stopVLLMServer: (): Promise<{ status: string; message: string }> =>
-    fetchJSON(`${API_BASE}/vllm/stop`, { method: 'POST' }),
+  /** Every local server's state, keyed by modality. */
+  getInferenceStatus: (): Promise<Record<Modality, VLLMDeploymentProgress>> =>
+    fetchJSON(`${API_BASE}/inference/status`),
+
+  getVLLMStatus: (modality: Modality = 'text'): Promise<VLLMDeploymentProgress> =>
+    fetchJSON(`${API_BASE}/inference/${modality}/status`),
+
+  deployVLLMModel: (
+    data: VLLMDeployRequest,
+    modality: Modality = 'text',
+  ): Promise<VLLMDeploymentProgress> =>
+    fetchJSONPost(`${API_BASE}/inference/${modality}/deploy`, data),
+
+  stopVLLMServer: (modality: Modality = 'text'): Promise<{ status: string; message: string }> =>
+    fetchJSON(`${API_BASE}/inference/${modality}/stop`, { method: 'POST' }),
 
   getHostCapability: (): Promise<HostCapability> =>
-    fetchJSON(`${API_BASE}/vllm/hardware`),
+    fetchJSON(`${API_BASE}/inference/hardware`),
 
   getVersions: (): Promise<InstalledVersions> =>
     fetchJSON(`${API_BASE}/settings/versions`),
@@ -328,19 +342,19 @@ export const api = {
   },
 
   getMetalStatus: (): Promise<MetalStatus> =>
-    fetchJSON(`${API_BASE}/vllm/metal`),
+    fetchJSON(`${API_BASE}/inference/metal`),
 
   startMetal: (modelId: string): Promise<MetalStatus> =>
-    fetchJSONPost(`${API_BASE}/vllm/metal/start`, { model_id: modelId }),
+    fetchJSONPost(`${API_BASE}/inference/metal/start`, { model_id: modelId }),
 
   stopMetal: (): Promise<MetalStatus> =>
-    fetchJSON(`${API_BASE}/vllm/metal/stop`, { method: 'POST' }),
+    fetchJSON(`${API_BASE}/inference/metal/stop`, { method: 'POST' }),
 
   getModelCache: (): Promise<ModelCacheInfo> =>
-    fetchJSON(`${API_BASE}/vllm/cache`),
+    fetchJSON(`${API_BASE}/inference/cache`),
 
   deleteCachedModel: (repoId: string): Promise<{ status: string; repo_id: string; freed_bytes: number }> =>
-    fetchJSON(`${API_BASE}/vllm/cache/${repoId.split('/').map(encodeURIComponent).join('/')}`, {
+    fetchJSON(`${API_BASE}/inference/cache/${repoId.split('/').map(encodeURIComponent).join('/')}`, {
       method: 'DELETE',
     }),
 };

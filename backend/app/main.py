@@ -29,7 +29,7 @@ from backend.app.routes.auth import PUBLIC_API_PATHS, is_authorized
 from backend.app.skills.registry import skill_registry
 from backend.app import support
 from backend.app.tools.registry import tool_registry
-from backend.app.vllm import routes as vllm_routes
+from backend.app.inference import routes as inference_routes
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -68,12 +68,15 @@ async def lifespan(app: FastAPI):
 
     tool_registry.load_custom_tools()
 
-    from backend.app.vllm.manager import vllm_manager
+    from backend.app.inference import registry as inference_registry
 
-    track_background_task(asyncio.create_task(vllm_manager.check_and_sync_status()))
+    # Every modality's server is re-adopted, not just the text one: a speech server
+    # that survived a backend restart must be found too, or it is left running with
+    # nothing in the UI admitting it exists.
+    track_background_task(asyncio.create_task(inference_registry.sync_all()))
     # Keeps the reported state truthful while nobody is polling: crashes after READY
     # and deployments adopted across a backend restart are noticed here.
-    vllm_manager.start_watchdog()
+    inference_registry.start_watchdogs()
 
     if not settings.AUTH_TOKEN and settings.HOST not in ("127.0.0.1", "localhost", "::1"):
         logger.warning(
@@ -86,11 +89,11 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown: stop sandbox containers this process started so they do not outlive it.
-    # The vLLM server container is deliberately left running -- it is re-adopted on the
-    # next startup -- but its monitors must not outlive the event loop.
+    # Model server containers are deliberately left running -- they are re-adopted on
+    # the next startup -- but their monitors must not outlive the event loop.
     await turns.cancel_all()
     await sandbox_manager.shutdown_all()
-    await vllm_manager.shutdown()
+    await inference_registry.shutdown()
 
 
 app = FastAPI(
@@ -133,7 +136,7 @@ app.include_router(activity.router)
 app.include_router(workspace.router)
 app.include_router(agents.router)
 app.include_router(models.router)
-app.include_router(vllm_routes.router)
+app.include_router(inference_routes.router)
 app.include_router(skills.router)
 app.include_router(tools.router)
 app.include_router(tool_builder.router)

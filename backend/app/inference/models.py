@@ -3,8 +3,18 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
-class VLLMServerState(str, Enum):
-    """Lifecycle states of the local vLLM Docker container."""
+class Modality(str, Enum):
+    """What a local server produces.
+
+    One server of each modality may run at a time, independently: a voice model is
+    only useful alongside a text model, so starting one must never evict the other.
+    """
+    TEXT = "text"
+    SPEECH = "speech"
+
+
+class ServerState(str, Enum):
+    """Lifecycle states of a local model server's Docker container."""
     IDLE = "idle"
     PULLING_IMAGE = "pulling_image"
     STARTING_CONTAINER = "starting_container"
@@ -14,7 +24,7 @@ class VLLMServerState(str, Enum):
     STOPPED = "stopped"
 
 
-class VLLMDeployRequest(BaseModel):
+class DeployRequest(BaseModel):
     """Request payload for deploying a model via local vLLM."""
     model_id: str = Field(..., description="Hugging Face repository ID or model name (e.g. 'Qwen/Qwen2.5-Coder-7B-Instruct')")
     gpu_memory_utilization: float = Field(0.90, ge=0.1, le=1.0, description="Fraction of GPU memory to reserve for model weights and KV cache")
@@ -49,11 +59,15 @@ class VLLMDeployRequest(BaseModel):
     trust_remote_code: bool = Field(False, description="Execute custom modelling code published in the model repository")
 
 
-class VLLMDeploymentProgress(BaseModel):
-    """Real-time status and telemetry for vLLM deployment."""
+class DeploymentProgress(BaseModel):
+    """Real-time status and telemetry for one local server."""
+    #: Which server this describes. Every status and log event carries it, so a
+    #: client watching one stream can tell a voice model's startup from a text
+    #: model's without opening a connection per modality.
+    modality: Modality = Modality.TEXT
     model_id: Optional[str] = None
-    state: VLLMServerState = VLLMServerState.IDLE
-    message: str = "vLLM server is not running."
+    state: ServerState = ServerState.IDLE
+    message: str = "The server is not running."
     logs_tail: List[str] = []
     port: int = 8001
     endpoint: str = "http://localhost:8001/v1"
@@ -61,6 +75,31 @@ class VLLMDeploymentProgress(BaseModel):
     error: Optional[str] = None
     #: Exit code of the container, when it has stopped on its own.
     exit_code: Optional[int] = None
+
+
+class RuntimeDescriptor(BaseModel):
+    """What a client needs to know about a runtime without hardcoding it.
+
+    Served by the API so that the catalogue can filter Hugging Face by the right
+    pipeline tags, say which repositories this runtime can actually load, and render
+    exactly the settings the runtime honours. A client that hardcoded any of this
+    would go stale the moment a backend is added.
+    """
+    modality: Modality
+    key: str
+    label: str
+    description: str
+    #: Hugging Face ``pipeline_tag`` values whose models this runtime serves.
+    pipeline_tags: List[str] = []
+    #: Hugging Face ``library_name`` values the runtime can load. Empty means the
+    #: runtime imposes no library restriction.
+    supported_libraries: List[str] = []
+    #: Repository-id fragments that identify a supported model when the Hub reports
+    #: no library at all, which is the case for some of the most popular ones.
+    supported_id_fragments: List[str] = []
+    #: Names of DeployRequest fields this runtime honours; the rest are ignored and
+    #: must not be offered.
+    tunable_fields: List[str] = []
 
 
 class GPUDevice(BaseModel):

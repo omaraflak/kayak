@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from backend.app.vllm import metal
+from backend.app.inference import metal
 
 
 @pytest.fixture

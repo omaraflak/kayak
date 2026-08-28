@@ -17,7 +17,7 @@ import platform
 from typing import Deque, List, Optional
 
 from backend.app.config import settings
-from backend.app.vllm import metal
+from backend.app.inference import metal
 
 #: Records retained. Enough to cover a failed startup and the conversation that
 #: preceded it, without keeping the whole session in memory.

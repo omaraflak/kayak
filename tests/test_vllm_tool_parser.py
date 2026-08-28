@@ -5,7 +5,7 @@ reply text, so the agent chats but never executes a tool. These tests pin the
 family mapping and its precedence rules.
 """
 
-from backend.app.vllm.manager import tool_call_parser
+from backend.app.inference.vllm_runtime import tool_call_parser
 
 
 def test_qwen_and_unknown_families_default_to_hermes():

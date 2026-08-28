@@ -1,4 +1,4 @@
-from backend.app.vllm.hardware import parse_nvidia_smi_output
+from backend.app.inference.hardware import parse_nvidia_smi_output
 
 
 class TestParseNvidiaSmiOutput:

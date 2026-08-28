@@ -175,6 +175,15 @@ class Settings:
             "VLLM_API_BASE",
             default_vllm_api_base(self.VLLM_PORT, self.RUNNING_IN_CONTAINER),
         )
+        # Speech synthesis runs as a second server alongside the text one, so it needs
+        # a port of its own. Both fall back to neighbouring ports when theirs is taken.
+        self.TTS_PORT: int = int(os.getenv("KAYAK_TTS_PORT", "8011"))
+        #: Image serving speech models. Published alongside the server and sandbox
+        #: images by the same release, so it tracks `latest` exactly as the sandbox
+        #: image does -- the three always move together.
+        self.TTS_IMAGE: str = os.getenv(
+            "KAYAK_TTS_IMAGE", "omaraflak/kayak-tts:latest"
+        )
 
         # Docker Sandbox Configuration
         self.DOCKER_SANDBOX_IMAGE: str = os.getenv(

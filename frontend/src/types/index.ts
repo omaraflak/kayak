@@ -256,7 +256,37 @@ export type VLLMServerState =
   | 'error'
   | 'stopped';
 
+/**
+ * What a local server produces. One server of each modality can run at a time,
+ * independently: starting a voice model must never evict the text model an agent
+ * is using.
+ */
+export type Modality = 'text' | 'speech';
+
+/**
+ * What a local runtime serves and can be told, as the API describes it.
+ *
+ * Read rather than hardcoded, so that adding a runtime — or a backend that widens
+ * which repositories an existing one can load — never requires a frontend change.
+ */
+export interface RuntimeDescriptor {
+  modality: Modality;
+  key: string;
+  label: string;
+  description: string;
+  /** Hugging Face pipeline tags whose models this runtime serves. */
+  pipeline_tags: string[];
+  /** Hugging Face `library_name` values it can load. Empty means no restriction. */
+  supported_libraries: string[];
+  /** Repository-id fragments identifying a supported model when the Hub names no library. */
+  supported_id_fragments: string[];
+  /** DeployRequest fields this runtime honours; the rest must not be offered. */
+  tunable_fields: string[];
+}
+
 export interface VLLMDeploymentProgress {
+  /** Which server this describes. Every status and log event carries it. */
+  modality: Modality;
   model_id?: string | null;
   state: VLLMServerState;
   message: string;

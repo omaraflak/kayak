@@ -27,6 +27,9 @@ jobs:
           - image: omaraflak/kayak-sandbox
             dockerfile: Dockerfile.sandbox
             cache: sandbox
+          - image: omaraflak/kayak-tts
+            dockerfile: Dockerfile.tts
+            cache: tts
 
     steps:
       - uses: actions/checkout@v4
@@ -83,72 +86,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: publish
     steps:
+      - uses: actions/checkout@v4
+
       - name: Delete Docker Hub tags older than the newest three versions
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: |
-          python3 - <<'PYEOF'
-          import json
-          import os
-          import re
-          import sys
-          import urllib.error
-          import urllib.request
-
-          KEEP = 3
-          REPOS = ["omaraflak/kayak", "omaraflak/kayak-sandbox"]
-          FULL_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
-
-          def call(url, method="GET", payload=None, token=None):
-              data = json.dumps(payload).encode() if payload is not None else None
-              request = urllib.request.Request(url, data=data, method=method)
-              request.add_header("Content-Type", "application/json")
-              if token:
-                  request.add_header("Authorization", f"JWT {token}")
-              with urllib.request.urlopen(request) as response:
-                  body = response.read().decode()
-                  return json.loads(body) if body.strip() else {}
-
-          login = call(
-              "https://hub.docker.com/v2/users/login",
-              method="POST",
-              payload={
-                  "username": os.environ["DOCKERHUB_USERNAME"],
-                  "password": os.environ["DOCKERHUB_TOKEN"],
-              },
-          )
-          token = login["token"]
-
-          for repo in REPOS:
-              tags = []
-              url = f"https://hub.docker.com/v2/repositories/{repo}/tags?page_size=100"
-              while url:
-                  page = call(url, token=token)
-                  tags.extend(entry["name"] for entry in page.get("results", []))
-                  url = page.get("next")
-
-              versions = sorted(
-                  (tag for tag in tags if FULL_VERSION.match(tag)),
-                  key=lambda v: tuple(int(part) for part in v.split(".")),
-                  reverse=True,
-              )
-              print(f"{repo}: keeping {versions[:KEEP]}")
-              for tag in versions[KEEP:]:
-                  try:
-                      call(
-                          f"https://hub.docker.com/v2/repositories/{repo}/tags/{tag}/",
-                          method="DELETE",
-                          token=token,
-                      )
-                      print(f"deleted {repo}:{tag}")
-                  except urllib.error.HTTPError as error:
-                      if error.code in (401, 403):
-                          print(
-                              "::error::The Docker Hub token cannot delete tags. "
-                              "Regenerate it with Read, Write & Delete permissions "
-                              "and update the DOCKERHUB_TOKEN secret (see RELEASING.md)."
-                          )
-                          sys.exit(1)
-                      raise
-          PYEOF
+        run: >
+          python3 scripts/prune_dockerhub_tags.py
+          omaraflak/kayak omaraflak/kayak-sandbox omaraflak/kayak-tts

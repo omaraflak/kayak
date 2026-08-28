@@ -1,8 +1,8 @@
 # Releasing Kayak
 
-Publishing is automated. Pushing a version tag builds `omaraflak/kayak` and
-`omaraflak/kayak-sandbox` for amd64 and arm64 and pushes them to Docker Hub, which is
-where every installed Kayak Launcher looks for updates.
+Publishing is automated. Pushing a version tag builds `omaraflak/kayak`,
+`omaraflak/kayak-sandbox` and `omaraflak/kayak-tts` for amd64 and arm64 and pushes them
+to Docker Hub, which is where every installed Kayak Launcher looks for updates.
 
 ## One-time setup
 
@@ -49,6 +49,11 @@ That publishes:
 
 - `omaraflak/kayak:1.0.0`, `omaraflak/kayak:1.0`, `omaraflak/kayak:latest`
 - the same three tags for `omaraflak/kayak-sandbox`
+- the same three tags for `omaraflak/kayak-tts`, the speech runtime
+
+The speech image is large (~1.8 GB) and is built for both architectures, so the
+first release after a change to `Dockerfile.tts` or `tts_server/` is noticeably
+slower. Releases that do not touch either reuse the cached layers.
 
 Launchers track `latest`, so pushing the tag is what offers the update to everyone. They
 notice within six hours, or immediately on their next start.
@@ -65,10 +70,11 @@ Only the newest **three** versions are kept, everywhere, and the cleanup runs
 automatically as the last step of every publish:
 
 - **Docker Hub**: after the images are pushed, the workflow deletes full
-  version tags (`1.0.12`-style) older than the newest three, for both
-  `omaraflak/kayak` and `omaraflak/kayak-sandbox`. `latest` and the
-  `major.minor` tags are never touched. This needs the Docker Hub token to
-  have the **Delete** permission.
+  version tags (`1.0.12`-style) older than the newest three, for all three
+  repositories — `omaraflak/kayak`, `omaraflak/kayak-sandbox` and
+  `omaraflak/kayak-tts` — by calling `scripts/prune_dockerhub_tags.py`. `latest`
+  and the `major.minor` tags are never touched. This needs the Docker Hub token
+  to have the **Delete** permission.
 - **Launcher binaries**: the kayak-launcher release workflow deletes GitHub
   releases older than the newest three after each release publishes. Git tags
   are kept; only the releases and their assets go.
