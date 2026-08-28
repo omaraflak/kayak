@@ -3,6 +3,8 @@ from typing import Any, Dict, Optional
 
 import pytest
 
+from docker.errors import APIError
+
 from backend.app.vllm.manager import VLLMManager
 from backend.app.vllm.models import VLLMDeploymentProgress, VLLMServerState
 
@@ -822,3 +824,110 @@ class TestContainerResourceLimits:
         assert "nano_cpus" not in docker_client.run_kwargs
         # Default KV cache: a quarter of the machine's 32 GiB.
         assert docker_client.run_kwargs["environment"]["VLLM_CPU_KVCACHE_SPACE"] == "8"
+
+
+class TestPortFallback:
+    """On launcher installs Kayak itself occupies the default vLLM port, so the
+    manager must publish the server on the port next door instead of failing
+    with "port is already allocated"."""
+
+    class PortSqueezedDocker:
+        """A docker client whose default port is taken; the next one is free."""
+
+        def __init__(self, taken_ports):
+            self.taken_ports = set(taken_ports)
+            self.run_kwargs = None
+            outer = self
+
+            class Images:
+                def get(self, _name):
+                    return object()
+
+            class Containers:
+                def get(self, _name):
+                    raise RuntimeError("no such container")
+
+                def run(self, **kwargs):
+                    port = kwargs["ports"]["8000/tcp"]
+                    if port in outer.taken_ports:
+                        raise APIError(
+                            f"driver failed programming external connectivity: "
+                            f"Bind for 0.0.0.0:{port} failed: port is already allocated"
+                        )
+                    outer.run_kwargs = kwargs
+                    raise RuntimeError("stop here: only the binding is under test")
+
+            self.images = Images()
+            self.containers = Containers()
+
+        def info(self):
+            return {"MemTotal": 16 * 1024 ** 3, "NCPU": 8}
+
+    @pytest.fixture
+    def deploy_env(self, manager, tmp_path, monkeypatch):
+        from backend.app.vllm import manager as manager_module
+
+        monkeypatch.setattr(manager_module.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(manager_module.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(
+            manager_module.DockerPathResolver,
+            "resolve_volume_source",
+            staticmethod(lambda path, fallback_named_volume=None: str(path)),
+        )
+        return manager_module
+
+    def test_a_taken_port_falls_through_to_the_next_free_one(self, manager, tmp_path, deploy_env):
+        from backend.app.vllm.models import VLLMDeployRequest
+
+        base_port = deploy_env.settings.VLLM_PORT
+        docker_client = self.PortSqueezedDocker(taken_ports=[base_port])
+        manager._client = docker_client
+
+        asyncio.run(
+            manager._run_deployment(
+                VLLMDeployRequest(model_id="Org/Model"), tmp_path, manager._deploy_generation
+            )
+        )
+
+        assert docker_client.run_kwargs is not None
+        assert docker_client.run_kwargs["ports"]["8000/tcp"] == base_port + 1
+
+    def test_running_out_of_ports_reports_an_error(self, manager, tmp_path, deploy_env):
+        from backend.app.vllm.models import VLLMDeployRequest
+
+        base_port = deploy_env.settings.VLLM_PORT
+        taken = range(base_port, base_port + manager.PORT_FALLBACK_ATTEMPTS)
+        manager._client = self.PortSqueezedDocker(taken_ports=taken)
+
+        asyncio.run(
+            manager._run_deployment(
+                VLLMDeployRequest(model_id="Org/Model"), tmp_path, manager._deploy_generation
+            )
+        )
+
+        assert manager.get_status().state == VLLMServerState.ERROR
+        assert "No free port" in (manager.get_status().error or "")
+
+    def test_api_base_follows_the_chosen_port(self, manager):
+        from backend.app.config import settings
+
+        assert manager._api_base_for_port(settings.VLLM_PORT) == settings.VLLM_API_BASE
+        other = manager._api_base_for_port(settings.VLLM_PORT + 1)
+        assert str(settings.VLLM_PORT + 1) in other
+        assert other.endswith("/v1")
+
+    def test_probe_urls_target_the_active_port(self, manager):
+        urls = manager._get_endpoint_urls(9107)
+        assert urls, "expected probe URLs"
+        assert all(":9107/" in url for url in urls)
+
+    def test_reads_the_published_port_from_a_discovered_container(self, manager):
+        container = FakeContainer("running")
+        container.attrs["NetworkSettings"] = {
+            "Ports": {"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8002"}]}
+        }
+        assert manager._container_host_port(container) == 8002
+
+        bare = FakeContainer("running")
+        bare.attrs["NetworkSettings"] = {"Ports": {}}
+        assert manager._container_host_port(bare) is None

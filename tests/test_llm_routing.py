@@ -74,3 +74,47 @@ class TestIsToolUnsupportedError:
         # Retrying these without tools hides the real fault and silently strips the
         # agent's capabilities.
         assert not _is_tool_unsupported_error(Exception(message))
+
+
+class TestVllmApiBaseFollowsTheServer:
+    """The container may be published on a neighbouring port when the default is
+    taken (on launcher installs Kayak itself occupies it), so chat requests must
+    go where the server actually answers."""
+
+    def test_a_ready_server_on_a_fallback_port_is_used(self, monkeypatch):
+        from backend.app import llm
+        from backend.app.vllm import metal
+        from backend.app.vllm.manager import vllm_manager
+        from backend.app.vllm.models import MetalStatus, VLLMDeploymentProgress, VLLMServerState
+
+        monkeypatch.setattr(metal, "read_status", lambda: MetalStatus())
+        monkeypatch.setattr(
+            vllm_manager,
+            "get_status",
+            lambda: VLLMDeploymentProgress(
+                model_id="Org/Model",
+                state=VLLMServerState.READY,
+                port=8002,
+                endpoint="http://localhost:8002/v1",
+            ),
+        )
+        monkeypatch.delenv("VLLM_API_BASE", raising=False)
+
+        kwargs = llm._build_llm_kwargs("vllm/Org/Model", messages=[])
+
+        assert kwargs["api_base"] == "http://localhost:8002/v1"
+
+    def test_without_a_ready_server_the_configured_base_stands(self, monkeypatch):
+        from backend.app import llm
+        from backend.app.config import settings
+        from backend.app.vllm import metal
+        from backend.app.vllm.manager import vllm_manager
+        from backend.app.vllm.models import MetalStatus, VLLMDeploymentProgress
+
+        monkeypatch.setattr(metal, "read_status", lambda: MetalStatus())
+        monkeypatch.setattr(vllm_manager, "get_status", lambda: VLLMDeploymentProgress())
+        monkeypatch.delenv("VLLM_API_BASE", raising=False)
+
+        kwargs = llm._build_llm_kwargs("vllm/Org/Model", messages=[])
+
+        assert kwargs["api_base"] == settings.VLLM_API_BASE

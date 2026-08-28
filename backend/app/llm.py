@@ -6,6 +6,7 @@ import litellm
 from backend.app.config import default_vllm_api_base, settings
 from backend.app.providers import API_KEY_SETTINGS, get_provider
 from backend.app.vllm import metal
+from backend.app.vllm.models import VLLMServerState
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +227,19 @@ def _build_llm_kwargs(
             api_base = default_vllm_api_base(
                 metal_status.port, settings.RUNNING_IN_CONTAINER
             )
+        elif "VLLM_API_BASE" not in os.environ:
+            # The container may be published on a neighbouring port when the
+            # configured one was taken -- on launcher installs Kayak itself
+            # occupies the default. The manager's status carries where the
+            # server actually answers.
+            from backend.app.vllm.manager import vllm_manager
+
+            manager_status = vllm_manager.get_status()
+            if (
+                manager_status.state == VLLMServerState.READY
+                and manager_status.endpoint
+            ):
+                api_base = manager_status.endpoint
         kwargs["api_base"] = api_base
         kwargs["api_key"] = "EMPTY"
     elif provider:

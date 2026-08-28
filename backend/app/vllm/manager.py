@@ -8,9 +8,9 @@ import shutil
 import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 import docker
-from docker.errors import NotFound, ImageNotFound
+from docker.errors import APIError, NotFound, ImageNotFound
 import httpx
-from backend.app.config import settings
+from backend.app.config import default_vllm_api_base, settings
 from backend.app.docker_utils import DockerPathResolver
 from backend.app.vllm import cache as model_cache
 from backend.app.vllm import metal
@@ -294,14 +294,47 @@ class VLLMManager:
         """True when a newer deploy or stop has taken over since this task began."""
         return generation != self._deploy_generation
 
-    def _get_endpoint_urls(self) -> List[str]:
-        """Returns the ordered list of vLLM endpoint URLs to probe."""
-        return [
-            f"http://host.docker.internal:{settings.VLLM_PORT}/v1/models",
-            f"{settings.VLLM_API_BASE.rstrip('/')}/models",
-            f"http://localhost:{settings.VLLM_PORT}/v1/models",
-            f"http://127.0.0.1:{settings.VLLM_PORT}/v1/models",
+    #: How many consecutive host ports to try when the configured one is taken.
+    #: On a launcher install, Kayak itself is published on the default vLLM port,
+    #: so without a fallback no container model could ever start there.
+    PORT_FALLBACK_ATTEMPTS = 10
+
+    #: Fragments of the Docker error raised when a host port cannot be bound.
+    _PORT_TAKEN_MARKERS = ("port is already allocated", "address already in use")
+
+    @staticmethod
+    def _api_base_for_port(port: int) -> str:
+        """The OpenAI-compatible base URL for a server published on `port`."""
+        if port == settings.VLLM_PORT:
+            # Honours an explicit VLLM_API_BASE override for the configured port.
+            return settings.VLLM_API_BASE
+        return default_vllm_api_base(port, settings.RUNNING_IN_CONTAINER)
+
+    def _get_endpoint_urls(self, port: Optional[int] = None) -> List[str]:
+        """Returns the ordered list of vLLM endpoint URLs to probe.
+
+        Probes the port the current deployment actually publishes, which may
+        differ from the configured default when that port was taken.
+        """
+        port = port or self._status.port or settings.VLLM_PORT
+        urls = [
+            f"http://host.docker.internal:{port}/v1/models",
+            f"{self._api_base_for_port(port).rstrip('/')}/models",
+            f"http://localhost:{port}/v1/models",
+            f"http://127.0.0.1:{port}/v1/models",
         ]
+        # Deduplicated, order preserved: the api-base entry usually repeats one
+        # of the fixed hosts.
+        return list(dict.fromkeys(urls))
+
+    @staticmethod
+    def _container_host_port(container: Any) -> Optional[int]:
+        """The host port a discovered container actually publishes, if readable."""
+        try:
+            ports = container.attrs["NetworkSettings"]["Ports"]["8000/tcp"]
+            return int(ports[0]["HostPort"])
+        except (KeyError, IndexError, TypeError, ValueError):
+            return None
 
     def _ensure_log_streamer(self, container: Any) -> None:
         """Spawns a log streaming thread if one isn't already running."""
@@ -753,7 +786,6 @@ class VLLMManager:
                         "mode": "rw",
                     }
                 }
-                ports = {"8000/tcp": settings.VLLM_PORT}
 
                 run_kwargs: Dict[str, Any] = {
                     "image": image_name,
@@ -761,7 +793,6 @@ class VLLMManager:
                     "command": cmd_args,
                     "detach": True,
                     "volumes": volumes,
-                    "ports": ports,
                     "environment": env_vars,
                     "remove": False,
                 }
@@ -777,25 +808,63 @@ class VLLMManager:
                 if request.cpu_limit:
                     run_kwargs["nano_cpus"] = int(request.cpu_limit * 1_000_000_000)
 
-                created = self._client.containers.run(**run_kwargs)
-
-                # A stop that raced this thread has already done its removal, so a
-                # container created after that point would outlive the "stopped"
-                # status unnoticed. The generation bump happens before the stop's
-                # removal, so checking after creation closes both orderings.
-                if self._superseded(generation):
+                # The configured port first, then neighbours. On a launcher
+                # install Kayak itself is published on the default vLLM port, so
+                # binding it fails with "port is already allocated" -- which used
+                # to end the deployment instead of trying the port next door.
+                last_port_error: Optional[Exception] = None
+                for offset in range(self.PORT_FALLBACK_ATTEMPTS):
+                    port = settings.VLLM_PORT + offset
+                    run_kwargs["ports"] = {"8000/tcp": port}
                     try:
-                        created.remove(force=True)
-                    except Exception:
-                        pass
-                    return None
-                return created
+                        created = self._client.containers.run(**run_kwargs)
+                    except APIError as error:
+                        message = str(error).lower()
+                        if not any(marker in message for marker in self._PORT_TAKEN_MARKERS):
+                            raise
+                        last_port_error = error
+                        # Docker creates the container before failing to bind its
+                        # port; it must go before the name can be reused.
+                        try:
+                            self._client.containers.get(self.CONTAINER_NAME).remove(force=True)
+                        except Exception:
+                            pass
+                        loop.call_soon_threadsafe(
+                            self._add_log,
+                            f"ℹ Port {port} is taken by another application; trying {port + 1}...",
+                        )
+                        continue
 
-            container = await loop.run_in_executor(None, _start_container)
-            if container is None or self._superseded(generation):
+                    # A stop that raced this thread has already done its removal,
+                    # so a container created after that point would outlive the
+                    # "stopped" status unnoticed. The generation bump happens
+                    # before the stop's removal, so checking after creation
+                    # closes both orderings.
+                    if self._superseded(generation):
+                        try:
+                            created.remove(force=True)
+                        except Exception:
+                            pass
+                        return None, None
+                    return created, port
+
+                raise RuntimeError(
+                    f"No free port between {settings.VLLM_PORT} and "
+                    f"{settings.VLLM_PORT + self.PORT_FALLBACK_ATTEMPTS - 1} to publish "
+                    f"the server on. ({last_port_error})"
+                )
+
+            container, chosen_port = await loop.run_in_executor(None, _start_container)
+            if container is None or chosen_port is None or self._superseded(generation):
                 return
             self._status.container_id = container.id
+            self._status.port = chosen_port
+            self._status.endpoint = self._api_base_for_port(chosen_port)
             self._add_log(f"Container created with ID: {container.id[:12]}")
+            if chosen_port != settings.VLLM_PORT:
+                self._add_log(
+                    f"ℹ Serving on port {chosen_port} because {settings.VLLM_PORT} is in use."
+                )
 
             # 5. Spawn background non-blocking daemon thread for container log streaming
             if self._log_stop_event:
@@ -804,7 +873,7 @@ class VLLMManager:
             self._spawn_log_stream_thread(container, loop, self._log_stop_event)
 
             # 6. Poll health endpoint until healthy (non-blocking)
-            await self._poll_health_endpoint(request.model_id, generation)
+            await self._poll_health_endpoint(request.model_id, generation, chosen_port)
 
             # 7. Self-heal the one predictable zero-config failure: the model's
             # default context needs more KV cache than this machine has. vLLM's
@@ -962,6 +1031,7 @@ class VLLMManager:
         self,
         model_id: str,
         generation: Optional[int] = None,
+        port: Optional[int] = None,
         timeout_seconds: int = HEALTH_TIMEOUT_SECONDS,
     ) -> None:
         """Waits for the vLLM endpoint to serve this model, or for the container to die.
@@ -972,6 +1042,7 @@ class VLLMManager:
         """
         if generation is None:
             generation = self._deploy_generation
+        port = port or self._status.port or settings.VLLM_PORT
         deadline = time.monotonic() + timeout_seconds
         next_container_check = time.monotonic() + CONTAINER_CHECK_INTERVAL_SECONDS
 
@@ -987,7 +1058,7 @@ class VLLMManager:
                 ):
                     return
 
-                for url in self._get_endpoint_urls():
+                for url in self._get_endpoint_urls(port):
                     try:
                         res = await client.get(url)
                         if res.status_code == 200 and self._endpoint_serves_model(
@@ -997,7 +1068,7 @@ class VLLMManager:
                                 return
                             self._update_status(
                                 state=VLLMServerState.READY,
-                                message=f"vLLM is serving {model_id} on port {settings.VLLM_PORT}",
+                                message=f"vLLM is serving {model_id} on port {port}",
                                 exit_code=None,
                             )
                             return
@@ -1026,7 +1097,7 @@ class VLLMManager:
             message=f"vLLM did not become reachable within {minutes} minutes",
             error=(
                 "The container is still running but never answered on "
-                f"{settings.VLLM_API_BASE}. Check the container logs below."
+                f"{self._api_base_for_port(port)}. Check the container logs below."
             ),
         )
 
@@ -1168,21 +1239,10 @@ class VLLMManager:
                 self._status.logs_tail = self._log_history[-30:]
                 return self._status
 
-        # 1. Probe the HTTP endpoint to see if vLLM is responding
-        served_models: List[Dict[str, Any]] = []
-        is_endpoint_alive = False
-        async with httpx.AsyncClient(timeout=1.5) as client:
-            for url in self._get_endpoint_urls():
-                try:
-                    resp = await client.get(url)
-                    if resp.status_code == 200:
-                        served_models = resp.json().get("data", [])
-                        is_endpoint_alive = True
-                        break
-                except Exception:
-                    continue
-
-        # 2. Check Docker container state if docker client is available
+        # 1. Check Docker container state if docker client is available. The
+        # container is read before probing so the probe targets the port the
+        # container actually publishes -- after a backend restart it may not be
+        # the configured default.
         container = None
         if await self._ensure_docker():
             try:
@@ -1192,6 +1252,26 @@ class VLLMManager:
                 )
             except Exception:
                 container = None
+
+        active_port = (
+            (self._container_host_port(container) if container is not None else None)
+            or self._status.port
+            or settings.VLLM_PORT
+        )
+
+        # 2. Probe the HTTP endpoint to see if vLLM is responding
+        served_models: List[Dict[str, Any]] = []
+        is_endpoint_alive = False
+        async with httpx.AsyncClient(timeout=1.5) as client:
+            for url in self._get_endpoint_urls(active_port):
+                try:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        served_models = resp.json().get("data", [])
+                        is_endpoint_alive = True
+                        break
+                except Exception:
+                    continue
 
         if is_endpoint_alive:
             # Model ID from served models or fallback
@@ -1206,8 +1286,8 @@ class VLLMManager:
                 self._status.state = VLLMServerState.READY
                 self._status.model_id = active_model_id
                 self._status.message = f"vLLM server is healthy and serving {active_model_id}"
-                self._status.port = settings.VLLM_PORT
-                self._status.endpoint = settings.VLLM_API_BASE
+                self._status.port = active_port
+                self._status.endpoint = self._api_base_for_port(active_port)
                 if container:
                     self._status.container_id = container.id
                 self._status.error = None
@@ -1237,8 +1317,8 @@ class VLLMManager:
                 self._status.state = VLLMServerState.LOADING
                 self._status.model_id = model_name
                 self._status.message = f"vLLM container is running and initializing {model_name}..."
-                self._status.port = settings.VLLM_PORT
-                self._status.endpoint = settings.VLLM_API_BASE
+                self._status.port = active_port
+                self._status.endpoint = self._api_base_for_port(active_port)
                 self._status.container_id = container.id
                 self._status.error = None
                 self._broadcast({"type": "status", "data": self._status.model_dump()})
