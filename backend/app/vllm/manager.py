@@ -1352,37 +1352,6 @@ class VLLMManager:
         self._status.logs_tail = self._log_history[-30:]
         return self._status
 
-    async def list_served_models(self) -> List[Dict[str, Any]]:
-        """Queries the running vLLM OpenAI endpoint for served models."""
-        metal_status = metal.read_status()
-        if metal_status.supported and metal_status.state == "ready" and metal_status.model:
-            return [{"id": metal_status.model, "object": "model", "owned_by": "vllm-metal"}]
-
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            for url in self._get_endpoint_urls():
-                try:
-                    resp = await client.get(url)
-                    if resp.status_code == 200:
-                        models = resp.json().get("data", [])
-                        if models:
-                            active_id = models[0].get("id")
-                            # While a deployment is in flight its monitor owns the
-                            # status; a 200 here may still be the outgoing server.
-                            if not self._deployment_in_flight() and (
-                                self._status.state != VLLMServerState.READY
-                                or self._status.model_id != active_id
-                            ):
-                                self._status.state = VLLMServerState.READY
-                                self._status.model_id = active_id
-                                self._status.message = f"vLLM server is healthy and serving {active_id}"
-                            return models
-                except Exception:
-                    continue
-
-        if self._status.model_id and self._status.state == VLLMServerState.READY:
-            return [{"id": self._status.model_id, "object": "model", "owned_by": "vllm"}]
-        return []
-
     @property
     def cache_root(self) -> Path:
         """Host directory mounted into the container as the Hugging Face cache."""

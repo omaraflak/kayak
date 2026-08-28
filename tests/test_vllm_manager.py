@@ -230,22 +230,6 @@ class TestMetalIntegration:
         assert status.state == VLLMServerState.LOADING
         assert status.model_id == "mlx-community/Qwen2.5-7B"
 
-    def test_list_served_models_includes_metal(self, manager, monkeypatch):
-        from backend.app.vllm import metal
-        from backend.app.vllm.models import MetalStatus
-
-        monkeypatch.setattr(
-            metal,
-            "read_status",
-            lambda: MetalStatus(supported=True, state="ready", model="mlx-community/Qwen2.5-7B"),
-        )
-
-        models = asyncio.run(manager.list_served_models())
-
-        assert len(models) == 1
-        assert models[0]["id"] == "mlx-community/Qwen2.5-7B"
-        assert models[0]["owned_by"] == "vllm-metal"
-
     def test_monitor_ignores_a_status_about_another_model(self, manager, monkeypatch):
         """The launcher reconciles on a delay, so right after a start request
         the status file still describes the previous server — often as
@@ -931,3 +915,40 @@ class TestPortFallback:
         bare = FakeContainer("running")
         bare.attrs["NetworkSettings"] = {"Ports": {}}
         assert manager._container_host_port(bare) is None
+
+
+class TestSyncAdoptsTheContainersPort:
+    def test_a_rediscovered_container_reports_the_port_it_publishes(self, manager, monkeypatch):
+        """After a backend restart, the running container may be published on a
+        fallback port; assuming the configured default pointed status, probes,
+        and chat routing at the wrong address."""
+        from backend.app.vllm import metal
+        from backend.app.vllm.models import MetalStatus
+
+        monkeypatch.setattr(metal, "read_status", lambda: MetalStatus())
+
+        container = FakeContainer("running")
+        container.attrs["NetworkSettings"] = {
+            "Ports": {"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8002"}]}
+        }
+        manager._client = FakeDockerClient(container)
+        manager._status.state = VLLMServerState.STOPPED
+
+        status = asyncio.run(manager.check_and_sync_status())
+
+        assert status.state == VLLMServerState.LOADING
+        assert status.port == 8002
+        assert ":8002" in status.endpoint
+
+
+class TestWatchdog:
+    def test_start_watchdog_is_idempotent(self, manager):
+        async def scenario():
+            manager.start_watchdog()
+            first = manager._watchdog_task
+            manager.start_watchdog()
+            second = manager._watchdog_task
+            first.cancel()
+            return first is second
+
+        assert asyncio.run(scenario()) is True

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from backend.app.vllm import metal
@@ -64,12 +64,6 @@ async def stop_vllm_server() -> Dict[str, str]:
     """
     await vllm_manager.stop_server()
     return {"status": "stopped", "message": "vLLM server stopped."}
-
-
-@router.get("/models")
-async def get_vllm_served_models() -> List[Dict[str, Any]]:
-    """Returns the list of active models served by the running vLLM server."""
-    return await vllm_manager.list_served_models()
 
 
 @router.get("/hardware", response_model=HostCapability)

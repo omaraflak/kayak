@@ -24,27 +24,6 @@ async def list_all_skills() -> List[Skill]:
     return skill_registry.list_skills()
 
 
-@router.get("/{skill_name}", response_model=Skill)
-async def get_skill_details(skill_name: str) -> Skill:
-    """Retrieves full instructions and helper files for a specific skill.
-
-    Args:
-        skill_name: Unique skill identifier.
-
-    Returns:
-        The Skill model object.
-
-    Raises:
-        HTTPException: If the requested skill does not exist.
-    """
-    skill = skill_registry.get_skill(skill_name)
-    if not skill:
-        raise HTTPException(
-            status_code=404, detail=f"Skill '{skill_name}' not found"
-        )
-    return skill
-
-
 @router.post("", response_model=Skill)
 async def save_skill(request: SaveSkillRequest) -> Skill:
     """Creates or updates a skill's SKILL.md file and frontmatter.

@@ -223,9 +223,6 @@ export const api = {
   listAgents: (): Promise<AgentConfig[]> =>
     fetchJSON(`${API_BASE}/agents`),
 
-  getAgent: (id: string): Promise<AgentConfig> =>
-    fetchJSON(`${API_BASE}/agents/${id}`),
-
   saveAgent: (agent: AgentConfig): Promise<AgentConfig> =>
     fetchJSONPost(`${API_BASE}/agents`, agent),
 
@@ -235,9 +232,6 @@ export const api = {
   // Skills
   listSkills: (): Promise<Skill[]> =>
     fetchJSON(`${API_BASE}/skills`),
-
-  getSkill: (name: string): Promise<Skill> =>
-    fetchJSON(`${API_BASE}/skills/${name}`),
 
   saveSkill: (data: { name: string; description: string; instructions: string }): Promise<Skill> =>
     fetchJSONPost(`${API_BASE}/skills`, data),
@@ -319,14 +313,6 @@ export const api = {
 
   stopVLLMServer: (): Promise<{ status: string; message: string }> =>
     fetchJSON(`${API_BASE}/vllm/stop`, { method: 'POST' }),
-
-  getVLLMServedModels: async (): Promise<any[]> => {
-    try {
-      return await fetchJSON(`${API_BASE}/vllm/models`);
-    } catch {
-      return [];
-    }
-  },
 
   getHostCapability: (): Promise<HostCapability> =>
     fetchJSON(`${API_BASE}/vllm/hardware`),

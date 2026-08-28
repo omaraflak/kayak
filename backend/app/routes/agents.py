@@ -18,27 +18,6 @@ async def list_all_agents() -> List[AgentConfig]:
     return agent_manager.list_agents()
 
 
-@router.get("/{agent_id}", response_model=AgentConfig)
-async def get_agent_config(agent_id: str) -> AgentConfig:
-    """Retrieves an agent configuration profile by identifier.
-
-    Args:
-        agent_id: Unique agent identifier.
-
-    Returns:
-        The AgentConfig record.
-
-    Raises:
-        HTTPException: If the agent profile is not found.
-    """
-    agent = agent_manager.get_agent(agent_id)
-    if not agent:
-        raise HTTPException(
-            status_code=404, detail=f"Agent '{agent_id}' not found"
-        )
-    return agent
-
-
 @router.post("", response_model=AgentConfig)
 async def save_agent_config(agent: AgentConfig) -> AgentConfig:
     """Creates or updates an agent configuration profile YAML file.

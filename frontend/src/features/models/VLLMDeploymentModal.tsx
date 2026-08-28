@@ -19,18 +19,15 @@ interface VLLMDeploymentModalProps {
   isOpen: boolean;
   onClose: () => void;
   targetModelId?: string | null;
-  autoDeploy?: boolean;
 }
 
 export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
   isOpen,
   onClose,
   targetModelId,
-  autoDeploy = false,
 }) => {
   const { status, logs, refresh: fetchStatus } = useVLLMStatus();
   const [showLogs, setShowLogs] = useState<boolean>(true);
-  const [isDeploying, setIsDeploying] = useState<boolean>(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -38,27 +35,6 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
       logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [logs, showLogs]);
-
-  // Auto-deploy only when explicitly requested (e.g. initiating new model deployment)
-  useEffect(() => {
-    if (isOpen && autoDeploy && targetModelId) {
-      handleDeploy(targetModelId);
-    }
-  }, [isOpen, autoDeploy, targetModelId]);
-
-  const handleDeploy = async (modelId: string) => {
-    setIsDeploying(true);
-    try {
-      // Deliberately bare: every tunable is a server-side default, so this path and the
-      // Local Models page cannot drift into launching the same model differently.
-      await api.deployVLLMModel({ model_id: modelId });
-      await fetchStatus();
-    } catch (err) {
-      console.error('Deployment request failed:', err);
-    } finally {
-      setIsDeploying(false);
-    }
-  };
 
   const handleStop = async () => {
     try {
@@ -77,7 +53,7 @@ export const VLLMDeploymentModal: React.FC<VLLMDeploymentModalProps> = ({
   const isLoading = status?.state === 'loading';
   const isPulling = status?.state === 'pulling_image';
   const isStarting = status?.state === 'starting_container';
-  const isBusy = isLoading || isPulling || isStarting || isDeploying;
+  const isBusy = isLoading || isPulling || isStarting;
 
   // Continuous client-side stopwatch for provisioning duration
   useEffect(() => {
