@@ -134,12 +134,23 @@ export const ModelsView: React.FC = () => {
   const handleLaunchRequest = useCallback(
     async (modelId: string) => {
       if (metal?.supported && isMlxModel(modelId)) {
-        setMetal(await api.startMetal(modelId));
+        try {
+          setMetal(await api.startMetal(modelId));
+          await fetchStatus();
+        } catch (err) {
+          // A refused start (launcher quit, non-MLX repository) used to be an
+          // unhandled rejection: the click just did nothing.
+          dialog.alert({
+            title: 'Could not start the model',
+            message: errorMessage(err),
+            variant: 'danger',
+          });
+        }
         return;
       }
       requestLaunch(modelId);
     },
-    [metal?.supported, requestLaunch]
+    [metal?.supported, requestLaunch, fetchStatus, dialog]
   );
 
 
@@ -483,12 +494,17 @@ export const ModelsView: React.FC = () => {
           {cache && cache.models.length > 0 && (
             <div className="space-y-1.5 pt-1">
               {cache.models.map((model) => {
-                const isServing = status?.model_id === model.repo_id && (isReady || isLoading);
+                // Disjoint on purpose: a model whose server is still coming up was
+                // shown as "Serving" the instant Start was clicked, which is a lie
+                // the logs directly above it contradicted.
+                const isServing = status?.model_id === model.repo_id && isReady;
+                const isStarting = status?.model_id === model.repo_id && isLoading;
+                const occupiesServer = isServing || isStarting;
                 return (
                   <div
                     key={model.repo_id}
                     className={`p-3 rounded-xl border flex items-center justify-between gap-4 transition-colors ${
-                      isServing
+                      occupiesServer
                         ? 'bg-md-primary-container/40 border-md-primary/50'
                         : 'bg-md-surface border-md-outline-variant'
                     }`}
@@ -503,6 +519,12 @@ export const ModelsView: React.FC = () => {
                             Serving
                           </span>
                         )}
+                        {isStarting && (
+                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-800/80">
+                            <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                            Starting
+                          </span>
+                        )}
                       </div>
                       <p className="text-[11px] text-md-on-surface-variant mt-0.5">
                         {formatBytes(model.size_bytes)} on disk
@@ -510,7 +532,7 @@ export const ModelsView: React.FC = () => {
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
-                      {!isServing && (
+                      {!occupiesServer && (
                         <button
                           type="button"
                           onClick={() => handleLaunchRequest(model.repo_id)}
@@ -524,9 +546,9 @@ export const ModelsView: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => handleDeleteWeights(model.repo_id, model.size_bytes)}
-                        disabled={isServing}
+                        disabled={occupiesServer}
                         title={
-                          isServing
+                          occupiesServer
                             ? 'Stop the server before deleting these weights'
                             : 'Delete these weights'
                         }
@@ -560,7 +582,10 @@ export const ModelsView: React.FC = () => {
           <HuggingFaceCatalog
             mode="deploy"
             onDeployVLLM={handleLaunchRequest}
-            activeVllmModelId={metalModelId ?? status?.model_id}
+            // Only a model that is actually up or coming up occupies the server:
+            // after a stop or a failure, status.model_id still names the last
+            // model, and passing it here showed that model as "Active".
+            activeVllmModelId={metalModelId ?? (isReady || isLoading ? status?.model_id : null)}
             isVllmLoading={isLoading || metalBusy}
             cachedModelIds={cachedIds}
             availableVramGB={(capability?.total_vram_mb ?? 0) / 1024}

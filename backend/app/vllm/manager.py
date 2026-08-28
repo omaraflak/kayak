@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 import time
 import uuid
@@ -23,8 +24,15 @@ from backend.app.vllm.models import (
     VLLMServerState,
 )
 
+logger = logging.getLogger(__name__)
+
 GPU_IMAGE = "vllm/vllm-openai:latest"
 CPU_IMAGE = "vllm/vllm-openai-cpu:latest"
+
+#: How often the manager re-checks reality (container state, endpoint health) on its
+#: own. Without this, a server that crashed after coming up stayed "ONLINE" in every
+#: open tab until something happened to request /status.
+WATCHDOG_INTERVAL_SECONDS = 10.0
 
 # A first deployment downloads the image and then tens of gigabytes of weights, so the
 # health check has to be patient. Genuine failures are caught by watching the container
@@ -43,9 +51,10 @@ _ACTIVE_STATES = frozenset({
 #: and the vLLM runtime, which together take far more than the weights alone: loading a
 #: 1.4 GiB model on an 7.77 GiB host left only 2.5 GiB free. Subtracting a fixed
 #: headroom instead over-promises on exactly the small machines that can least afford it.
+#: Deliberately uncapped beyond the share itself: the recommendation scales with the
+#: machine, and the user picks the final figure in the launch dialog.
 _CPU_KVCACHE_MEMORY_SHARE = 0.25
 _MIN_CPU_KVCACHE_GIB = 1
-_MAX_CPU_KVCACHE_GIB = 8
 #: Memory the runtime and the loaded weights need before any is left for the cache.
 #: Used to bound an explicit request against what the machine can actually spare.
 _CPU_RUNTIME_RESERVE_GIB = 5
@@ -114,13 +123,48 @@ def tool_call_parser(model_id: str) -> str:
 #: Lines like "ValueError: Available memory on node 0 ... is less than requested".
 _ERROR_LINE = re.compile(r"\b([A-Za-z_]*(?:Error|Exception)):\s*(\S.*)$")
 
-#: Log noise that names an exception type but never explains a failure.
+#: Log noise that names an exception type but never explains a failure. "WARNING"
+#: covers lines vLLM logged at warning level and recovered from -- e.g. "Failed to
+#: create oneDNN linear, fallback to torch linear. Exception: ..." -- which used to
+#: be reported as the crash reason while the fatal error sat further down.
 _UNHELPFUL_ERROR_MARKERS = (
     "resource_tracker",
     "FutureWarning",
     "DeprecationWarning",
     "UserWarning",
+    "WARNING",
 )
+
+#: vLLM's own advice when a model's default context does not fit in the KV cache:
+#: "... the estimated maximum model length is 9344. Try increasing ..."
+_FITTING_CONTEXT_PATTERN = re.compile(r"estimated maximum model length is (\d+)")
+
+#: Below this, a model cannot hold a useful conversation, so an automatic retry
+#: with a shrunken context would only produce a server nobody can use.
+_MIN_USEFUL_CONTEXT = 1024
+
+
+def extract_fitting_context(log_lines: List[str]) -> Optional[int]:
+    """Reads the context length vLLM says would fit, from a failed start's output.
+
+    vLLM refuses to start when the model's maximum sequence length needs more KV
+    cache than the machine has, but its error names the length that would fit.
+    That number feeds an automatic retry instead of being shown to the user as
+    homework.
+
+    Args:
+        log_lines: Captured container output, oldest first.
+
+    Returns:
+        Optional[int]: The usable context length, or None if the failure was
+        something else or the fitting length is too small to be worth serving.
+    """
+    for line in reversed(log_lines):
+        match = _FITTING_CONTEXT_PATTERN.search(line)
+        if match:
+            value = int(match.group(1))
+            return value if value >= _MIN_USEFUL_CONTEXT else None
+    return None
 
 
 def resolve_cpu_kvcache_gib(
@@ -140,21 +184,22 @@ def resolve_cpu_kvcache_gib(
         int: Size in GiB, always at least 1.
     """
     if requested_gib:
-        # Clamped, not trusted. An oversized request is refused by vLLM minutes into a
-        # deployment, long after the weights have downloaded, so it is better caught
-        # here than surfaced as a crash.
-        ceiling = _MAX_CPU_KVCACHE_GIB
+        # Clamped to what the machine can spare, not trusted outright: an oversized
+        # request is refused by vLLM minutes into a deployment, long after the
+        # weights have downloaded, so it is better caught here than as a crash.
+        # With no memory figure to clamp against, the user's number stands.
         if total_memory_bytes and total_memory_bytes > 0:
             spare = int(total_memory_bytes / (1024 ** 3)) - _CPU_RUNTIME_RESERVE_GIB
             ceiling = max(_MIN_CPU_KVCACHE_GIB, spare)
-        return max(_MIN_CPU_KVCACHE_GIB, min(int(requested_gib), ceiling))
+            return max(_MIN_CPU_KVCACHE_GIB, min(int(requested_gib), ceiling))
+        return max(_MIN_CPU_KVCACHE_GIB, int(requested_gib))
 
     if not total_memory_bytes or total_memory_bytes <= 0:
         return _FALLBACK_CPU_KVCACHE_GIB
 
     total_gib = total_memory_bytes / (1024 ** 3)
     share_gib = int(total_gib * _CPU_KVCACHE_MEMORY_SHARE)
-    return max(_MIN_CPU_KVCACHE_GIB, min(_MAX_CPU_KVCACHE_GIB, share_gib))
+    return max(_MIN_CPU_KVCACHE_GIB, share_gib)
 
 
 def extract_failure_reason(log_lines: List[str]) -> Optional[str]:
@@ -193,6 +238,11 @@ class VLLMManager:
     CONTAINER_NAME = "kayak-vllm-server"
 
     def __init__(self):
+        self._init_state()
+        self._init_docker()
+
+    def _init_state(self) -> None:
+        """Initializes in-memory state, shared with tests that skip Docker probing."""
         self._client: Optional[docker.DockerClient] = None
         self._docker_available: bool = False
         self._status: VLLMDeploymentProgress = VLLMDeploymentProgress()
@@ -200,8 +250,22 @@ class VLLMManager:
         self._listeners: Set[asyncio.Queue] = set()
         self._monitor_task: Optional[asyncio.Task] = None
         self._metal_monitor_task: Optional[asyncio.Task] = None
+        self._watchdog_task: Optional[asyncio.Task] = None
+        #: Strong reference to an automatic context-length retry, so the task is
+        #: not garbage collected mid-flight.
+        self._retry_task: Optional[asyncio.Task] = None
         self._log_stop_event: Optional[threading.Event] = None
-        self._init_docker()
+        # Serializes deploy/stop/sync. Without it, two rapid "start" clicks raced two
+        # deployment runners that force-removed each other's containers.
+        self._control_lock = asyncio.Lock()
+        # Incremented on every deploy or stop. A background monitor captures the value
+        # it was started under and stops touching shared state the moment it is
+        # superseded, so a cancelled or replaced deployment can never overwrite the
+        # status of the one that followed it.
+        self._deploy_generation = 0
+        #: The request behind the current deployment, for telling "same model again"
+        #: from "same model with different settings".
+        self._active_request: Optional[VLLMDeployRequest] = None
 
     def _init_docker(self) -> None:
         try:
@@ -212,6 +276,23 @@ class VLLMManager:
         except Exception:
             self._client = None
             self._docker_available = False
+
+    async def _ensure_docker(self) -> bool:
+        """Re-probes the Docker daemon whenever it was last seen unavailable.
+
+        The daemon used to be probed once, at process start. Anyone who launched
+        Kayak before Docker Desktop -- the normal order for someone opening their
+        laptop -- was told "Docker is not available" until they restarted Kayak.
+        """
+        if self._docker_available and self._client:
+            return True
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._init_docker)
+        return self._docker_available
+
+    def _superseded(self, generation: int) -> bool:
+        """True when a newer deploy or stop has taken over since this task began."""
+        return generation != self._deploy_generation
 
     def _get_endpoint_urls(self) -> List[str]:
         """Returns the ordered list of vLLM endpoint URLs to probe."""
@@ -251,12 +332,21 @@ class VLLMManager:
         self._listeners.discard(queue)
 
     def _broadcast(self, data: Dict[str, Any]) -> None:
-        """Dispatches event to all active SSE queues."""
+        """Dispatches event to all active SSE queues.
+
+        A full queue drops its oldest entry, not the new one: the latest status is
+        the only one that matters, and a slow consumer that silently lost the final
+        "ready" would keep showing a deployment in progress forever.
+        """
         for queue in list(self._listeners):
             try:
                 queue.put_nowait(data)
             except asyncio.QueueFull:
-                pass
+                try:
+                    queue.get_nowait()
+                    queue.put_nowait(data)
+                except (asyncio.QueueEmpty, asyncio.QueueFull):
+                    pass
 
     def _add_log(self, line: str) -> None:
         """Appends a line to the logs buffer and broadcasts to subscribers."""
@@ -295,12 +385,20 @@ class VLLMManager:
     async def deploy_model(self, request: VLLMDeployRequest) -> VLLMDeploymentProgress:
         """Deploys a Hugging Face model on local vLLM or Apple GPU Metal via launcher.
 
+        Serialized with stop and status-sync: overlapping deploys and stops used to
+        interleave freely, so two rapid clicks could race two deployment runners
+        that removed each other's containers.
+
         Args:
             request: Configuration parameters for the vLLM server.
 
         Returns:
             Current deployment status.
         """
+        async with self._control_lock:
+            return await self._deploy_locked(request)
+
+    async def _deploy_locked(self, request: VLLMDeployRequest) -> VLLMDeploymentProgress:
         # 1. Handle MLX models on Apple Silicon
         if metal.is_mlx_model(request.model_id):
             metal_status = metal.read_status()
@@ -315,15 +413,22 @@ class VLLMManager:
             if (
                 self._status.model_id == request.model_id
                 and self._status.state in _ACTIVE_STATES
-                and metal_status.state == "ready"
-                # "ready" alone is not enough: the launcher may still be
-                # reporting on a different model it was serving until now.
-                and metal_status.model == request.model_id
+                and (
+                    # Already coming up: repeated clicks must not restart it.
+                    (self._metal_monitor_task and not self._metal_monitor_task.done())
+                    # Already serving. "ready" alone is not enough: the launcher may
+                    # still be reporting on a different model it served until now.
+                    or (
+                        metal_status.state == "ready"
+                        and metal_status.model == request.model_id
+                    )
+                )
             ):
                 return self.get_status()
 
-            await self.stop_server()
+            await self._stop_locked()
 
+            generation = self._deploy_generation
             self._log_history.clear()
             self._status = VLLMDeploymentProgress(
                 model_id=request.model_id,
@@ -332,6 +437,7 @@ class VLLMManager:
                 port=metal_status.port or settings.VLLM_PORT,
                 endpoint=settings.VLLM_API_BASE,
             )
+            self._active_request = request
             self._broadcast({"type": "status", "data": self._status.model_dump()})
             self._add_log(f"Requesting launcher to serve MLX model {request.model_id} on Apple GPU...")
 
@@ -342,11 +448,8 @@ class VLLMManager:
             request_token = uuid.uuid4().hex
             metal.write_desired(running=True, model=request.model_id, request=request_token)
 
-            if self._metal_monitor_task and not self._metal_monitor_task.done():
-                self._metal_monitor_task.cancel()
-
             self._metal_monitor_task = asyncio.create_task(
-                self._run_metal_deployment(request.model_id, request_token)
+                self._run_metal_deployment(request.model_id, request_token, generation)
             )
             return self.get_status()
 
@@ -359,7 +462,7 @@ class VLLMManager:
             if self._metal_monitor_task and not self._metal_monitor_task.done():
                 self._metal_monitor_task.cancel()
 
-        if not self._docker_available or not self._client:
+        if not await self._ensure_docker():
             self._update_status(
                 state=VLLMServerState.ERROR,
                 message="Docker is not available on this system.",
@@ -367,16 +470,21 @@ class VLLMManager:
             )
             return self.get_status()
 
-        # Guard: if already deploying or serving the same model, skip
+        # Guard: if already deploying or serving the same model, skip -- unless the
+        # caller explicitly asked to restart, which is how "same model, different
+        # settings" is applied. Bare deploys (from the chat composer) stay a no-op so
+        # they can never restart a server someone tuned deliberately.
         if (
             self._status.model_id == request.model_id
             and self._status.state in _ACTIVE_STATES
+            and not request.force_restart
         ):
             return self.get_status()
 
         # Stop existing deployment if running
-        await self.stop_server()
+        await self._stop_locked()
 
+        generation = self._deploy_generation
         self._log_history.clear()
         self._status = VLLMDeploymentProgress(
             model_id=request.model_id,
@@ -385,18 +493,15 @@ class VLLMManager:
             port=settings.VLLM_PORT,
             endpoint=settings.VLLM_API_BASE,
         )
+        self._active_request = request
         self._broadcast({"type": "status", "data": self._status.model_dump()})
 
         # Ensure HF cache directory on host
         hf_cache_dir = settings.DATA_DIR / "huggingface_cache"
         hf_cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Start background deployment runner
-        if self._monitor_task and not self._monitor_task.done():
-            self._monitor_task.cancel()
-
         self._monitor_task = asyncio.create_task(
-            self._run_deployment(request, hf_cache_dir)
+            self._run_deployment(request, hf_cache_dir, generation)
         )
         return self.get_status()
 
@@ -404,6 +509,7 @@ class VLLMManager:
         self,
         model_id: str,
         request_token: Optional[str] = None,
+        generation: Optional[int] = None,
         timeout_seconds: int = HEALTH_TIMEOUT_SECONDS,
     ) -> None:
         """Monitors launcher status while starting a Metal server.
@@ -417,6 +523,8 @@ class VLLMManager:
         statuses about a different model.
         """
         deadline = time.monotonic() + timeout_seconds
+        if generation is None:
+            generation = self._deploy_generation
 
         def answers_this_deployment(status) -> bool:
             if request_token and status.acknowledges_requests:
@@ -428,8 +536,8 @@ class VLLMManager:
                 await asyncio.sleep(1.0)
                 metal_status = metal.read_status()
 
-                # Bail if deployment was cancelled or stopped
-                if self._status.state in (
+                # Bail if deployment was cancelled, stopped, or replaced
+                if self._superseded(generation) or self._status.state in (
                     VLLMServerState.STOPPED,
                     VLLMServerState.IDLE,
                 ):
@@ -467,16 +575,24 @@ class VLLMManager:
                     self._add_log(f"✗ Metal server error: {err_msg}")
                     return
 
-            self._update_status(
-                state=VLLMServerState.ERROR,
-                message=f"Metal server did not become ready within {timeout_seconds // 60} minutes",
-                error="Timed out waiting for launcher to start Metal server.",
-            )
+            if not self._superseded(generation):
+                self._update_status(
+                    state=VLLMServerState.ERROR,
+                    message=f"Metal server did not become ready within {timeout_seconds // 60} minutes",
+                    error="Timed out waiting for launcher to start Metal server.",
+                )
         except asyncio.CancelledError:
             pass
 
-    async def _run_deployment(self, request: VLLMDeployRequest, hf_cache_dir: Path) -> None:
-        """Asynchronous runner that pulls images, starts container, and polls health."""
+    async def _run_deployment(
+        self, request: VLLMDeployRequest, hf_cache_dir: Path, generation: int
+    ) -> None:
+        """Asynchronous runner that pulls images, starts container, and polls health.
+
+        The generation captured at launch gates every write to shared state: once a
+        newer deploy or stop supersedes this runner, it must fall silent instead of
+        overwriting the state of whatever replaced it.
+        """
         try:
             loop = asyncio.get_running_loop()
 
@@ -510,6 +626,10 @@ class VLLMManager:
 
                 def _stream_pull():
                     for line in self._client.api.pull(image_name, stream=True, decode=True):
+                        # A stop or replacement mid-pull must silence this stream;
+                        # the download itself is harmless and simply caches layers.
+                        if self._superseded(generation):
+                            return
                         status_str = line.get("status", "")
                         progress_detail = line.get("progress", "")
                         layer_id = line.get("id", "")
@@ -521,6 +641,8 @@ class VLLMManager:
                             loop.call_soon_threadsafe(self._add_log, msg)
 
                 await loop.run_in_executor(None, _stream_pull)
+                if self._superseded(generation):
+                    return
                 self._add_log(f"✓ Image {image_name} successfully pulled.")
 
             # 3. Build Container Execution Arguments & Environment
@@ -562,17 +684,25 @@ class VLLMManager:
                     "--enforce-eager",
                 ])
 
-                # Sized to the machine. vLLM refuses to start when the requested KV
-                # cache exceeds free memory, so a fixed figure made every CPU launch
-                # fail on any host smaller than that figure.
+                # Sized to what the container will actually have: the user's
+                # allocation when one was chosen, otherwise everything Docker has.
+                # vLLM refuses to start when the requested KV cache exceeds free
+                # memory, so a fixed figure made every CPU launch fail on any host
+                # smaller than that figure.
                 total_memory = await self._docker_memory_bytes()
-                kvcache_gib = resolve_cpu_kvcache_gib(total_memory, request.cpu_kvcache_space_gb)
+                effective_memory = total_memory
+                if request.memory_limit_gb:
+                    limit_bytes = int(request.memory_limit_gb * 1024 ** 3)
+                    effective_memory = (
+                        min(total_memory, limit_bytes) if total_memory else limit_bytes
+                    )
+                kvcache_gib = resolve_cpu_kvcache_gib(effective_memory, request.cpu_kvcache_space_gb)
                 env_vars["VLLM_CPU_KVCACHE_SPACE"] = str(kvcache_gib)
                 shm_size = f"{kvcache_gib}g"
 
-                if total_memory:
+                if effective_memory:
                     self._add_log(
-                        f"ℹ Docker reports {total_memory / 1024 ** 3:.1f} GiB of memory; "
+                        f"ℹ The container has {effective_memory / 1024 ** 3:.1f} GiB of memory to work with; "
                         f"reserving {kvcache_gib} GiB for the KV cache."
                     )
 
@@ -586,6 +716,14 @@ class VLLMManager:
                 "--enable-auto-tool-choice",
                 "--tool-call-parser", tool_call_parser(request.model_id),
             ])
+
+            if request.memory_limit_gb or request.cpu_limit:
+                limits = []
+                if request.memory_limit_gb:
+                    limits.append(f"{request.memory_limit_gb:g} GiB of RAM")
+                if request.cpu_limit:
+                    limits.append(f"{request.cpu_limit:g} CPU cores")
+                self._add_log(f"ℹ Container limited to {' and '.join(limits)}.")
 
             self._update_status(
                 state=VLLMServerState.LOADING,
@@ -601,6 +739,9 @@ class VLLMManager:
                     old_c.remove(force=True)
                 except Exception:
                     pass
+
+                if self._superseded(generation):
+                    return None
 
                 hf_cache_src = DockerPathResolver.resolve_volume_source(
                     hf_cache_dir,
@@ -629,10 +770,30 @@ class VLLMManager:
                     run_kwargs["device_requests"] = device_requests
                 if shm_size is not None:
                     run_kwargs["shm_size"] = shm_size
+                # Container-level ceilings, chosen by the user. Unset means the
+                # container may use everything the Docker VM has.
+                if request.memory_limit_gb:
+                    run_kwargs["mem_limit"] = f"{int(request.memory_limit_gb * 1024)}m"
+                if request.cpu_limit:
+                    run_kwargs["nano_cpus"] = int(request.cpu_limit * 1_000_000_000)
 
-                return self._client.containers.run(**run_kwargs)
+                created = self._client.containers.run(**run_kwargs)
+
+                # A stop that raced this thread has already done its removal, so a
+                # container created after that point would outlive the "stopped"
+                # status unnoticed. The generation bump happens before the stop's
+                # removal, so checking after creation closes both orderings.
+                if self._superseded(generation):
+                    try:
+                        created.remove(force=True)
+                    except Exception:
+                        pass
+                    return None
+                return created
 
             container = await loop.run_in_executor(None, _start_container)
+            if container is None or self._superseded(generation):
+                return
             self._status.container_id = container.id
             self._add_log(f"Container created with ID: {container.id[:12]}")
 
@@ -643,15 +804,50 @@ class VLLMManager:
             self._spawn_log_stream_thread(container, loop, self._log_stop_event)
 
             # 6. Poll health endpoint until healthy (non-blocking)
-            await self._poll_health_endpoint(request.model_id)
+            await self._poll_health_endpoint(request.model_id, generation)
+
+            # 7. Self-heal the one predictable zero-config failure: the model's
+            # default context needs more KV cache than this machine has. vLLM's
+            # error names the context length that would fit, so retry once with
+            # it rather than handing the user a number to type back in.
+            if not self._superseded(generation):
+                retry = self._context_retry_request(request)
+                if retry is not None:
+                    self._retry_task = asyncio.create_task(self._redeploy_with_context(retry))
 
         except Exception as error:
+            if self._superseded(generation):
+                return
             self._add_log(f"Deployment encountered error: {str(error)}")
             self._update_status(
                 state=VLLMServerState.ERROR,
                 message=f"Failed to deploy {request.model_id}",
                 error=str(error),
             )
+
+    def _context_retry_request(self, request: VLLMDeployRequest) -> Optional[VLLMDeployRequest]:
+        """The follow-up request for a start that failed only on context length.
+
+        Only fires when the deployment errored, the user left the context length to
+        the model's default, and the log carries vLLM's estimate of what fits. The
+        retry sets max_model_len explicitly, so it can never fire twice.
+        """
+        if self._status.state != VLLMServerState.ERROR or request.max_model_len is not None:
+            return None
+        fitted = extract_fitting_context(self._log_history)
+        if fitted is None:
+            return None
+        return request.model_copy(update={"max_model_len": fitted, "force_restart": True})
+
+    async def _redeploy_with_context(self, retry: VLLMDeployRequest) -> None:
+        try:
+            await self.deploy_model(retry)
+            self._add_log(
+                f"ℹ The model's default context does not fit in this machine's memory; "
+                f"restarted automatically with a {retry.max_model_len}-token context."
+            )
+        except Exception:
+            logger.exception("Automatic context-length retry failed to start")
 
     def _spawn_log_stream_thread(
         self,
@@ -745,21 +941,37 @@ class VLLMManager:
             exit_code=exit_code if exit_code is not None else -1,
         )
 
+    @staticmethod
+    def _endpoint_serves_model(payload: Any, model_id: str) -> bool:
+        """Whether a /v1/models response says the requested model is being served.
+
+        A 200 alone is not proof of readiness: during a backend switch the previous
+        server — a Metal process winding down, or an older container — can still be
+        answering on the same port, so a deployment used to report READY the moment
+        anything at all responded, serving the wrong model.
+        """
+        try:
+            served = payload.get("data", [])
+        except AttributeError:
+            return False
+        return any(
+            isinstance(entry, dict) and entry.get("id") == model_id for entry in served
+        )
+
     async def _poll_health_endpoint(
         self,
         model_id: str,
+        generation: Optional[int] = None,
         timeout_seconds: int = HEALTH_TIMEOUT_SECONDS,
     ) -> None:
-        """Waits for the vLLM endpoint to answer, or for the container to die trying.
+        """Waits for the vLLM endpoint to serve this model, or for the container to die.
 
         This is the sole mechanism for transitioning to READY state. It bounds itself on
-        wall-clock time rather than on a number of attempts: each attempt probes up to
-        five URLs with a one-second timeout apiece, so an attempt budget of 300 could
-        represent anything from five to twenty-five minutes.
+        wall-clock time rather than on a number of attempts, and it only accepts an
+        answer that names the model being deployed.
         """
-        urls_to_try = self._get_endpoint_urls() + [
-            f"http://host.docker.internal:{settings.VLLM_PORT}/health",
-        ]
+        if generation is None:
+            generation = self._deploy_generation
         deadline = time.monotonic() + timeout_seconds
         next_container_check = time.monotonic() + CONTAINER_CHECK_INTERVAL_SECONDS
 
@@ -767,18 +979,22 @@ class VLLMManager:
             while time.monotonic() < deadline:
                 await asyncio.sleep(1.0)
 
-                # Bail if deployment was cancelled or errored
-                if self._status.state in (
+                # Bail if deployment was cancelled, errored, or replaced
+                if self._superseded(generation) or self._status.state in (
                     VLLMServerState.ERROR,
                     VLLMServerState.STOPPED,
                     VLLMServerState.IDLE,
                 ):
                     return
 
-                for url in urls_to_try:
+                for url in self._get_endpoint_urls():
                     try:
                         res = await client.get(url)
-                        if res.status_code == 200:
+                        if res.status_code == 200 and self._endpoint_serves_model(
+                            res.json(), model_id
+                        ):
+                            if self._superseded(generation):
+                                return
                             self._update_status(
                                 state=VLLMServerState.READY,
                                 message=f"vLLM is serving {model_id} on port {settings.VLLM_PORT}",
@@ -793,6 +1009,8 @@ class VLLMManager:
                 if time.monotonic() >= next_container_check:
                     next_container_check = time.monotonic() + CONTAINER_CHECK_INTERVAL_SECONDS
                     container = await self._get_container()
+                    if self._superseded(generation):
+                        return
                     if container is None or container.status not in ("running", "created", "restarting"):
                         exit_code, oom_killed = (
                             self._read_exit(container) if container is not None else (None, False)
@@ -800,6 +1018,8 @@ class VLLMManager:
                         self._report_container_exit(exit_code, oom_killed)
                         return
 
+        if self._superseded(generation):
+            return
         minutes = timeout_seconds // 60
         self._update_status(
             state=VLLMServerState.ERROR,
@@ -812,6 +1032,15 @@ class VLLMManager:
 
     async def stop_server(self) -> None:
         """Stops and removes the running vLLM container or Metal server."""
+        async with self._control_lock:
+            await self._stop_locked()
+
+    async def _stop_locked(self) -> None:
+        # Supersede any in-flight deployment first: its monitors must stop writing
+        # status before this method starts rewriting it.
+        self._deploy_generation += 1
+        self._active_request = None
+
         if self._log_stop_event:
             self._log_stop_event.set()
             self._log_stop_event = None
@@ -858,18 +1087,34 @@ class VLLMManager:
         self._add_log("vLLM container stopped and removed.")
 
     async def check_and_sync_status(self) -> VLLMDeploymentProgress:
-        """Inspects Docker and probes the vLLM HTTP endpoint to synchronize internal state."""
+        """Inspects Docker and probes the vLLM HTTP endpoint to synchronize internal state.
+
+        While any deployment monitor is in flight, that monitor owns the status and
+        this method reports without probing: reconciling against a reality that is
+        mid-transition is how an in-flight deploy got overwritten by the state of the
+        server it was replacing.
+        """
+        if self._deployment_in_flight():
+            self._status.logs_tail = self._log_history[-30:]
+            return self._status
+
+        async with self._control_lock:
+            # A deploy may have started while this call waited on the lock.
+            if self._deployment_in_flight():
+                self._status.logs_tail = self._log_history[-30:]
+                return self._status
+            return await self._sync_locked()
+
+    def _deployment_in_flight(self) -> bool:
+        return bool(
+            (self._monitor_task and not self._monitor_task.done())
+            or (self._metal_monitor_task and not self._metal_monitor_task.done())
+        )
+
+    async def _sync_locked(self) -> VLLMDeploymentProgress:
         # 0. Check Metal status first if supported
         metal_status = metal.read_status()
         if metal_status.supported:
-            # While a Metal deployment is in flight, its monitor task owns the
-            # status: the file on disk lags the launcher's reconcile loop and
-            # can still describe the previous server. Syncing from it here is
-            # how a freshly requested model showed as "serving" instantly.
-            if self._metal_monitor_task and not self._metal_monitor_task.done():
-                self._status.logs_tail = self._log_history[-30:]
-                return self._status
-
             if metal_status.state == "ready" and metal_status.model:
                 if self._status.state != VLLMServerState.READY or self._status.model_id != metal_status.model:
                     self._status.state = VLLMServerState.READY
@@ -893,14 +1138,27 @@ class VLLMManager:
                     self._status.error = None
                     self._broadcast({"type": "status", "data": self._status.model_dump()})
                 if not self._metal_monitor_task or self._metal_monitor_task.done():
+                    # A deployment discovered rather than requested -- the backend
+                    # restarted while the launcher was mid-start. Adopt it under a
+                    # fresh generation so the new monitor owns the status.
+                    self._deploy_generation += 1
                     self._metal_monitor_task = asyncio.create_task(
-                        self._run_metal_deployment(metal_status.model)
+                        self._run_metal_deployment(
+                            metal_status.model, generation=self._deploy_generation
+                        )
                     )
                 self._status.logs_tail = self._log_history[-30:]
                 return self._status
             elif (
                 metal_status.state == "error"
-                and self._status.state in (VLLMServerState.LOADING, VLLMServerState.STARTING_CONTAINER)
+                # READY included: a Metal server can die after coming up, and
+                # reporting that as a quiet "stopped" hid the launcher's reason.
+                and self._status.state
+                in (
+                    VLLMServerState.LOADING,
+                    VLLMServerState.STARTING_CONTAINER,
+                    VLLMServerState.READY,
+                )
                 and self._status.model_id == metal_status.model
             ):
                 self._status.state = VLLMServerState.ERROR
@@ -926,7 +1184,7 @@ class VLLMManager:
 
         # 2. Check Docker container state if docker client is available
         container = None
-        if self._docker_available and self._client:
+        if await self._ensure_docker():
             try:
                 loop = asyncio.get_running_loop()
                 container = await loop.run_in_executor(
@@ -1028,7 +1286,12 @@ class VLLMManager:
                         models = resp.json().get("data", [])
                         if models:
                             active_id = models[0].get("id")
-                            if self._status.state != VLLMServerState.READY or self._status.model_id != active_id:
+                            # While a deployment is in flight its monitor owns the
+                            # status; a 200 here may still be the outgoing server.
+                            if not self._deployment_in_flight() and (
+                                self._status.state != VLLMServerState.READY
+                                or self._status.model_id != active_id
+                            ):
                                 self._status.state = VLLMServerState.READY
                                 self._status.model_id = active_id
                                 self._status.message = f"vLLM server is healthy and serving {active_id}"
@@ -1045,30 +1308,40 @@ class VLLMManager:
         """Host directory mounted into the container as the Hugging Face cache."""
         return settings.DATA_DIR / "huggingface_cache"
 
-    async def _docker_memory_bytes(self) -> Optional[int]:
-        """Returns the memory Docker reports for its host, or None if unavailable.
+    async def _docker_resources(self) -> Tuple[Optional[int], Optional[int]]:
+        """Returns (memory bytes, CPU count) as Docker reports them, or Nones.
 
-        On Docker Desktop this is the VM's allocation rather than the laptop's RAM,
-        which is exactly the number that bounds a container.
+        On Docker Desktop these are the VM's allocation rather than the laptop's
+        hardware, which is exactly what bounds a container.
         """
         if not self._docker_available or not self._client:
-            return None
+            return None, None
 
-        def _read() -> Optional[int]:
+        def _read() -> Tuple[Optional[int], Optional[int]]:
             try:
-                total = self._client.info().get("MemTotal")
-                return int(total) if total else None
+                info = self._client.info()
+                total = info.get("MemTotal")
+                cpus = info.get("NCPU")
+                return (
+                    int(total) if total else None,
+                    int(cpus) if cpus else None,
+                )
             except Exception:
-                return None
+                return None, None
 
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _read)
+
+    async def _docker_memory_bytes(self) -> Optional[int]:
+        """Returns the memory Docker reports for its host, or None if unavailable."""
+        memory, _cpus = await self._docker_resources()
+        return memory
 
     async def get_host_capability(self) -> HostCapability:
         """Reports GPU inventory, Docker availability, and whether the image is pulled."""
         image_present: Optional[bool] = None
 
-        if self._docker_available and self._client:
+        if await self._ensure_docker():
             def _has_image() -> Optional[bool]:
                 for image_name in (GPU_IMAGE, CPU_IMAGE):
                     try:
@@ -1083,9 +1356,10 @@ class VLLMManager:
             loop = asyncio.get_running_loop()
             image_present = await loop.run_in_executor(None, _has_image)
 
-        total_memory = await self._docker_memory_bytes()
+        total_memory, total_cpus = await self._docker_resources()
         capability = await probe_host_capability(self._docker_available, image_present)
         capability.total_memory_mb = int(total_memory / (1024 ** 2)) if total_memory else 0
+        capability.total_cpus = total_cpus or 0
         capability.default_cpu_kvcache_gb = resolve_cpu_kvcache_gib(total_memory)
         return capability
 
@@ -1109,6 +1383,52 @@ class VLLMManager:
             self._status.model_id == repo_id
             and self._status.state in _ACTIVE_STATES
         )
+
+    def start_watchdog(self) -> None:
+        """Starts the periodic reconcile loop, once, for the process lifetime.
+
+        SSE only broadcasts on change, and nothing changes unless something looks.
+        Without this loop, a model that crashed while serving kept showing as ONLINE
+        in every tab until a page was reloaded, and a deployment interrupted by a
+        backend restart never progressed past the state it was rediscovered in.
+        """
+        if self._watchdog_task and not self._watchdog_task.done():
+            return
+        self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+
+    async def _watchdog_loop(self) -> None:
+        while True:
+            await asyncio.sleep(WATCHDOG_INTERVAL_SECONDS)
+            try:
+                if self._deployment_in_flight():
+                    continue
+                await self.check_and_sync_status()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("vLLM watchdog reconcile failed; will retry")
+
+    async def shutdown(self) -> None:
+        """Stops background monitors on process shutdown.
+
+        The server container itself is left running deliberately: it survives a
+        backend restart and is re-adopted by check_and_sync_status on the way up.
+        """
+        for task in (
+            self._watchdog_task,
+            self._monitor_task,
+            self._metal_monitor_task,
+            self._retry_task,
+        ):
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+        if self._log_stop_event:
+            self._log_stop_event.set()
+            self._log_stop_event = None
 
     async def delete_cached_model(self, repo_id: str) -> int:
         """Removes a repository's weights from the local cache.

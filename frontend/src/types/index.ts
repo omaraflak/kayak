@@ -279,6 +279,15 @@ export interface VLLMDeployRequest {
   trust_remote_code?: boolean;
   /** CPU deployments only: memory reserved for the KV cache, in GiB. */
   cpu_kvcache_space_gb?: number | null;
+  /** RAM ceiling for the container, in GiB. Unset = all the memory Docker has. */
+  memory_limit_gb?: number | null;
+  /** CPU cores the container may use. Unset = all cores. */
+  cpu_limit?: number | null;
+  /**
+   * Restart even if this model is already being served. Set by the launch dialog,
+   * where settings were chosen deliberately; bare deploys leave a running server alone.
+   */
+  force_restart?: boolean;
 }
 
 export interface GPUDevice {
@@ -292,6 +301,8 @@ export interface HostCapability {
   total_vram_mb: number;
   /** Memory Docker reports for its host — what actually bounds a CPU deployment. */
   total_memory_mb: number;
+  /** CPU cores Docker reports for its host. */
+  total_cpus: number;
   /** KV cache size a CPU deployment would use by default, in GiB. */
   default_cpu_kvcache_gb: number;
   accelerator: 'cuda' | 'cpu';

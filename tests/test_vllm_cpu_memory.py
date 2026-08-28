@@ -40,8 +40,11 @@ class TestResolveCpuKvcacheGib:
         assert chosen >= 1
         assert chosen <= 2, "would not fit alongside the model and the vLLM runtime"
 
-    def test_a_large_machine_gets_more_but_stays_bounded(self):
-        assert resolve_cpu_kvcache_gib(64 * GIB) == 8
+    def test_the_default_scales_with_the_machine_uncapped(self):
+        # The recommendation is a share of the machine, not a fixed ceiling: a big
+        # machine should be offered a big cache, with the user free to override.
+        assert resolve_cpu_kvcache_gib(64 * GIB) == 16
+        assert resolve_cpu_kvcache_gib(256 * GIB) == 64
 
     def test_a_tiny_machine_still_gets_a_usable_cache(self):
         # Below the headroom the arithmetic goes negative; it must not return 0 or less,
@@ -60,8 +63,14 @@ class TestResolveCpuKvcacheGib:
         assert resolve_cpu_kvcache_gib(int(7.77 * GIB), requested_gib=999) <= 2
 
     def test_an_explicit_choice_is_still_floored(self):
-        assert resolve_cpu_kvcache_gib(64 * GIB, requested_gib=0) == 8
+        # A falsy request falls through to the derived default.
+        assert resolve_cpu_kvcache_gib(64 * GIB, requested_gib=0) == 16
         assert resolve_cpu_kvcache_gib(64 * GIB, requested_gib=-3) == 1
+
+    def test_a_big_machine_can_ask_for_a_big_cache(self):
+        # The automatic default stays modest, but an explicit request may use most of
+        # the machine: flexibility is the point of exposing the setting at all.
+        assert resolve_cpu_kvcache_gib(128 * GIB, requested_gib=100) == 100
 
     @pytest.mark.parametrize("unknown", [None, 0])
     def test_an_unknown_machine_gets_a_conservative_default(self, unknown):
@@ -107,3 +116,53 @@ class TestExtractFailureReason:
         assert extract_failure_reason(["ValueError:", "RuntimeError: the real problem"]) == (
             "RuntimeError: the real problem"
         )
+
+
+#: The actual failure observed on 2026-08-28: Qwen3-0.6B's native 40960-token context
+#: needs a 4.38 GiB KV cache on a machine that only has 1 GiB to give. The oneDNN
+#: warning above it names an "Exception" but was recovered from with a fallback.
+CONTEXT_TOO_LARGE_LOG = [
+    "(Worker pid=166) WARNING 08-28 07:38:13 [utils.py:368] Failed to create oneDNN"
+    " linear, fallback to torch linear. Exception: could not create a primitive"
+    " descriptor for the matmul primitive.",
+    "(Worker pid=166) INFO 08-28 07:39:28 [cpu_worker.py:255] Explicitly set (1.0/7.75)"
+    " GiB for KV cache on node 0.",
+    "(EngineCore pid=110) ERROR 08-28 07:39:28 [core.py:1346] ValueError: To serve at"
+    " least one request with the model's max seq len (40960), (4.38 GiB KV cache is"
+    " needed, which is larger than the available KV cache memory (1.0 GiB). Based on"
+    " the available memory, the estimated maximum model length is 9344. Try increasing"
+    " `gpu_memory_utilization` ... or decreasing `max_model_len` when initializing the"
+    " engine.",
+    "(APIServer pid=1) RuntimeError: Engine core initialization failed. See root cause above.",
+]
+
+
+class TestFailureReasonSkipsRecoveredWarnings:
+    def test_a_warning_with_a_fallback_is_not_the_crash_reason(self):
+        # The oneDNN warning names an "Exception" but vLLM recovered from it; quoting
+        # it as the failure sent the user chasing a matmul primitive that was fine.
+        reason = extract_failure_reason(CONTEXT_TOO_LARGE_LOG)
+
+        assert "oneDNN" not in (reason or "")
+        assert reason is not None
+        assert reason.startswith("ValueError: To serve at least one request")
+
+
+class TestExtractFittingContext:
+    def test_reads_the_length_vllm_says_would_fit(self):
+        from backend.app.vllm.manager import extract_fitting_context
+
+        assert extract_fitting_context(CONTEXT_TOO_LARGE_LOG) == 9344
+
+    def test_reports_nothing_for_other_failures(self):
+        from backend.app.vllm.manager import extract_fitting_context
+
+        assert extract_fitting_context(QWEN_FAILURE_LOG) is None
+        assert extract_fitting_context([]) is None
+
+    def test_a_context_too_small_to_be_useful_is_not_offered(self):
+        from backend.app.vllm.manager import extract_fitting_context
+
+        assert extract_fitting_context(
+            ["... the estimated maximum model length is 512. Try ..."]
+        ) is None

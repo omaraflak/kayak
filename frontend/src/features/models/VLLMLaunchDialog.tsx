@@ -25,6 +25,8 @@ const CONTEXT_PRESETS = [
   { value: 8192, label: '8K' },
   { value: 16384, label: '16K' },
   { value: 32768, label: '32K' },
+  { value: 65536, label: '64K' },
+  { value: 131072, label: '128K' },
 ];
 
 interface VLLMLaunchDialogProps {
@@ -55,15 +57,31 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
   const hasGPU = (capability?.total_vram_mb ?? 0) > 0;
   const availableGB = (capability?.total_vram_mb ?? 0) / 1024;
   const systemMemoryGB = (capability?.total_memory_mb ?? 0) / 1024;
+  const totalCpus = capability?.total_cpus ?? 0;
   const estimate = useMemo(() => estimateModelSize(modelId), [modelId]);
   const fit = judgeFit(estimate, availableGB);
 
-  // Sized from the machine by the server; adjustable here because it is the setting
-  // that decides whether a CPU deployment starts at all.
+  // Container-level allocation. Everything Docker has is the recommended default
+  // for model serving; lowering either protects the rest of the machine.
+  const maxContainerMemoryGB = Math.max(1, Math.floor(systemMemoryGB));
+  const [containerMemoryGB, setContainerMemoryGB] = useState<number | null>(null);
+  const [containerCpus, setContainerCpus] = useState<number | null>(null);
+  const effectiveContainerMemoryGB = Math.min(
+    containerMemoryGB ?? maxContainerMemoryGB,
+    maxContainerMemoryGB
+  );
+  const effectiveContainerCpus = Math.min(containerCpus ?? totalCpus, Math.max(totalCpus, 1));
+
+  // Sized from the container's allocation by the server; adjustable here because it
+  // is the setting that decides whether a CPU deployment starts at all.
   const [kvCacheGB, setKvCacheGB] = useState<number | null>(null);
   const memoryCeilingGB = useMemo(
-    () => maxWorkingMemoryGB(systemMemoryGB, estimate),
-    [systemMemoryGB, estimate]
+    () =>
+      maxWorkingMemoryGB(
+        systemMemoryGB > 0 ? effectiveContainerMemoryGB : systemMemoryGB,
+        estimate
+      ),
+    [systemMemoryGB, effectiveContainerMemoryGB, estimate]
   );
   const effectiveKvCacheGB = Math.min(
     kvCacheGB ?? capability?.default_cpu_kvcache_gb ?? 1,
@@ -79,6 +97,17 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
       enforce_eager: enforceEager,
       trust_remote_code: trustRemoteCode,
       cpu_kvcache_space_gb: hasGPU ? null : effectiveKvCacheGB,
+      // "All of it" is expressed as no limit at all, so a machine whose Docker
+      // allocation grows later is not silently pinned to today's figure.
+      memory_limit_gb:
+        systemMemoryGB > 0 && effectiveContainerMemoryGB < maxContainerMemoryGB
+          ? effectiveContainerMemoryGB
+          : null,
+      cpu_limit:
+        totalCpus > 0 && effectiveContainerCpus < totalCpus ? effectiveContainerCpus : null,
+      // Settings picked here are deliberate: applying them to a model that is
+      // already up requires the restart a bare deploy deliberately avoids.
+      force_restart: true,
     });
   };
 
@@ -189,6 +218,62 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
             </div>
           </Field>
 
+          {systemMemoryGB > 0 && (
+            <Field
+              label={`Container memory — ${effectiveContainerMemoryGB} GB${
+                effectiveContainerMemoryGB >= maxContainerMemoryGB ? ' (all of it)' : ''
+              }`}
+              hint={
+                'RAM the model container is allowed to use. Giving it everything is the ' +
+                'right choice while serving; lower it to keep room for agent sandboxes ' +
+                'and anything else running in Docker. Docker Desktop caps its own total ' +
+                'memory independently of the machine — raise it under Settings > ' +
+                'Resources > Memory if the maximum here looks low.'
+              }
+            >
+              <input
+                type="range"
+                min={1}
+                max={maxContainerMemoryGB}
+                step={1}
+                value={effectiveContainerMemoryGB}
+                onChange={(event) =>
+                  setContainerMemoryGB(Number.parseInt(event.target.value, 10))
+                }
+                disabled={maxContainerMemoryGB <= 1}
+                className="w-full accent-md-primary cursor-pointer disabled:opacity-50"
+              />
+              <div className="flex items-center justify-between text-[10px] text-md-on-surface-variant font-mono pt-1">
+                <span>1 GB</span>
+                <span>{maxContainerMemoryGB} GB available to Docker</span>
+              </div>
+            </Field>
+          )}
+
+          {totalCpus > 0 && (
+            <Field
+              label={`Container CPU — ${effectiveContainerCpus} core${
+                effectiveContainerCpus === 1 ? '' : 's'
+              }${effectiveContainerCpus >= totalCpus ? ' (all of them)' : ''}`}
+              hint="Cores the model may use. More cores generate faster; lower it to keep the machine responsive while a model is serving."
+            >
+              <input
+                type="range"
+                min={1}
+                max={totalCpus}
+                step={1}
+                value={effectiveContainerCpus}
+                onChange={(event) => setContainerCpus(Number.parseInt(event.target.value, 10))}
+                disabled={totalCpus <= 1}
+                className="w-full accent-md-primary cursor-pointer disabled:opacity-50"
+              />
+              <div className="flex items-center justify-between text-[10px] text-md-on-surface-variant font-mono pt-1">
+                <span>1 core</span>
+                <span>{totalCpus} cores available</span>
+              </div>
+            </Field>
+          )}
+
           {hasGPU ? (
             <Field
               label={`GPU memory fraction — ${Math.round(gpuMemory * 100)}%`}
@@ -210,10 +295,8 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
               hint={
                 'Space set aside for the model to remember the conversation as it runs. ' +
                 'More lets it handle longer conversations at once; the slider stops where ' +
-                'Docker runs out of room, because asking for more than that prevents ' +
-                'the model from starting at all. Docker Desktop caps its own memory ' +
-                'independently of how much this machine has — raise it under ' +
-                'Settings > Resources > Memory if the ceiling here looks low.'
+                'the container runs out of room, because asking for more than that ' +
+                'prevents the model from starting at all.'
               }
             >
               <input
@@ -232,7 +315,8 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
                 <span>1 GB</span>
                 <span>
                   {memoryCeilingGB} GB max
-                  {systemMemoryGB > 0 && ` · ${systemMemoryGB.toFixed(1)} GB available to Docker`}
+                  {systemMemoryGB > 0 &&
+                    ` · ${effectiveContainerMemoryGB} GB allocated to the container`}
                 </span>
               </div>
             </Field>

@@ -417,7 +417,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 {vllm.isOffline ? (
                   <button
                     type="button"
-                    onClick={() => vllm.start()}
+                    onClick={() => vllm.start().catch((err) => console.error('Failed to start local model:', err))}
                     className="inline-flex items-center space-x-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-md-primary text-md-on-primary hover:opacity-90 transition-opacity shadow-xs cursor-pointer"
                   >
                     <Play className="w-3.5 h-3.5 fill-current" />

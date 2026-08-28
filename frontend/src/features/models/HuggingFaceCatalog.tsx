@@ -155,8 +155,10 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
           {results.map((hfModel) => {
             const rawModelId = hfModel.id;
-            const isCurrentlyServing = activeVllmModelId === rawModelId;
+            // "Serving" and "starting" are disjoint: a model whose deployment is
+            // still in flight must not be presented as already active.
             const isCurrentlyLoading = isVllmLoading && activeVllmModelId === rawModelId;
+            const isCurrentlyServing = activeVllmModelId === rawModelId && !isVllmLoading;
             const isCached = cachedModelIds?.has(rawModelId) ?? false;
             const estimate = estimateModelSize(rawModelId);
             const fit = judgeFit(estimate, availableVramGB);
@@ -267,6 +269,8 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                       <span className="text-[10px] text-md-on-surface-variant">
                         {isCurrentlyServing
                           ? 'Serving now'
+                          : isCurrentlyLoading
+                          ? 'Coming up now'
                           : isVllmLoading
                           ? 'Another model is starting'
                           : isCached

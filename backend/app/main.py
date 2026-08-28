@@ -71,6 +71,9 @@ async def lifespan(app: FastAPI):
     from backend.app.vllm.manager import vllm_manager
 
     track_background_task(asyncio.create_task(vllm_manager.check_and_sync_status()))
+    # Keeps the reported state truthful while nobody is polling: crashes after READY
+    # and deployments adopted across a backend restart are noticed here.
+    vllm_manager.start_watchdog()
 
     if not settings.AUTH_TOKEN and settings.HOST not in ("127.0.0.1", "localhost", "::1"):
         logger.warning(
@@ -83,8 +86,11 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown: stop sandbox containers this process started so they do not outlive it.
+    # The vLLM server container is deliberately left running -- it is re-adopted on the
+    # next startup -- but its monitors must not outlive the event loop.
     await turns.cancel_all()
     await sandbox_manager.shutdown_all()
+    await vllm_manager.shutdown()
 
 
 app = FastAPI(

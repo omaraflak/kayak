@@ -303,7 +303,14 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                     setCandidateHfMode('vllm');
                   }
                 }}
-                activeVllmModelId={vllmStatus?.model_id}
+                // A stopped or failed server no longer serves its last model, so
+                // its id must not mark any card as active here.
+                activeVllmModelId={
+                  vllmStatus?.state === 'ready' ||
+                  VLLM_LOADING_STATES.includes(vllmStatus?.state || '')
+                    ? vllmStatus?.model_id
+                    : null
+                }
                 isVllmLoading={VLLM_LOADING_STATES.includes(vllmStatus?.state || '')}
                 metalSupported={metalStatus?.supported ?? false}
               />

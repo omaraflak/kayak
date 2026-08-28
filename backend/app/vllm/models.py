@@ -22,10 +22,27 @@ class VLLMDeployRequest(BaseModel):
     enforce_eager: bool = Field(False, description="Disable CUDA graph capture for reduced memory usage")
     dtype: str = Field("auto", description="Data type for model weights ('auto', 'float16', 'bfloat16')")
     #: CPU deployments only. vLLM refuses to start when this exceeds free memory, so
-    #: the default is derived from the memory Docker reports rather than fixed.
+    #: the default is derived from the memory Docker reports rather than fixed. The
+    #: upper bound exists only to reject nonsense; the real ceiling is the machine's
+    #: memory, enforced where the request is resolved.
     cpu_kvcache_space_gb: Optional[int] = Field(
-        None, ge=1, le=64, description="Memory reserved for the KV cache on CPU, in GiB"
+        None, ge=1, le=512, description="Memory reserved for the KV cache on CPU, in GiB"
     )
+    #: Container-level ceilings, applied by Docker rather than vLLM. None means
+    #: unlimited, i.e. everything the Docker VM has -- the right recommendation for
+    #: model serving, but the user's call: capping the container protects the rest
+    #: of the machine from a hungry model.
+    memory_limit_gb: Optional[float] = Field(
+        None, ge=1, description="RAM ceiling for the container, in GiB. None = all the memory Docker has."
+    )
+    cpu_limit: Optional[float] = Field(
+        None, gt=0, description="CPU cores the container may use. None = all cores."
+    )
+    #: A deploy of the model already being served is normally a no-op, so a bare
+    #: "make sure it is up" from the chat composer can never restart a server
+    #: someone tuned deliberately. Set by the launch dialog, where new settings
+    #: are chosen on purpose and applying them requires the restart.
+    force_restart: bool = Field(False, description="Restart the server even if this model is already being served")
     # Defaults off: this flag makes vLLM import and execute Python published in the
     # model repository, inside the container, with the Hugging Face token in its
     # environment. It is occasionally required, but it is never a safe default.
@@ -60,6 +77,8 @@ class HostCapability(BaseModel):
     #: Memory Docker reports for its host. On Docker Desktop this is the VM's
     #: allocation, which is what actually bounds a CPU deployment.
     total_memory_mb: int = 0
+    #: CPU cores Docker reports for its host, bounding a container's cpu limit.
+    total_cpus: int = 0
     #: KV cache size a CPU deployment would use by default, in GiB.
     default_cpu_kvcache_gb: int = 0
     #: 'cuda' when the GPU image will be used, 'cpu' otherwise.
