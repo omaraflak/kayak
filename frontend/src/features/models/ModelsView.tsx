@@ -1,21 +1,16 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  Server,
   Cpu,
   Square,
   Terminal,
-  CheckCircle2,
   AlertCircle,
   Loader2,
-  RefreshCw,
   Layers,
   ChevronDown,
   ChevronUp,
   HardDrive,
   Trash2,
   Play,
-  Copy,
-  Check,
   Zap,
   Package,
 } from 'lucide-react';
@@ -48,7 +43,6 @@ export const ModelsView: React.FC = () => {
   const [isDeploying, setIsDeploying] = useState(false);
   const [pendingLaunch, setPendingLaunch] = useState<string | null>(null);
   const [showLogs, setShowLogs] = useState(false);
-  const [copied, setCopied] = useState(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   const isReady = status?.state === 'ready';
@@ -76,6 +70,34 @@ export const ModelsView: React.FC = () => {
     if (status?.state === 'ready' || status?.state === 'error') refreshMachine();
   }, [status?.state, refreshMachine]);
 
+  // Machine facts change outside the app -- Docker started, weights deleted on
+  // disk -- so they are re-read when the user comes back to the tab. This is
+  // what the manual refresh button used to exist for.
+  useEffect(() => {
+    const onFocus = () => {
+      fetchStatus();
+      refreshMachine();
+    };
+    const onVisible = () => {
+      if (!document.hidden) onFocus();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [fetchStatus, refreshMachine]);
+
+  // While Docker is down the page watches for it to come up, so starting Docker
+  // Desktop clears the warning without anyone having to reload anything.
+  const dockerDown = capability ? !capability.docker_available : false;
+  useEffect(() => {
+    if (!dockerDown) return;
+    const timer = setInterval(refreshMachine, 15000);
+    return () => clearInterval(timer);
+  }, [dockerDown, refreshMachine]);
+
   useEffect(() => {
     if (showLogs && logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
@@ -90,6 +112,23 @@ export const ModelsView: React.FC = () => {
 
   const cachedIds = new Set((cache?.models || []).map((model) => model.repo_id));
 
+  /**
+   * The model whose card carries the server state. Status, logs, and the stop
+   * control live in that model's row in the inventory below -- a separate
+   * "Server" section used to describe the same model a second time, and the two
+   * could disagree.
+   */
+  const activeModelId = isReady || isLoading || isError ? status?.model_id ?? null : null;
+  const cachedModels = cache?.models || [];
+  /** Inventory rows, the active model first -- including one being downloaded
+      or served from outside the cache, which has no cached entry yet. */
+  const displayModels =
+    activeModelId && !cachedModels.some((model) => model.repo_id === activeModelId)
+      ? [{ repo_id: activeModelId, size_bytes: 0, modified_at: 0 }, ...cachedModels]
+      : [...cachedModels].sort((a, b) =>
+          a.repo_id === activeModelId ? -1 : b.repo_id === activeModelId ? 1 : 0
+        );
+
   /** The GPU server's model, while it is coming up or serving. */
   const metalModelId =
     metal && (metal.state === 'ready' || metal.state === 'starting') ? metal.model : null;
@@ -101,7 +140,7 @@ export const ModelsView: React.FC = () => {
       dialog.alert({
         title: 'Docker is not available',
         message:
-          'Local serving runs vLLM in a Docker container. Start Docker and refresh this page.',
+          'Local serving runs vLLM in a Docker container. Start Docker and this page will notice on its own.',
         variant: 'danger',
       });
       return;
@@ -223,19 +262,6 @@ export const ModelsView: React.FC = () => {
     }
   };
 
-  const agentModelString = status?.model_id ? `vllm/${status.model_id}` : null;
-
-  const handleCopyModelString = async () => {
-    if (!agentModelString) return;
-    try {
-      await navigator.clipboard.writeText(agentModelString);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1600);
-    } catch {
-      /* clipboard access can be denied; the string is on screen either way */
-    }
-  };
-
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 bg-md-surface overflow-hidden font-sans transition-colors">
       <div className="h-16 border-b border-md-outline-variant px-8 flex items-center justify-between bg-md-surface-container-low shrink-0 transition-colors">
@@ -251,167 +277,9 @@ export const ModelsView: React.FC = () => {
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => {
-            fetchStatus();
-            refreshMachine();
-          }}
-          className="p-2 rounded-xl border border-md-outline-variant text-md-on-surface hover:bg-md-surface-container-high transition-colors shadow-2xs cursor-pointer"
-          title="Refresh status"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-8 py-6 space-y-8 bg-md-surface">
-        {/* ---------------------------------------------------------------- Runtime */}
-        <section className="space-y-3">
-          <SectionHeading
-            icon={<Server className="w-3.5 h-3.5 text-md-primary" />}
-            title="Server"
-            note={isReady ? 'Reachable by any agent using the model string below' : undefined}
-          />
-
-          <div className="bg-md-surface border border-md-outline-variant rounded-2xl p-6 shadow-xs space-y-4 transition-colors">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-center space-x-3 min-w-0">
-                <div
-                  className={`w-10 h-10 rounded-2xl flex items-center justify-center border shadow-xs shrink-0 ${
-                    isReady
-                      ? 'bg-emerald-100 dark:bg-emerald-950/80 border-emerald-300 dark:border-emerald-800/80 text-emerald-800 dark:text-emerald-200'
-                      : isLoading
-                      ? 'bg-amber-100 dark:bg-amber-950/80 border-amber-300 dark:border-amber-800/80 text-amber-800 dark:text-amber-200'
-                      : isError
-                      ? 'bg-rose-100 dark:bg-rose-950/80 border-rose-300 dark:border-rose-800/80 text-rose-800 dark:text-rose-200'
-                      : 'bg-md-surface-container-high border-md-outline-variant text-md-on-surface-variant'
-                  }`}
-                >
-                  {isLoading ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                  ) : isReady ? (
-                    <CheckCircle2 className="w-5 h-5 stroke-[2.5]" />
-                  ) : isError ? (
-                    <AlertCircle className="w-5 h-5" />
-                  ) : (
-                    <Server className="w-5 h-5" />
-                  )}
-                </div>
-
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-bold text-sm text-md-on-surface">
-                      {isReady
-                        ? `Serving ${status?.model_id}`
-                        : isLoading
-                        ? `Starting ${status?.model_id || 'vLLM'}`
-                        : isError
-                        ? 'Deployment failed'
-                        : 'No model running'}
-                    </h3>
-                    <StatusPill isReady={isReady} isLoading={isLoading} isError={isError} />
-                  </div>
-                  <p className="text-xs text-md-on-surface-variant mt-0.5 leading-relaxed">
-                    {status?.message || 'Pick a model below to start serving it locally.'}
-                  </p>
-                </div>
-              </div>
-
-              {(isReady || isLoading || metalModelId || metalBusy) && (
-                <button
-                  type="button"
-                  onClick={handleStopServer}
-                  disabled={isStopping}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-md-error hover:opacity-90 disabled:opacity-50 text-md-on-error text-xs font-semibold shadow-xs transition-opacity cursor-pointer shrink-0"
-                >
-                  {isStopping ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Square className="w-3.5 h-3.5 fill-current" />
-                  )}
-                  <span>Stop Server</span>
-                </button>
-              )}
-            </div>
-
-            {isError && status?.error && (
-              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800/80 text-rose-900 dark:text-rose-100 text-[11px] leading-relaxed">
-                {status.error}
-              </div>
-            )}
-
-            {/* The reason anyone starts a local server: a model string to point an
-                agent at. It was never shown, so it had to be reconstructed by hand. */}
-            {isReady && agentModelString && (
-              <div className="pt-3 border-t border-md-outline-variant grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="md:col-span-2 bg-md-primary-container/40 border border-md-primary/50 p-3 rounded-xl">
-                  <span className="text-[10px] text-md-on-surface-variant uppercase font-bold block mb-1">
-                    Use in an agent
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <code className="text-xs font-mono font-semibold text-md-on-surface truncate flex-1">
-                      {agentModelString}
-                    </code>
-                    <button
-                      type="button"
-                      onClick={handleCopyModelString}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-md-outline-variant bg-md-surface text-[10px] font-semibold text-md-on-surface hover:bg-md-surface-container-high transition-colors cursor-pointer shrink-0"
-                    >
-                      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                      {copied ? 'Copied' : 'Copy'}
-                    </button>
-                  </div>
-                </div>
-                <div className="bg-md-surface-container-lowest p-3 rounded-xl border border-md-outline-variant">
-                  <span className="text-[10px] text-md-on-surface-variant uppercase font-bold block mb-1">
-                    Endpoint
-                  </span>
-                  <span className="text-xs font-mono text-md-on-surface break-all">
-                    {status?.endpoint}
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {(isReady || isLoading || isError || logs.length > 0) && (
-              <div className="pt-2 border-t border-md-outline-variant space-y-2">
-                <button
-                  type="button"
-                  onClick={() => setShowLogs(!showLogs)}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-md-outline-variant bg-md-surface-container-low hover:bg-md-surface-container-high text-xs font-semibold text-md-on-surface transition-colors cursor-pointer shadow-2xs"
-                >
-                  <Terminal className="w-3.5 h-3.5 text-md-on-surface-variant" />
-                  <span>Container Logs ({logs.length} lines)</span>
-                  {showLogs ? (
-                    <ChevronUp className="w-3.5 h-3.5 text-md-on-surface-variant" />
-                  ) : (
-                    <ChevronDown className="w-3.5 h-3.5 text-md-on-surface-variant" />
-                  )}
-                </button>
-
-                {showLogs && (
-                  <div
-                    ref={logContainerRef}
-                    className="p-3.5 bg-md-surface-container-lowest text-md-on-surface font-mono text-[11px] rounded-xl overflow-y-auto space-y-0.5 leading-relaxed h-80 border border-md-outline-variant"
-                  >
-                    {logs.length === 0 ? (
-                      <div className="text-md-on-surface-variant italic">
-                        Waiting for container log output...
-                      </div>
-                    ) : (
-                      logs.map((line, idx) => (
-                        <div key={idx} className="break-all whitespace-pre-wrap">
-                          {line}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </section>
-
         {/* ---------------------------------------------------------------- Machine */}
         <section className="space-y-3">
           <SectionHeading
@@ -425,7 +293,8 @@ export const ModelsView: React.FC = () => {
               <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <p>
                 Docker is not reachable, so no model can be served locally. Start Docker Desktop
-                (or the daemon) and refresh.
+                (or the daemon) — this page checks again every few seconds and will
+                update by itself.
               </p>
             </div>
           )}
@@ -490,49 +359,30 @@ export const ModelsView: React.FC = () => {
             />
           </div>
 
-          {/* Downloaded weights: the inventory that made the cache invisible before. */}
-          {cache && cache.models.length > 0 && (
+          {/* The inventory is also where the server lives: the active model's row
+              expands into the status card, so state, logs, and controls sit on the
+              model they describe instead of in a parallel section. */}
+          {displayModels.length > 0 && (
             <div className="space-y-1.5 pt-1">
-              {cache.models.map((model) => {
-                // Disjoint on purpose: a model whose server is still coming up was
-                // shown as "Serving" the instant Start was clicked, which is a lie
-                // the logs directly above it contradicted.
-                const isServing = status?.model_id === model.repo_id && isReady;
-                const isStarting = status?.model_id === model.repo_id && isLoading;
-                const occupiesServer = isServing || isStarting;
-                return (
-                  <div
-                    key={model.repo_id}
-                    className={`p-3 rounded-xl border flex items-center justify-between gap-4 transition-colors ${
-                      occupiesServer
-                        ? 'bg-md-primary-container/40 border-md-primary/50'
-                        : 'bg-md-surface border-md-outline-variant'
-                    }`}
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-semibold text-xs font-mono text-md-on-surface truncate">
+              {displayModels.map((model) => {
+                const isActive = model.repo_id === activeModelId;
+
+                if (!isActive) {
+                  return (
+                    <div
+                      key={model.repo_id}
+                      className="p-3 rounded-xl border flex items-center justify-between gap-4 transition-colors bg-md-surface border-md-outline-variant"
+                    >
+                      <div className="min-w-0">
+                        <span className="font-semibold text-xs font-mono text-md-on-surface truncate block">
                           {model.repo_id}
                         </span>
-                        {isServing && (
-                          <span className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-800/80">
-                            Serving
-                          </span>
-                        )}
-                        {isStarting && (
-                          <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-800/80">
-                            <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                            Starting
-                          </span>
-                        )}
+                        <p className="text-[11px] text-md-on-surface-variant mt-0.5">
+                          {formatBytes(model.size_bytes)} on disk
+                        </p>
                       </div>
-                      <p className="text-[11px] text-md-on-surface-variant mt-0.5">
-                        {formatBytes(model.size_bytes)} on disk
-                      </p>
-                    </div>
 
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {!occupiesServer && (
+                      <div className="flex items-center gap-1.5 shrink-0">
                         <button
                           type="button"
                           onClick={() => handleLaunchRequest(model.repo_id)}
@@ -542,20 +392,123 @@ export const ModelsView: React.FC = () => {
                           <Play className="w-3 h-3 fill-current" />
                           Start
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteWeights(model.repo_id, model.size_bytes)}
+                          title="Delete these weights"
+                          className="p-1.5 rounded-lg border border-md-outline-variant text-md-on-surface-variant hover:text-md-error hover:border-md-error/50 transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div
+                    key={model.repo_id}
+                    className={`rounded-2xl border shadow-xs transition-colors ${
+                      isError
+                        ? 'bg-md-surface border-rose-300 dark:border-rose-800/80'
+                        : 'bg-md-primary-container/20 border-md-primary/50'
+                    }`}
+                  >
+                    <div className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-xs font-mono text-md-on-surface truncate">
+                              {model.repo_id}
+                            </span>
+                            <StatusPill
+                              isReady={isReady}
+                              isLoading={isLoading}
+                              isError={isError}
+                              isStopping={isStopping}
+                            />
+                          </div>
+                          <p className="text-[11px] text-md-on-surface-variant mt-1 leading-relaxed">
+                            {isStopping ? 'Stopping the server and unloading the model...' : status?.message}
+                            {model.size_bytes > 0 && ` · ${formatBytes(model.size_bytes)} on disk`}
+                          </p>
+                          {isReady && status?.endpoint && (
+                            <p className="text-[10px] font-mono text-md-on-surface-variant/80 mt-0.5">
+                              {status.endpoint}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {isError ? (
+                            <button
+                              type="button"
+                              onClick={() => handleLaunchRequest(model.repo_id)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-md-outline-variant bg-md-surface-container-low hover:bg-md-surface-container-high text-[11px] font-semibold text-md-on-surface transition-colors cursor-pointer"
+                            >
+                              <Play className="w-3 h-3 fill-current" />
+                              Try again
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={handleStopServer}
+                              disabled={isStopping}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-md-error hover:opacity-90 disabled:opacity-50 text-md-on-error text-xs font-semibold shadow-xs transition-opacity cursor-pointer"
+                            >
+                              {isStopping ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Square className="w-3.5 h-3.5 fill-current" />
+                              )}
+                              <span>Stop Server</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {isError && status?.error && (
+                        <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800/80 text-rose-900 dark:text-rose-100 text-[11px] leading-relaxed">
+                          {status.error}
+                        </div>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteWeights(model.repo_id, model.size_bytes)}
-                        disabled={occupiesServer}
-                        title={
-                          occupiesServer
-                            ? 'Stop the server before deleting these weights'
-                            : 'Delete these weights'
-                        }
-                        className="p-1.5 rounded-lg border border-md-outline-variant text-md-on-surface-variant hover:text-md-error hover:border-md-error/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+
+                      {(isLoading || isError || logs.length > 0) && (
+                        <div className="pt-2 border-t border-md-outline-variant space-y-2">
+                          <button
+                            type="button"
+                            onClick={() => setShowLogs(!showLogs)}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-md-outline-variant bg-md-surface-container-low hover:bg-md-surface-container-high text-xs font-semibold text-md-on-surface transition-colors cursor-pointer shadow-2xs"
+                          >
+                            <Terminal className="w-3.5 h-3.5 text-md-on-surface-variant" />
+                            <span>Container Logs ({logs.length} lines)</span>
+                            {showLogs ? (
+                              <ChevronUp className="w-3.5 h-3.5 text-md-on-surface-variant" />
+                            ) : (
+                              <ChevronDown className="w-3.5 h-3.5 text-md-on-surface-variant" />
+                            )}
+                          </button>
+
+                          {showLogs && (
+                            <div
+                              ref={logContainerRef}
+                              className="p-3.5 bg-md-surface-container-lowest text-md-on-surface font-mono text-[11px] rounded-xl overflow-y-auto space-y-0.5 leading-relaxed h-72 border border-md-outline-variant"
+                            >
+                              {logs.length === 0 ? (
+                                <div className="text-md-on-surface-variant italic">
+                                  Waiting for container log output...
+                                </div>
+                              ) : (
+                                logs.map((line, idx) => (
+                                  <div key={idx} className="break-all whitespace-pre-wrap">
+                                    {line}
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -563,7 +516,7 @@ export const ModelsView: React.FC = () => {
             </div>
           )}
 
-          {cache && cache.models.length === 0 && (
+          {displayModels.length === 0 && cache && (
             <p className="text-[11px] text-md-on-surface-variant py-2">
               No weights downloaded yet. Starting a model from the catalog below downloads it to{' '}
               <code className="font-mono">{cache.path}</code>.
@@ -621,25 +574,40 @@ const SectionHeading: React.FC<{ icon: React.ReactNode; title: string; note?: st
   </div>
 );
 
-const StatusPill: React.FC<{ isReady: boolean; isLoading: boolean; isError: boolean }> = ({
-  isReady,
-  isLoading,
-  isError,
-}) => (
-  <span
-    className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-      isReady
-        ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 border-emerald-300 dark:border-emerald-800/80'
+const StatusPill: React.FC<{
+  isReady: boolean;
+  isLoading: boolean;
+  isError: boolean;
+  isStopping?: boolean;
+}> = ({ isReady, isLoading, isError, isStopping }) => {
+  // Both transitions get their own state with a spinner inside the pill: a
+  // server winding down is not "online", and one coming up is not "serving".
+  const inTransition = isStopping || isLoading;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+        isStopping || isLoading
+          ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 border-amber-300 dark:border-amber-800/80'
+          : isReady
+          ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 border-emerald-300 dark:border-emerald-800/80'
+          : isError
+          ? 'bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-200 border-rose-300 dark:border-rose-800/80'
+          : 'bg-md-surface-container-high text-md-on-surface-variant border-md-outline-variant'
+      }`}
+    >
+      {inTransition && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+      {isStopping
+        ? 'STOPPING'
         : isLoading
-        ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 border-amber-300 dark:border-amber-800/80'
+        ? 'STARTING'
+        : isReady
+        ? 'ONLINE'
         : isError
-        ? 'bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-200 border-rose-300 dark:border-rose-800/80'
-        : 'bg-md-surface-container-high text-md-on-surface-variant border-md-outline-variant'
-    }`}
-  >
-    {isReady ? 'ONLINE' : isLoading ? 'STARTING' : isError ? 'ERROR' : 'STOPPED'}
-  </span>
-);
+        ? 'ERROR'
+        : 'STOPPED'}
+    </span>
+  );
+};
 
 const Stat: React.FC<{
   icon: React.ReactNode;

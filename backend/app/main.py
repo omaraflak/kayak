@@ -165,6 +165,16 @@ if FRONTEND_DIST.exists():
     async def serve_frontend(full_path: str):
         if full_path.startswith("api"):
             raise HTTPException(status_code=404, detail="API endpoint not found")
+
+        # Real files at the dist root -- favicon.svg, the PNG icons -- must be
+        # served as themselves. Answering every path with index.html handed the
+        # browser HTML where it asked for the tab icon, so the tab showed the
+        # default globe instead of the app icon.
+        if full_path:
+            candidate = (FRONTEND_DIST / full_path).resolve()
+            if candidate.is_file() and candidate.is_relative_to(FRONTEND_DIST.resolve()):
+                return FileResponse(str(candidate))
+
         index_path = FRONTEND_DIST / "index.html"
         if index_path.exists():
             return FileResponse(str(index_path))
