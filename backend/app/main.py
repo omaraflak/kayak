@@ -154,12 +154,28 @@ async def health_check():
 
 # Mount Frontend if built
 FRONTEND_DIST = settings.BASE_DIR / "frontend" / "dist"
+
+#: The app shell must be revalidated on every load. It used to go out with no
+#: Cache-Control at all, so browsers applied heuristic caching and kept showing
+#: the previous version's UI after an update -- the API answered with the new
+#: version number while the page around it was frozen in the old release.
+#: Revalidation is cheap: the ETag turns most of these into 304s.
+_NO_CACHE_HEADERS = {"Cache-Control": "no-cache"}
+
 if FRONTEND_DIST.exists():
     app.mount(
         "/assets",
         StaticFiles(directory=str(FRONTEND_DIST / "assets")),
         name="assets",
     )
+
+    @app.middleware("http")
+    async def asset_cache_control(request: Request, call_next):
+        """Content-hashed assets are immutable: a new build means new URLs."""
+        response = await call_next(request)
+        if request.url.path.startswith("/assets/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
 
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
@@ -173,11 +189,11 @@ if FRONTEND_DIST.exists():
         if full_path:
             candidate = (FRONTEND_DIST / full_path).resolve()
             if candidate.is_file() and candidate.is_relative_to(FRONTEND_DIST.resolve()):
-                return FileResponse(str(candidate))
+                return FileResponse(str(candidate), headers=_NO_CACHE_HEADERS)
 
         index_path = FRONTEND_DIST / "index.html"
         if index_path.exists():
-            return FileResponse(str(index_path))
+            return FileResponse(str(index_path), headers=_NO_CACHE_HEADERS)
         raise HTTPException(status_code=404, detail="Frontend build index.html not found")
 
 

@@ -6,7 +6,10 @@ import { ConversationActivityProvider } from './context/ConversationActivityCont
 import { DialogProvider } from './context/DialogContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { VLLMStatusProvider } from './context/VLLMStatusContext';
+import { watchForNewAppShell } from './utils/appShellGuard';
 import './index.css';
+
+watchForNewAppShell();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
@@ -23,3 +26,4 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     </ThemeProvider>
   </React.StrictMode>
 );
+
