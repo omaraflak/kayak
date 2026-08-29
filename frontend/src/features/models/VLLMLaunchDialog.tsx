@@ -70,7 +70,10 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
   const offers = (field: string): boolean => !tunableFields || tunableFields.includes(field);
   const [enforceEager, setEnforceEager] = useState(false);
 
-  const hasGPU = (capability?.total_vram_mb ?? 0) > 0;
+  // The accelerator the server reports, not the VRAM figure: the cards are only
+  // countable from a process that can see them, while what decides the image is
+  // whether the daemon can give a container one at all.
+  const hasGPU = capability?.accelerator === 'cuda';
   const availableGB = (capability?.total_vram_mb ?? 0) / 1024;
   const systemMemoryGB = (capability?.total_memory_mb ?? 0) / 1024;
   const totalCpus = capability?.total_cpus ?? 0;

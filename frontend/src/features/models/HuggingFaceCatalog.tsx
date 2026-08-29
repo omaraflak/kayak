@@ -32,6 +32,8 @@ export interface HuggingFaceCatalogProps {
   cachedModelIds?: Set<string>;
   /** Accelerator memory available, for flagging models that cannot fit. */
   availableVramGB?: number;
+  /** Whether this machine has an accelerator at all, even if its size is unknown. */
+  hasAccelerator?: boolean;
   /** Whether this machine can serve MLX weights on the Apple GPU. */
   metalSupported?: boolean;
   /** Runtimes the server offers, which drive the filters and the support badge. */
@@ -52,6 +54,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
   initialQuery = 'qwen2.5-coder',
   cachedModelIds,
   availableVramGB = 0,
+  hasAccelerator = false,
   metalSupported = false,
   runtimes = [],
   modality = 'text',
@@ -212,7 +215,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
             // button that fails minutes into a download is worse than saying so now.
             const isSupported = activeRuntime ? canRuntimeServe(activeRuntime, hfModel) : true;
             const estimate = estimateModelSize(rawModelId);
-            const fit = judgeFit(estimate, availableVramGB);
+            const fit = judgeFit(estimate, availableVramGB, hasAccelerator);
 
             // Staging checks for 'select' mode
             const isHfInferenceStaged = selectedModelString === hfModel.model_string_hf && selectedHfMode === 'hf';

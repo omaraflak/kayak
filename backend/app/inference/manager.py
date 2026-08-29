@@ -13,7 +13,7 @@ import httpx
 from backend.app.config import settings
 from backend.app.docker_utils import DockerPathResolver
 from backend.app.inference import metal
-from backend.app.inference.hardware import probe_host_capability
+from backend.app.inference.hardware import daemon_offers_gpu, probe_host_capability
 from backend.app.inference.models import (
     HostCapability,
     Modality,
@@ -560,7 +560,7 @@ class ServerManager:
 
             # 1. Ask the runtime what to run. Everything model- and backend-specific
             # is decided here and nowhere else in this method.
-            has_gpu = bool(shutil.which("nvidia-smi"))
+            has_gpu = await self._gpu_available()
             spec = await self._runtime.container_spec(
                 request,
                 SpecContext(
@@ -1238,6 +1238,33 @@ class ServerManager:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _read)
 
+    async def _docker_info(self) -> Optional[Dict[str, Any]]:
+        """The Docker daemon's own description of itself, or None."""
+        if not self._docker_available or not self._client:
+            return None
+
+        def _read() -> Optional[Dict[str, Any]]:
+            try:
+                return self._client.info()
+            except Exception:
+                return None
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _read)
+
+    async def _gpu_available(self) -> bool:
+        """Whether a container started here can be given a GPU.
+
+        Asked of the daemon rather than of this process. Kayak normally runs in a
+        container with no NVIDIA tools and no device access, so `nvidia-smi` on its
+        own PATH was absent on every machine that ships this way -- and a
+        workstation with a GPU quietly got the CPU image. The local binary is still
+        consulted, for a Kayak run directly on the host.
+        """
+        if daemon_offers_gpu(await self._docker_info()):
+            return True
+        return bool(shutil.which("nvidia-smi"))
+
     async def _docker_memory_bytes(self) -> Optional[int]:
         """Returns the memory Docker reports for its host, or None if unavailable."""
         memory, _cpus = await self._docker_resources()
@@ -1263,7 +1290,9 @@ class ServerManager:
             image_present = await loop.run_in_executor(None, _has_image)
 
         total_memory, total_cpus = await self._docker_resources()
-        capability = await probe_host_capability(self._docker_available, image_present)
+        capability = await probe_host_capability(
+            self._docker_available, image_present, await self._docker_info()
+        )
         capability.total_memory_mb = int(total_memory / (1024 ** 2)) if total_memory else 0
         capability.total_cpus = total_cpus or 0
         self._runtime.augment_capability(capability, total_memory)

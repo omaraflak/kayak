@@ -92,9 +92,14 @@ export type FitVerdict = 'fits' | 'tight' | 'too-large' | 'cpu-only' | 'unknown'
  */
 export function judgeFit(
   estimate: ModelSizeEstimate | null,
-  availableGB: number
+  availableGB: number,
+  hasAccelerator = false
 ): FitVerdict {
-  if (availableGB <= 0) return 'cpu-only';
+  // A GPU whose size could not be read is not the same as no GPU. Kayak usually
+  // runs in a container that cannot see the cards even when the daemon can hand
+  // one over, so treating "no reading" as "no accelerator" called every model too
+  // large on exactly the machines that could run them.
+  if (availableGB <= 0) return hasAccelerator ? 'unknown' : 'cpu-only';
   if (!estimate) return 'unknown';
   if (estimate.requiredGB > availableGB) return 'too-large';
   if (estimate.requiredGB > availableGB * 0.85) return 'tight';

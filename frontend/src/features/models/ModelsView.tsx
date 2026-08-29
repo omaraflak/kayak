@@ -658,6 +658,7 @@ export const ModelsView: React.FC = () => {
             isVllmLoading={isLoading || metalBusy}
             cachedModelIds={cachedIds}
             availableVramGB={(capability?.total_vram_mb ?? 0) / 1024}
+            hasAccelerator={capability?.accelerator === 'cuda'}
             metalSupported={metal?.supported ?? false}
             runtimes={runtimes}
             modality={modality}

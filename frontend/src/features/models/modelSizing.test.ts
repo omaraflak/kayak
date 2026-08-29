@@ -141,3 +141,20 @@ describe('formatBytes', () => {
     expect(formatBytes(Number.NaN)).toBe('0 B');
   });
 });
+
+describe('judgeFit with an accelerator whose size is unknown', () => {
+  it('does not call a model too large when the VRAM could not be read', () => {
+    // Kayak in a container cannot count the cards even when the daemon can hand
+    // one over. Treating that as "no accelerator" flagged every model as
+    // unrunnable on exactly the machines that could run them.
+    expect(judgeFit(estimateModelSize('meta-llama/Llama-3.1-70B'), 0, true)).toBe('unknown');
+  });
+
+  it('still says cpu-only when there is genuinely no accelerator', () => {
+    expect(judgeFit(estimateModelSize('meta-llama/Llama-3.1-70B'), 0, false)).toBe('cpu-only');
+  });
+
+  it('judges normally once a size is known', () => {
+    expect(judgeFit(estimateModelSize('Qwen/Qwen2.5-0.5B'), 24, true)).toBe('fits');
+  });
+});
