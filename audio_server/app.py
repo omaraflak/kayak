@@ -85,13 +85,15 @@ class TranscriptionResponse(BaseModel):
     language: Optional[str] = None
 
 
-class SynthesisProgress(BaseModel):
-    """How far the synthesis currently in flight has got.
+class WorkProgress(BaseModel):
+    """How far the work currently in flight has got, in chunks.
 
-    Reported rather than only logged: a long synthesis is minutes of silence
-    otherwise, and scraping a log line for a number is not a contract.
+    Reported rather than only logged: a long recording or a long article is
+    minutes of silence otherwise, and scraping a log line for a number is not a
+    contract. The unit is a chunk either way -- a sentence group being spoken, or
+    a window of audio being transcribed.
     """
-    #: True while a synthesis is running. False between requests.
+    #: True while work is running. False between requests.
     active: bool = False
     chunks_done: int = 0
     chunks_total: int = 0
@@ -104,7 +106,7 @@ class ServerState:
         self.model_id: str = ""
         self.modality: str = "speech"
         self.backend: Optional[SpeechBackend] = None
-        self.progress = SynthesisProgress()
+        self.progress = WorkProgress()
         # Most of these models are not safe to call concurrently, and a second
         # request arriving mid-generation corrupts the first one's output rather
         # than queueing behind it.
@@ -142,9 +144,9 @@ async def health() -> dict:
     }
 
 
-@app.get("/v1/audio/progress", response_model=SynthesisProgress)
-async def synthesis_progress() -> SynthesisProgress:
-    """Where the synthesis in flight has got to, by chunk."""
+@app.get("/v1/audio/progress", response_model=WorkProgress)
+async def work_progress() -> WorkProgress:
+    """Where the work in flight has got to, by chunk."""
     return state.progress
 
 
@@ -206,7 +208,7 @@ async def create_speech(request: SpeechRequest) -> Response:
         raise HTTPException(status_code=400, detail="There is no text to speak.")
 
     async with state.lock:
-        state.progress = SynthesisProgress(
+        state.progress = WorkProgress(
             active=True, chunks_done=0, chunks_total=len(chunks)
         )
         try:
@@ -260,15 +262,25 @@ async def create_transcription(
             stream.write(payload)
 
         async with state.lock:
+            state.progress = WorkProgress(active=True, chunks_done=0, chunks_total=0)
+
+            def report(done: int, total: int) -> None:
+                state.progress.chunks_done = done
+                state.progress.chunks_total = total
+
             try:
                 text, used_language = await asyncio.get_running_loop().run_in_executor(
-                    None, backend.transcribe, temp_path, language
+                    None, backend.transcribe, temp_path, language, report
                 )
             except Exception as error:
                 logger.exception("Transcription failed for %s", state.model_id)
                 raise HTTPException(
                     status_code=500, detail=f"Transcription failed: {error}"
                 )
+            finally:
+                # Cleared even on failure: a stuck "active" would leave every
+                # client showing a ring that never moves again.
+                state.progress.active = False
     finally:
         # The recording is the user's; it must not linger in the container after
         # the request that carried it.

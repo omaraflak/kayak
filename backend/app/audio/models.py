@@ -41,24 +41,37 @@ class JobState(str, Enum):
     CANCELLED = "cancelled"
 
 
-class SynthesisJob(BaseModel):
-    """One queued or running synthesis.
+class JobKind(str, Enum):
+    """Which direction a job runs in."""
+    SPEECH = "speech"
+    TRANSCRIPTION = "transcription"
+
+
+class AudioJob(BaseModel):
+    """One queued or running piece of audio work.
 
     Held by the server rather than the page, so leaving the Audio tab -- or
-    closing it -- does not abandon work the container is already doing.
+    closing it -- does not abandon work the container is already doing. Both
+    directions share the shape: what differs is which fields carry meaning, and
+    the page renders them the same way.
     """
     id: str
-    text: str
+    kind: JobKind
+    #: What was submitted: the text to speak, or the transcript once there is one.
+    text: str = ""
     voice: Optional[str] = None
     speed: float = 1.0
     response_format: str = "wav"
+    #: Name of the uploaded recording, for a transcription.
+    source_filename: Optional[str] = None
+    language: Optional[str] = None
     model_id: str
     state: JobState
     #: Chunks the server has spoken, and how many it split the text into. Both
     #: zero until the first progress reading arrives.
     chunks_done: int = 0
     chunks_total: int = 0
-    #: The stored clip, once there is one.
+    #: The stored clip or transcript, once there is one.
     item_id: Optional[str] = None
     error: Optional[str] = None
     created_at: float

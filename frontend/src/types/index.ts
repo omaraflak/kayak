@@ -433,18 +433,26 @@ export interface VoiceList {
 /** Where a queued synthesis has got to. */
 export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 
+/** Which direction a job runs in. */
+export type JobKind = 'speech' | 'transcription';
+
 /**
- * One queued or running synthesis.
+ * One queued or running piece of audio work.
  *
  * Held by the server rather than the page, so leaving the Audio tab does not
  * abandon work the container is already doing.
  */
-export interface SynthesisJob {
+export interface AudioJob {
   id: string;
+  kind: JobKind;
+  /** The text to speak, or the transcript once there is one. */
   text: string;
   voice?: string | null;
   speed: number;
   response_format: string;
+  /** Name of the uploaded recording, for a transcription. */
+  source_filename?: string | null;
+  language?: string | null;
   model_id: string;
   state: JobState;
   /** Chunks spoken, and how many the text was split into. */

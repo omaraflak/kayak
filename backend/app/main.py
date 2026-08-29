@@ -81,9 +81,9 @@ async def lifespan(app: FastAPI):
 
     # Synthesis runs here rather than inside a request, so leaving the Audio page
     # does not abandon work the container is already doing.
-    from backend.app.audio.jobs import synthesis_queue
+    from backend.app.audio import jobs as audio_jobs
 
-    synthesis_queue.start()
+    audio_jobs.start_all()
 
     if not settings.AUTH_TOKEN and settings.HOST not in ("127.0.0.1", "localhost", "::1"):
         logger.warning(
@@ -100,7 +100,7 @@ async def lifespan(app: FastAPI):
     # the next startup -- but their monitors must not outlive the event loop.
     await turns.cancel_all()
     await sandbox_manager.shutdown_all()
-    await synthesis_queue.shutdown()
+    await audio_jobs.shutdown_all()
     await inference_registry.shutdown()
 
 

@@ -18,7 +18,8 @@ import {
   ModelClassification,
   RuntimeDescriptor,
   SpeechRequest,
-  SynthesisJob,
+  AudioJob,
+  JobKind,
   VoiceList,
   HostCapability,
   InstalledVersions,
@@ -386,20 +387,21 @@ export const api = {
    * Queues text to be spoken. Returns the job, not the audio: synthesis runs for
    * minutes and holding the request open would tie the work to this tab.
    */
-  synthesizeSpeech: (data: SpeechRequest): Promise<SynthesisJob> =>
+  synthesizeSpeech: (data: SpeechRequest): Promise<AudioJob> =>
     fetchJSONPost(`${API_BASE}/audio/speech`, data),
 
-  /** The synthesis queue: waiting, running, and recently finished. */
-  listSynthesisJobs: (): Promise<SynthesisJob[]> =>
-    fetchJSON(`${API_BASE}/audio/jobs`),
+  /** The queues: waiting, running, and recently finished, optionally by kind. */
+  listAudioJobs: (kind?: JobKind): Promise<AudioJob[]> =>
+    fetchJSON(`${API_BASE}/audio/jobs${kind ? `?kind=${kind}` : ''}`),
 
   /** Drops a queued job, or dismisses a finished one. */
-  cancelSynthesisJob: (jobId: string): Promise<{ status: string; id: string }> =>
+  cancelAudioJob: (jobId: string): Promise<{ status: string; id: string }> =>
     fetchJSON(`${API_BASE}/audio/jobs/${jobId}`, { method: 'DELETE' }),
 
-  transcribeAudio: async (file: File, language?: string): Promise<AudioItem> => {
+  /** Queues one or more recordings to be transcribed. Returns their jobs. */
+  transcribeAudio: async (files: File[], language?: string): Promise<AudioJob[]> => {
     const body = new FormData();
-    body.append('file', file);
+    for (const file of files) body.append('files', file);
     if (language) body.append('language', language);
     // No Content-Type header: the browser has to set the multipart boundary itself.
     const response = await fetch(`${API_BASE}/audio/transcriptions`, withAuth({

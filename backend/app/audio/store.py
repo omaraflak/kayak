@@ -46,6 +46,31 @@ def root() -> Path:
     return path
 
 
+def upload_root() -> Path:
+    """Directory holding recordings waiting to be transcribed.
+
+    Separate from the stored items: these are temporary, deleted the moment their
+    job is over, and must never appear in a listing of what the page has produced.
+    """
+    path = root() / "uploads"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def safe_upload_name(filename: str) -> str:
+    """A filename safe to join onto a directory.
+
+    The name comes from the browser, so it is treated as a label rather than a
+    path: only the final component, and only characters that cannot climb out.
+    """
+    stem = Path(filename or "recording").name
+    cleaned = "".join(
+        character if character.isalnum() or character in "._- " else "_"
+        for character in stem
+    ).strip()
+    return cleaned[:120] or "recording"
+
+
 def media_type_for(suffix: str) -> str:
     return _MEDIA_TYPES.get(suffix.lower(), "application/octet-stream")
 
@@ -131,6 +156,8 @@ def save_transcript(
 def list_items(kind: Optional[AudioKind] = None) -> List[AudioItem]:
     """Every stored item, newest first."""
     items: List[AudioItem] = []
+    # Non-recursive on purpose: uploads waiting to be transcribed live in a
+    # subdirectory and are not things the page has produced.
     for sidecar in root().glob("*.json"):
         try:
             items.append(AudioItem.model_validate_json(sidecar.read_text(encoding="utf-8")))

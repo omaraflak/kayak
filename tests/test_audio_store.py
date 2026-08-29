@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.audio import store
-from backend.app.audio.models import AudioKind, JobState
+from backend.app.audio.models import AudioKind, JobKind, JobState
 from backend.app.audio.store import AudioStoreError
 from backend.app.inference.audio_runtimes import SpeechRuntime, TranscriptionRuntime
 from backend.app.inference.models import DeployRequest, Modality
@@ -142,7 +142,7 @@ class TestRoutesWithNothingRunning:
     def test_transcription_says_which_model_to_start(self, client):
         response = client.post(
             "/api/audio/transcriptions",
-            files={"file": ("clip.wav", WAV_BYTES, "audio/wav")},
+            files=[("files", ("clip.wav", WAV_BYTES, "audio/wav"))],
         )
 
         assert response.status_code == 409
@@ -180,6 +180,12 @@ class TestSynthesisQueue:
         from backend.app.audio.jobs import SynthesisQueue
 
         return SynthesisQueue()
+
+    @pytest.fixture
+    def transcription(self, audio_dir):
+        from backend.app.audio.jobs import TranscriptionQueue
+
+        return TranscriptionQueue()
 
     def _request(self, text: str = "hello"):
         from backend.app.audio.models import SpeechRequest
@@ -237,6 +243,55 @@ class TestSynthesisQueue:
         # The clips themselves are the durable record; the job list is a view of
         # what is happening now.
         assert len(queue.list_jobs()) == MAX_FINISHED_JOBS
+
+
+class TestTranscriptionQueue:
+    """Recordings queue the same way text does, and clean up after themselves."""
+
+    @pytest.fixture
+    def queue(self, audio_dir):
+        from backend.app.audio.jobs import TranscriptionQueue
+
+        return TranscriptionQueue()
+
+    def test_each_recording_becomes_its_own_job(self, queue):
+        first = queue.submit(data=b"one", filename="a.wav", model_id="m")
+        second = queue.submit(data=b"two", filename="b.m4a", model_id="m")
+
+        # Selecting several files should not make the user the queue.
+        assert [job.source_filename for job in queue.list_jobs()] == ["a.wav", "b.m4a"]
+        assert first.kind == JobKind.TRANSCRIPTION
+        assert second.state == JobState.QUEUED
+
+    def test_the_upload_waits_on_disk_rather_than_in_memory(self, queue, audio_dir):
+        job = queue.submit(data=b"audio bytes", filename="voice.m4a", model_id="m")
+
+        stored = list((audio_dir / "uploads").glob(f"{job.id}*"))
+        assert len(stored) == 1
+        assert stored[0].read_bytes() == b"audio bytes"
+
+    def test_cancelling_deletes_the_recording(self, queue, audio_dir):
+        job = queue.submit(data=b"audio", filename="voice.m4a", model_id="m")
+
+        queue.cancel(job.id)
+
+        # The recording is the user's; it must not linger after the job is over.
+        assert list((audio_dir / "uploads").glob(f"{job.id}*")) == []
+
+    def test_a_hostile_filename_cannot_escape_the_upload_directory(self, queue, audio_dir):
+        # The name comes from the browser, so it is a label rather than a path.
+        job = queue.submit(data=b"x", filename="../../etc/passwd", model_id="m")
+
+        stored = list((audio_dir / "uploads").glob("*"))
+        assert len(stored) == 1
+        assert stored[0].parent == audio_dir / "uploads"
+        # The original name is still reported, since that is what the user sent.
+        assert job.source_filename == "../../etc/passwd"
+
+    def test_uploads_are_not_listed_as_things_the_page_produced(self, queue, audio_dir):
+        queue.submit(data=b"x", filename="voice.m4a", model_id="m")
+
+        assert store.list_items() == []
 
 
 class TestTranscriptionRuntime:

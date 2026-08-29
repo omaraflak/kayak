@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AudioItem, Modality, SynthesisJob, Voice } from '../../types';
+import { AudioItem, AudioJob, Modality, Voice } from '../../types';
 import { api, errorMessage } from '../../api/client';
 import { useVLLMStatus, VLLM_LOADING_STATES } from '../../context/VLLMStatusContext';
 import { formatBytes } from '../models/modelSizing';
@@ -39,12 +39,12 @@ export interface AudioViewProps {
 }
 
 /** States in which a job is still going to produce something. */
-const ACTIVE_JOB_STATES: SynthesisJob['state'][] = ['queued', 'running'];
+const ACTIVE_JOB_STATES: AudioJob['state'][] = ['queued', 'running'];
 
 export const AudioView: React.FC<AudioViewProps> = ({ onOpenModels }) => {
   const [mode, setMode] = useState<Mode>('synthesize');
   const [items, setItems] = useState<AudioItem[]>([]);
-  const [jobs, setJobs] = useState<SynthesisJob[]>([]);
+  const [jobs, setJobs] = useState<AudioJob[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const refreshItems = useCallback(async () => {
@@ -57,7 +57,7 @@ export const AudioView: React.FC<AudioViewProps> = ({ onOpenModels }) => {
 
   const refreshJobs = useCallback(async () => {
     try {
-      return await api.listSynthesisJobs().then((next) => {
+      return await api.listAudioJobs().then((next: AudioJob[]) => {
         setJobs(next);
         return next;
       });
@@ -87,6 +87,18 @@ export const AudioView: React.FC<AudioViewProps> = ({ onOpenModels }) => {
   useEffect(() => {
     refreshItems();
   }, [doneCount, refreshItems]);
+
+  const dismissJob = async (job: AudioJob) => {
+    // Dropped from the list first: waiting for the request makes clearing a
+    // handful of jobs feel broken.
+    setJobs((previous) => previous.filter((entry) => entry.id !== job.id));
+    try {
+      await api.cancelAudioJob(job.id);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+    refreshJobs();
+  };
 
   const handleDelete = async (item: AudioItem) => {
     // Removed from the list first: the request is a formality, and waiting for it
@@ -151,26 +163,20 @@ export const AudioView: React.FC<AudioViewProps> = ({ onOpenModels }) => {
             onOpenModels={onOpenModels}
             onQueued={refreshJobs}
             onError={setError}
-            jobs={jobs}
+            jobs={jobs.filter((job) => job.kind === 'speech')}
             clips={items.filter((item) => item.kind === 'clip')}
             onDelete={handleDelete}
-            onDismissJob={async (job) => {
-              setJobs((previous) => previous.filter((entry) => entry.id !== job.id));
-              try {
-                await api.cancelSynthesisJob(job.id);
-              } catch (err) {
-                setError(errorMessage(err));
-              }
-              refreshJobs();
-            }}
+            onDismissJob={dismissJob}
           />
         ) : (
           <TranscribePanel
             onOpenModels={onOpenModels}
-            onProduced={(item) => setItems((previous) => [item, ...previous])}
+            onQueued={refreshJobs}
             onError={setError}
+            jobs={jobs.filter((job) => job.kind === 'transcription')}
             transcripts={items.filter((item) => item.kind === 'transcript')}
             onDelete={handleDelete}
+            onDismissJob={dismissJob}
           />
         )}
       </div>
@@ -255,10 +261,10 @@ const SynthesizePanel: React.FC<{
   onOpenModels: () => void;
   onQueued: () => void;
   onError: (message: string) => void;
-  jobs: SynthesisJob[];
+  jobs: AudioJob[];
   clips: AudioItem[];
   onDelete: (item: AudioItem) => void;
-  onDismissJob: (job: SynthesisJob) => void;
+  onDismissJob: (job: AudioJob) => void;
 }> = ({ onOpenModels, onQueued, onError, jobs, clips, onDelete, onDismissJob }) => {
   const { statuses } = useVLLMStatus();
   const speechStatus = statuses.speech;
@@ -549,8 +555,8 @@ const ExpandableText: React.FC<{ children: string }> = ({ children }) => {
  * turns into a clip where it already sits rather than moving between sections.
  */
 const PendingRow: React.FC<{
-  job: SynthesisJob;
-  onDismiss: (job: SynthesisJob) => void;
+  job: AudioJob;
+  onDismiss: (job: AudioJob) => void;
 }> = ({ job, onDismiss }) => {
   const isRunning = job.state === 'running';
   const isFailed = job.state === 'failed';
@@ -564,7 +570,15 @@ const PendingRow: React.FC<{
       }`}
     >
       <div className="flex items-start justify-between gap-3">
-        <ExpandableText>{job.text}</ExpandableText>
+        {/* A transcription has no text of its own until it finishes, so the
+            recording's name is what identifies it while it waits. */}
+        {job.kind === 'transcription' ? (
+          <p className="text-xs text-md-on-surface leading-relaxed flex-1 min-w-0 truncate font-mono">
+            {job.source_filename}
+          </p>
+        ) : (
+          <ExpandableText>{job.text}</ExpandableText>
+        )}
 
         <div className="flex items-center gap-1.5 shrink-0">
           {isFailed ? (
@@ -648,32 +662,52 @@ const ClipRow: React.FC<{ clip: AudioItem; onDelete: (item: AudioItem) => void }
 
 const TranscribePanel: React.FC<{
   onOpenModels: () => void;
-  onProduced: (item: AudioItem) => void;
+  onQueued: () => void;
   onError: (message: string) => void;
+  jobs: AudioJob[];
   transcripts: AudioItem[];
   onDelete: (item: AudioItem) => void;
-}> = ({ onOpenModels, onProduced, onError, transcripts, onDelete }) => {
+  onDismissJob: (job: AudioJob) => void;
+}> = ({ onOpenModels, onQueued, onError, jobs, transcripts, onDelete, onDismissJob }) => {
   const { statuses } = useVLLMStatus();
   const isReady = statuses.transcription?.state === 'ready';
 
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isQueueing, setIsQueueing] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
+  // Added rather than replaced, so a second drop extends the batch instead of
+  // discarding what was already chosen. Same name and size means the same file.
+  const addFiles = (incoming: FileList | null) => {
+    if (!incoming?.length) return;
+    setFiles((previous) => {
+      const seen = new Set(previous.map((file) => `${file.name}:${file.size}`));
+      const added = Array.from(incoming).filter(
+        (file) => !seen.has(`${file.name}:${file.size}`)
+      );
+      return [...previous, ...added];
+    });
+  };
+
   const handleTranscribe = async () => {
-    if (!file || isTranscribing) return;
-    setIsTranscribing(true);
+    if (!files.length || isQueueing) return;
+    setIsQueueing(true);
     try {
-      onProduced(await api.transcribeAudio(file));
-      setFile(null);
+      await api.transcribeAudio(files);
+      setFiles([]);
       if (inputRef.current) inputRef.current.value = '';
+      onQueued();
     } catch (err) {
       onError(errorMessage(err));
     } finally {
-      setIsTranscribing(false);
+      setIsQueueing(false);
     }
   };
+
+  const visibleJobs = jobs.filter(
+    (job) => ACTIVE_JOB_STATES.includes(job.state) || job.state === 'failed'
+  );
 
   return (
     <>
@@ -692,7 +726,8 @@ const TranscribePanel: React.FC<{
       <section className="space-y-3">
         <SectionHeading
           icon={<Upload className="w-3.5 h-3.5 text-md-primary" />}
-          title="Recording"
+          title="Recordings"
+          note={files.length ? `${files.length} selected` : undefined}
         />
 
         <div
@@ -704,8 +739,7 @@ const TranscribePanel: React.FC<{
           onDrop={(event) => {
             event.preventDefault();
             setIsDragging(false);
-            const dropped = event.dataTransfer.files?.[0];
-            if (dropped) setFile(dropped);
+            addFiles(event.dataTransfer.files);
           }}
           onClick={() => inputRef.current?.click()}
           className={`p-8 rounded-2xl border border-dashed text-center cursor-pointer transition-colors ${
@@ -718,36 +752,57 @@ const TranscribePanel: React.FC<{
             ref={inputRef}
             type="file"
             accept="audio/*,video/*"
+            multiple
             className="hidden"
-            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+            onChange={(event) => addFiles(event.target.files)}
           />
           <Upload className="w-5 h-5 text-md-on-surface-variant mx-auto mb-2" />
-          {file ? (
-            <p className="text-xs text-md-on-surface font-semibold">
-              {file.name}{' '}
-              <span className="text-md-on-surface-variant font-normal">
-                ({formatBytes(file.size)})
-              </span>
-            </p>
-          ) : (
-            <p className="text-xs text-md-on-surface-variant">
-              Drop an audio file here, or click to choose one
-            </p>
-          )}
+          <p className="text-xs text-md-on-surface-variant">
+            Drop audio files here, or click to choose them
+          </p>
         </div>
+
+        {files.length > 0 && (
+          <div className="space-y-1.5">
+            {files.map((file) => (
+              <div
+                key={`${file.name}:${file.size}`}
+                className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl border border-md-outline-variant bg-md-surface"
+              >
+                <span className="text-[11px] text-md-on-surface truncate">
+                  {file.name}
+                  <span className="text-md-on-surface-variant"> · {formatBytes(file.size)}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setFiles((previous) => previous.filter((entry) => entry !== file));
+                  }}
+                  className="p-1 rounded-lg text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors cursor-pointer shrink-0"
+                  title="Remove"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         <button
           type="button"
           onClick={handleTranscribe}
-          disabled={!isReady || !file || isTranscribing}
+          disabled={!isReady || !files.length || isQueueing}
           className="px-5 py-2.5 rounded-xl bg-md-primary hover:opacity-90 disabled:opacity-40 text-md-on-primary text-xs font-bold flex items-center gap-1.5 transition-opacity shadow-xs cursor-pointer"
         >
-          {isTranscribing ? (
+          {isQueueing ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
           ) : (
             <Mic className="w-3.5 h-3.5" />
           )}
-          <span>{isTranscribing ? 'Transcribing...' : 'Transcribe'}</span>
+          <span>
+            {files.length > 1 ? `Transcribe ${files.length} files` : 'Transcribe'}
+          </span>
         </button>
       </section>
 
@@ -758,12 +813,15 @@ const TranscribePanel: React.FC<{
           note={transcripts.length ? `${transcripts.length} saved` : undefined}
         />
 
-        {transcripts.length === 0 ? (
+        {visibleJobs.length === 0 && transcripts.length === 0 ? (
           <p className="text-[11px] text-md-on-surface-variant">
             Nothing transcribed yet. The recording itself is not kept — only the text.
           </p>
         ) : (
           <div className="space-y-2.5">
+            {visibleJobs.map((job) => (
+              <PendingRow key={job.id} job={job} onDismiss={onDismissJob} />
+            ))}
             {transcripts.map((item) => (
               <TranscriptRow key={item.id} item={item} onDelete={onDelete} />
             ))}

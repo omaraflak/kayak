@@ -18,12 +18,13 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from backend.app.audio import store
-from backend.app.audio.jobs import synthesis_queue
+from backend.app.audio import jobs as job_queues
 from backend.app.audio.models import (
     AudioItem,
+    AudioJob,
     AudioKind,
+    JobKind,
     SpeechRequest,
-    SynthesisJob,
     Voice,
     VoiceList,
 )
@@ -101,8 +102,8 @@ async def list_voices() -> VoiceList:
     )
 
 
-@router.post("/speech", response_model=SynthesisJob)
-async def create_speech(request: SpeechRequest) -> SynthesisJob:
+@router.post("/speech", response_model=AudioJob)
+async def create_speech(request: SpeechRequest) -> AudioJob:
     """Queues text to be spoken and returns the job immediately.
 
     Deliberately not the audio: synthesis runs for minutes, and holding the
@@ -115,20 +116,20 @@ async def create_speech(request: SpeechRequest) -> SynthesisJob:
     # Checked before queueing so an unstartable job is refused now rather than
     # sitting in the queue to fail later.
     server_base(Modality.SPEECH)
-    return synthesis_queue.submit(request, _model_of(Modality.SPEECH))
+    return job_queues.synthesis_queue.submit(request, _model_of(Modality.SPEECH))
 
 
-@router.get("/jobs", response_model=list[SynthesisJob])
-async def list_jobs() -> list[SynthesisJob]:
-    """The synthesis queue: what is waiting, what is running, and how far it got."""
-    return synthesis_queue.list_jobs()
+@router.get("/jobs", response_model=list[AudioJob])
+async def list_jobs(kind: Optional[JobKind] = Query(None)) -> list[AudioJob]:
+    """The queues: what is waiting, what is running, and how far it has got."""
+    return job_queues.all_jobs(kind)
 
 
 @router.delete("/jobs/{job_id}")
 async def cancel_job(job_id: str) -> dict:
     """Removes a queued job, or dismisses a finished one."""
     try:
-        job = synthesis_queue.cancel(job_id)
+        job = job_queues.cancel_job(job_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="No such job.")
     except ValueError as error:
@@ -136,52 +137,45 @@ async def cancel_job(job_id: str) -> dict:
     return {"status": job.state.value, "id": job_id}
 
 
-@router.post("/transcriptions", response_model=AudioItem)
-async def create_transcription(
-    file: UploadFile = File(...),
+@router.post("/transcriptions", response_model=list[AudioJob])
+async def create_transcriptions(
+    files: list[UploadFile] = File(...),
     language: Optional[str] = Form(None),
-) -> AudioItem:
-    """Transcribes an uploaded recording with the running transcription model."""
-    base = server_base(Modality.TRANSCRIPTION)
+) -> list[AudioJob]:
+    """Queues one or more recordings to be transcribed.
+
+    A list rather than a single file: transcribing an afternoon of recordings is
+    the ordinary case, and doing them one upload at a time made the user the queue.
+    """
+    base_checked = server_base(Modality.TRANSCRIPTION)  # noqa: F841 - refuses early
     model_id = _model_of(Modality.TRANSCRIPTION)
 
-    payload = await file.read()
-    if not payload:
-        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
-    if len(payload) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=(
-                f"That file is {len(payload) / 1024 ** 2:.0f} MB. The limit is "
-                f"{MAX_UPLOAD_BYTES // 1024 ** 2} MB."
-            ),
-        )
-
-    data = {"language": language} if language else None
-    try:
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            response = await client.post(
-                f"{base}/audio/transcriptions",
-                files={"file": (file.filename or "recording.wav", payload)},
-                data=data,
+    queued: list[AudioJob] = []
+    for upload in files:
+        payload = await upload.read()
+        if not payload:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{upload.filename or 'A file'}' is empty.",
             )
-    except httpx.HTTPError as error:
-        raise HTTPException(
-            status_code=502, detail=f"The transcription server did not respond: {error}"
+        if len(payload) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"'{upload.filename}' is {len(payload) / 1024 ** 2:.0f} MB. "
+                    f"The limit is {MAX_UPLOAD_BYTES // 1024 ** 2} MB."
+                ),
+            )
+        queued.append(
+            job_queues.transcription_queue.submit(
+                data=payload,
+                filename=upload.filename or "recording.wav",
+                model_id=model_id,
+                language=language,
+            )
         )
 
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=502, detail=upstream_detail(response, "Transcription failed")
-        )
-
-    body = response.json()
-    return store.save_transcript(
-        text=body.get("text", ""),
-        model_id=model_id,
-        source_filename=file.filename or "recording",
-        language=body.get("language") or language,
-    )
+    return queued
 
 
 @router.get("/items", response_model=list[AudioItem])
