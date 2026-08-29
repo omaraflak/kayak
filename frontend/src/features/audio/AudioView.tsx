@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AudioItem, Modality, Voice } from '../../types';
+import { AudioItem, Modality, SynthesisJob, Voice } from '../../types';
 import { api, errorMessage } from '../../api/client';
 import { useVLLMStatus, VLLM_LOADING_STATES } from '../../context/VLLMStatusContext';
 import { formatBytes } from '../models/modelSizing';
@@ -9,9 +9,12 @@ import {
   Check,
   Copy,
   Download,
+  ChevronDown,
+  ChevronUp,
   FileAudio,
   Loader2,
   Mic,
+  X,
   Trash2,
   Type,
   Upload,
@@ -35,9 +38,13 @@ export interface AudioViewProps {
   onOpenModels: () => void;
 }
 
+/** States in which a job is still going to produce something. */
+const ACTIVE_JOB_STATES: SynthesisJob['state'][] = ['queued', 'running'];
+
 export const AudioView: React.FC<AudioViewProps> = ({ onOpenModels }) => {
   const [mode, setMode] = useState<Mode>('synthesize');
   const [items, setItems] = useState<AudioItem[]>([]);
+  const [jobs, setJobs] = useState<SynthesisJob[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const refreshItems = useCallback(async () => {
@@ -48,9 +55,38 @@ export const AudioView: React.FC<AudioViewProps> = ({ onOpenModels }) => {
     }
   }, []);
 
+  const refreshJobs = useCallback(async () => {
+    try {
+      return await api.listSynthesisJobs().then((next) => {
+        setJobs(next);
+        return next;
+      });
+    } catch {
+      // A missed poll is not worth a banner; the next one will say the same thing.
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
     refreshItems();
-  }, [refreshItems]);
+    refreshJobs();
+  }, [refreshItems, refreshJobs]);
+
+  // The queue lives on the server, so the page reads it rather than holding it.
+  // Polling only while something is in flight keeps an idle tab quiet, and the
+  // one poll after the last job finishes is what notices the final clip.
+  const hasActiveJobs = jobs.some((job) => ACTIVE_JOB_STATES.includes(job.state));
+  const doneCount = jobs.filter((job) => job.state === 'done').length;
+  useEffect(() => {
+    if (!hasActiveJobs) return;
+    const timer = window.setInterval(refreshJobs, 1000);
+    return () => window.clearInterval(timer);
+  }, [hasActiveJobs, refreshJobs]);
+
+  // A finished job means a new clip, which lives in the other list.
+  useEffect(() => {
+    refreshItems();
+  }, [doneCount, refreshItems]);
 
   const handleDelete = async (item: AudioItem) => {
     // Removed from the list first: the request is a formality, and waiting for it
@@ -113,10 +149,20 @@ export const AudioView: React.FC<AudioViewProps> = ({ onOpenModels }) => {
         {mode === 'synthesize' ? (
           <SynthesizePanel
             onOpenModels={onOpenModels}
-            onProduced={(item) => setItems((previous) => [item, ...previous])}
+            onQueued={refreshJobs}
             onError={setError}
+            jobs={jobs}
             clips={items.filter((item) => item.kind === 'clip')}
             onDelete={handleDelete}
+            onDismissJob={async (job) => {
+              setJobs((previous) => previous.filter((entry) => entry.id !== job.id));
+              try {
+                await api.cancelSynthesisJob(job.id);
+              } catch (err) {
+                setError(errorMessage(err));
+              }
+              refreshJobs();
+            }}
           />
         ) : (
           <TranscribePanel
@@ -207,12 +253,14 @@ const ServerState: React.FC<{
 
 const SynthesizePanel: React.FC<{
   onOpenModels: () => void;
-  onProduced: (item: AudioItem) => void;
+  onQueued: () => void;
   onError: (message: string) => void;
+  jobs: SynthesisJob[];
   clips: AudioItem[];
   onDelete: (item: AudioItem) => void;
-}> = ({ onOpenModels, onProduced, onError, clips, onDelete }) => {
-  const { statuses, logsByModality } = useVLLMStatus();
+  onDismissJob: (job: SynthesisJob) => void;
+}> = ({ onOpenModels, onQueued, onError, jobs, clips, onDelete, onDismissJob }) => {
+  const { statuses } = useVLLMStatus();
   const speechStatus = statuses.speech;
   const isReady = speechStatus?.state === 'ready';
 
@@ -220,7 +268,7 @@ const SynthesizePanel: React.FC<{
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voice, setVoice] = useState<string>('');
   const [speed, setSpeed] = useState(1);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [isQueueing, setIsQueueing] = useState(false);
 
   // Voices belong to the loaded model, so they are re-read whenever it changes
   // rather than once: a list from the previous model offers voices the current
@@ -256,40 +304,35 @@ const SynthesizePanel: React.FC<{
     };
   }, [isReady, speechStatus?.model_id]);
 
-  // Synthesis of a long text runs for minutes with nothing to show. The server
-  // logs its progress per chunk, and that stream is already open, so the last
-  // chunk line is a real progress indicator rather than an invented one.
-  const progressLine = useMemo(() => {
-    if (!isGenerating) return null;
-    const lines = logsByModality.speech ?? [];
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      // Just the sentence, not the log line around it: the timestamp and logger
-      // name in front of it are noise next to a progress counter.
-      const match = lines[index].match(/Synthesised chunk \d+\/\d+/);
-      if (match) return match[0];
-    }
-    return null;
-  }, [isGenerating, logsByModality.speech]);
-
   const characters = text.trim().length;
 
   const handleGenerate = async () => {
-    if (!text.trim() || isGenerating) return;
-    setIsGenerating(true);
+    if (!text.trim() || isQueueing) return;
+    setIsQueueing(true);
     try {
-      const item = await api.synthesizeSpeech({
+      await api.synthesizeSpeech({
         text,
         voice: voice || null,
         speed,
         response_format: 'wav',
       });
-      onProduced(item);
+      // Cleared so the next thing can be queued straight away, which is the
+      // point of a queue: the box is free while the last one is still speaking.
+      setText('');
+      onQueued();
     } catch (err) {
       onError(errorMessage(err));
     } finally {
-      setIsGenerating(false);
+      setIsQueueing(false);
     }
   };
+
+  // Only work still in flight, or a failure worth reporting. A finished job has
+  // become a clip in this same list, and leaving its row up rendered the clip
+  // twice -- the second one wearing a "waiting" chip for work already done.
+  const visibleJobs = jobs.filter(
+    (job) => ACTIVE_JOB_STATES.includes(job.state) || job.state === 'failed'
+  );
 
   const grouped = useMemo(() => groupVoicesByLanguage(voices), [voices]);
 
@@ -360,30 +403,17 @@ const SynthesizePanel: React.FC<{
           <button
             type="button"
             onClick={handleGenerate}
-            disabled={!isReady || !text.trim() || isGenerating}
+            disabled={!isReady || !text.trim() || isQueueing}
             className="px-5 py-2.5 rounded-xl bg-md-primary hover:opacity-90 disabled:opacity-40 text-md-on-primary text-xs font-bold flex items-center gap-1.5 transition-opacity shadow-xs cursor-pointer"
           >
-            {isGenerating ? (
+            {isQueueing ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
             ) : (
               <AudioLines className="w-3.5 h-3.5" />
             )}
-            <span>{isGenerating ? 'Generating...' : 'Generate speech'}</span>
+            <span>Generate speech</span>
           </button>
-
-          {isGenerating && progressLine && (
-            <span className="text-[11px] text-md-on-surface-variant font-mono">
-              {progressLine}
-            </span>
-          )}
         </div>
-
-        {isGenerating && (
-          <p className="text-[11px] text-md-on-surface-variant">
-            Generating on the CPU takes roughly as long as the audio itself. You can
-            leave this page; the clip is saved when it finishes.
-          </p>
-        )}
       </section>
 
       <section className="space-y-3">
@@ -393,13 +423,18 @@ const SynthesizePanel: React.FC<{
           note={clips.length ? `${clips.length} saved` : undefined}
         />
 
-        {clips.length === 0 ? (
+        {visibleJobs.length === 0 && clips.length === 0 ? (
           <p className="text-[11px] text-md-on-surface-variant">
             Nothing generated yet. Clips are saved on this machine and stay here until
             you delete them.
           </p>
         ) : (
           <div className="space-y-2.5">
+            {/* Work in flight sits above the library and turns into a clip in
+                place, rather than in a section of its own that empties itself. */}
+            {visibleJobs.map((job) => (
+              <PendingRow key={job.id} job={job} onDismiss={onDismissJob} />
+            ))}
             {clips.map((clip) => (
               <ClipRow key={clip.id} clip={clip} onDelete={onDelete} />
             ))}
@@ -410,15 +445,175 @@ const SynthesizePanel: React.FC<{
   );
 };
 
+/**
+ * Progress as a ring, sized to sit inside a chip.
+ *
+ * Two modes, because there are two honest states: a job waiting for the server has
+ * no progress to report and spins, and one being spoken has a real fraction. An
+ * indeterminate bar that creeps forward on a timer would be inventing a number.
+ */
+const ProgressRing: React.FC<{ fraction?: number }> = ({ fraction }) => {
+  const radius = 5;
+  const circumference = 2 * Math.PI * radius;
+
+  if (fraction === undefined) {
+    return (
+      <svg viewBox="0 0 14 14" className="w-3 h-3 animate-spin" aria-hidden="true">
+        <circle
+          cx="7"
+          cy="7"
+          r={radius}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeDasharray={`${circumference * 0.3} ${circumference}`}
+          opacity="0.9"
+        />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 14 14" className="w-3 h-3 -rotate-90" aria-hidden="true">
+      <circle cx="7" cy="7" r={radius} fill="none" stroke="currentColor" strokeWidth="2" opacity="0.25" />
+      <circle
+        cx="7"
+        cy="7"
+        r={radius}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={circumference * (1 - Math.min(1, Math.max(0, fraction)))}
+        className="transition-[stroke-dashoffset] duration-500 ease-out"
+      />
+    </svg>
+  );
+};
+
+/**
+ * Text that can be opened out.
+ *
+ * Clamped to three lines so a list of clips stays scannable, with the toggle shown
+ * only when there is actually something hidden -- measured rather than guessed from
+ * the character count, which is wrong for anything but average line lengths.
+ */
+const ExpandableText: React.FC<{ children: string }> = ({ children }) => {
+  const [expanded, setExpanded] = useState(false);
+  const [clamped, setClamped] = useState(false);
+  const ref = useRef<HTMLParagraphElement | null>(null);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    setClamped(element.scrollHeight > element.clientHeight + 1);
+  }, [children]);
+
+  return (
+    <div className="flex-1 min-w-0">
+      <p
+        ref={ref}
+        className={`text-xs text-md-on-surface leading-relaxed whitespace-pre-wrap ${
+          expanded ? '' : 'line-clamp-3'
+        }`}
+      >
+        {children}
+      </p>
+      {(clamped || expanded) && (
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="mt-1 inline-flex items-center gap-0.5 text-[10px] font-bold text-md-primary hover:underline cursor-pointer"
+        >
+          {expanded ? (
+            <>
+              <ChevronUp className="w-3 h-3" /> Show less
+            </>
+          ) : (
+            <>
+              <ChevronDown className="w-3 h-3" /> Show more
+            </>
+          )}
+        </button>
+      )}
+    </div>
+  );
+};
+
+/**
+ * A synthesis that has not produced its clip yet.
+ *
+ * Rendered in the same list as finished clips, in the same shape, so a submission
+ * turns into a clip where it already sits rather than moving between sections.
+ */
+const PendingRow: React.FC<{
+  job: SynthesisJob;
+  onDismiss: (job: SynthesisJob) => void;
+}> = ({ job, onDismiss }) => {
+  const isRunning = job.state === 'running';
+  const isFailed = job.state === 'failed';
+
+  return (
+    <div
+      className={`p-3.5 rounded-2xl border shadow-xs space-y-2.5 transition-colors ${
+        isFailed
+          ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-300 dark:border-rose-800/80'
+          : 'bg-md-surface border-md-outline-variant'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <ExpandableText>{job.text}</ExpandableText>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {isFailed ? (
+            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-200 border-rose-300 dark:border-rose-800/80">
+              FAILED
+            </span>
+          ) : isRunning ? (
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-md-primary-container text-md-on-primary-container border-md-primary/40">
+              <ProgressRing
+                fraction={job.chunks_total > 0 ? job.chunks_done / job.chunks_total : 0}
+              />
+              {job.chunks_total > 0 ? `${job.chunks_done}/${job.chunks_total}` : '0/0'}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-md-surface-container-high text-md-on-surface-variant border-md-outline-variant">
+              <ProgressRing />
+              WAITING
+            </span>
+          )}
+
+          {!isRunning && (
+            <button
+              type="button"
+              onClick={() => onDismiss(job)}
+              title={isFailed ? 'Dismiss' : 'Remove from the queue'}
+              className="p-1.5 rounded-lg text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {isFailed && job.error && (
+        <p className="text-[10px] text-rose-900 dark:text-rose-100 leading-relaxed">
+          {job.error}
+        </p>
+      )}
+    </div>
+  );
+};
+
 const ClipRow: React.FC<{ clip: AudioItem; onDelete: (item: AudioItem) => void }> = ({
   clip,
   onDelete,
 }) => (
   <div className="p-3.5 rounded-2xl border border-md-outline-variant bg-md-surface shadow-xs space-y-2.5">
     <div className="flex items-start justify-between gap-3">
-      <p className="text-xs text-md-on-surface leading-relaxed flex-1 line-clamp-3">
-        {clip.text}
-      </p>
+      <ExpandableText>{clip.text}</ExpandableText>
       <div className="flex items-center gap-1 shrink-0">
         <a
           href={api.audioFileUrl(clip.id)}

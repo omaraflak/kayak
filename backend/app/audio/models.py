@@ -32,6 +32,40 @@ class AudioItem(BaseModel):
     created_at: float
 
 
+class JobState(str, Enum):
+    """Where a synthesis job has got to."""
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class SynthesisJob(BaseModel):
+    """One queued or running synthesis.
+
+    Held by the server rather than the page, so leaving the Audio tab -- or
+    closing it -- does not abandon work the container is already doing.
+    """
+    id: str
+    text: str
+    voice: Optional[str] = None
+    speed: float = 1.0
+    response_format: str = "wav"
+    model_id: str
+    state: JobState
+    #: Chunks the server has spoken, and how many it split the text into. Both
+    #: zero until the first progress reading arrives.
+    chunks_done: int = 0
+    chunks_total: int = 0
+    #: The stored clip, once there is one.
+    item_id: Optional[str] = None
+    error: Optional[str] = None
+    created_at: float
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+
+
 class SpeechRequest(BaseModel):
     """What the Audio page sends to have something spoken."""
     text: str = Field(..., min_length=1)

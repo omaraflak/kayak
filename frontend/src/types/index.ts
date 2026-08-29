@@ -430,6 +430,33 @@ export interface VoiceList {
   default_voice?: string | null;
 }
 
+/** Where a queued synthesis has got to. */
+export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+
+/**
+ * One queued or running synthesis.
+ *
+ * Held by the server rather than the page, so leaving the Audio tab does not
+ * abandon work the container is already doing.
+ */
+export interface SynthesisJob {
+  id: string;
+  text: string;
+  voice?: string | null;
+  speed: number;
+  response_format: string;
+  model_id: string;
+  state: JobState;
+  /** Chunks spoken, and how many the text was split into. */
+  chunks_done: number;
+  chunks_total: number;
+  item_id?: string | null;
+  error?: string | null;
+  created_at: number;
+  started_at?: number | null;
+  finished_at?: number | null;
+}
+
 /** What the Audio page sends to have something spoken. */
 export interface SpeechRequest {
   text: string;

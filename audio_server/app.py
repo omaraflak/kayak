@@ -85,6 +85,18 @@ class TranscriptionResponse(BaseModel):
     language: Optional[str] = None
 
 
+class SynthesisProgress(BaseModel):
+    """How far the synthesis currently in flight has got.
+
+    Reported rather than only logged: a long synthesis is minutes of silence
+    otherwise, and scraping a log line for a number is not a contract.
+    """
+    #: True while a synthesis is running. False between requests.
+    active: bool = False
+    chunks_done: int = 0
+    chunks_total: int = 0
+
+
 class ServerState:
     """The single loaded model, and the lock serialising work against it."""
 
@@ -92,6 +104,7 @@ class ServerState:
         self.model_id: str = ""
         self.modality: str = "speech"
         self.backend: Optional[SpeechBackend] = None
+        self.progress = SynthesisProgress()
         # Most of these models are not safe to call concurrently, and a second
         # request arriving mid-generation corrupts the first one's output rather
         # than queueing behind it.
@@ -127,6 +140,12 @@ async def health() -> dict:
         "model": state.model_id,
         "modality": state.modality,
     }
+
+
+@app.get("/v1/audio/progress", response_model=SynthesisProgress)
+async def synthesis_progress() -> SynthesisProgress:
+    """Where the synthesis in flight has got to, by chunk."""
+    return state.progress
 
 
 @app.get("/v1/models")
@@ -187,6 +206,9 @@ async def create_speech(request: SpeechRequest) -> Response:
         raise HTTPException(status_code=400, detail="There is no text to speak.")
 
     async with state.lock:
+        state.progress = SynthesisProgress(
+            active=True, chunks_done=0, chunks_total=len(chunks)
+        )
         try:
             audio, sample_rate = await asyncio.get_running_loop().run_in_executor(
                 None, _synthesize_all, chunks, request.voice, request.speed
@@ -194,6 +216,10 @@ async def create_speech(request: SpeechRequest) -> Response:
         except Exception as error:
             logger.exception("Synthesis failed for %s", state.model_id)
             raise HTTPException(status_code=500, detail=f"Synthesis failed: {error}")
+        finally:
+            # Cleared even on failure: a stuck "active" would have every client
+            # showing a bar that never moves again.
+            state.progress.active = False
 
     subtype, media_type = SUPPORTED_FORMATS[text_format]
     buffer = io.BytesIO()
@@ -266,6 +292,7 @@ def _synthesize_all(chunks: List[str], voice: Optional[str], speed: float):
         if pieces:
             pieces.append(np.zeros(int(sample_rate * _GAP_SECONDS), dtype=np.float32))
         pieces.append(audio)
+        state.progress.chunks_done = index + 1
         logger.info("Synthesised chunk %d/%d", index + 1, len(chunks))
 
     if not pieces:

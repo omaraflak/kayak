@@ -18,6 +18,7 @@ import {
   ModelClassification,
   RuntimeDescriptor,
   SpeechRequest,
+  SynthesisJob,
   VoiceList,
   HostCapability,
   InstalledVersions,
@@ -381,9 +382,20 @@ export const api = {
   /** Voices the running speech model offers; empty when none is running. */
   getVoices: (): Promise<VoiceList> => fetchJSON(`${API_BASE}/audio/voices`),
 
-  /** Speaks text and stores the clip. Slow by nature — minutes for a long article. */
-  synthesizeSpeech: (data: SpeechRequest): Promise<AudioItem> =>
+  /**
+   * Queues text to be spoken. Returns the job, not the audio: synthesis runs for
+   * minutes and holding the request open would tie the work to this tab.
+   */
+  synthesizeSpeech: (data: SpeechRequest): Promise<SynthesisJob> =>
     fetchJSONPost(`${API_BASE}/audio/speech`, data),
+
+  /** The synthesis queue: waiting, running, and recently finished. */
+  listSynthesisJobs: (): Promise<SynthesisJob[]> =>
+    fetchJSON(`${API_BASE}/audio/jobs`),
+
+  /** Drops a queued job, or dismisses a finished one. */
+  cancelSynthesisJob: (jobId: string): Promise<{ status: string; id: string }> =>
+    fetchJSON(`${API_BASE}/audio/jobs/${jobId}`, { method: 'DELETE' }),
 
   transcribeAudio: async (file: File, language?: string): Promise<AudioItem> => {
     const body = new FormData();

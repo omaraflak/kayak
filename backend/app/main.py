@@ -79,6 +79,12 @@ async def lifespan(app: FastAPI):
     # and deployments adopted across a backend restart are noticed here.
     inference_registry.start_watchdogs()
 
+    # Synthesis runs here rather than inside a request, so leaving the Audio page
+    # does not abandon work the container is already doing.
+    from backend.app.audio.jobs import synthesis_queue
+
+    synthesis_queue.start()
+
     if not settings.AUTH_TOKEN and settings.HOST not in ("127.0.0.1", "localhost", "::1"):
         logger.warning(
             "Kayak is bound to %s with no KAYAK_AUTH_TOKEN set. Agents have shell and "
@@ -94,6 +100,7 @@ async def lifespan(app: FastAPI):
     # the next startup -- but their monitors must not outlive the event loop.
     await turns.cancel_all()
     await sandbox_manager.shutdown_all()
+    await synthesis_queue.shutdown()
     await inference_registry.shutdown()
 
 

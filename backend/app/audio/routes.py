@@ -18,10 +18,12 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from backend.app.audio import store
+from backend.app.audio.jobs import synthesis_queue
 from backend.app.audio.models import (
     AudioItem,
     AudioKind,
     SpeechRequest,
+    SynthesisJob,
     Voice,
     VoiceList,
 )
@@ -36,14 +38,14 @@ router = APIRouter(prefix="/api/audio", tags=["audio"])
 #: Synthesis of a long article, or transcription of a long recording, runs for
 #: minutes on a CPU. The generous ceiling exists to catch a hung server, not to bound
 #: honest work.
-_REQUEST_TIMEOUT_SECONDS = 1800.0
+REQUEST_TIMEOUT_SECONDS = 1800.0
 
 #: Uploads are held in memory while being forwarded, so the ceiling is real. Two
 #: hours of speech comfortably fits; a video file does not, and should not.
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 
-def _server_base(modality: Modality) -> str:
+def server_base(modality: Modality) -> str:
     """The base URL of a running audio server, or a 409 explaining what to start.
 
     A 409 rather than a 500: nothing is broken, the user simply has not started the
@@ -74,7 +76,7 @@ async def list_voices() -> VoiceList:
     "start a model" state either way, and a failed request there reads as a bug.
     """
     try:
-        base = _server_base(Modality.SPEECH)
+        base = server_base(Modality.SPEECH)
     except HTTPException:
         return VoiceList()
 
@@ -99,50 +101,39 @@ async def list_voices() -> VoiceList:
     )
 
 
-@router.post("/speech", response_model=AudioItem)
-async def create_speech(request: SpeechRequest) -> AudioItem:
-    """Speaks text with the running speech model and stores the clip."""
+@router.post("/speech", response_model=SynthesisJob)
+async def create_speech(request: SpeechRequest) -> SynthesisJob:
+    """Queues text to be spoken and returns the job immediately.
+
+    Deliberately not the audio: synthesis runs for minutes, and holding the
+    request open tied the work to a tab. The caller watches ``GET /jobs``; the
+    clip is saved whether or not anyone is still looking.
+    """
     if not request.text.strip():
         raise HTTPException(status_code=400, detail="There is no text to speak.")
 
-    base = _server_base(Modality.SPEECH)
-    model_id = _model_of(Modality.SPEECH)
+    # Checked before queueing so an unstartable job is refused now rather than
+    # sitting in the queue to fail later.
+    server_base(Modality.SPEECH)
+    return synthesis_queue.submit(request, _model_of(Modality.SPEECH))
 
+
+@router.get("/jobs", response_model=list[SynthesisJob])
+async def list_jobs() -> list[SynthesisJob]:
+    """The synthesis queue: what is waiting, what is running, and how far it got."""
+    return synthesis_queue.list_jobs()
+
+
+@router.delete("/jobs/{job_id}")
+async def cancel_job(job_id: str) -> dict:
+    """Removes a queued job, or dismisses a finished one."""
     try:
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
-            response = await client.post(
-                f"{base}/audio/speech",
-                json={
-                    "input": request.text,
-                    "voice": request.voice,
-                    "speed": request.speed,
-                    "response_format": request.response_format,
-                },
-            )
-    except httpx.HTTPError as error:
-        raise HTTPException(
-            status_code=502, detail=f"The speech server did not respond: {error}"
-        )
-
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=502, detail=_upstream_detail(response, "Synthesis failed")
-        )
-
-    audio = response.content
-    try:
-        item = store.save_audio(
-            data=audio,
-            suffix=request.response_format,
-            kind=AudioKind.CLIP,
-            model_id=model_id,
-            text=request.text,
-            voice=request.voice,
-            duration_seconds=_wav_duration(audio),
-        )
-    except AudioStoreError as error:
-        raise HTTPException(status_code=400, detail=str(error))
-    return item
+        job = synthesis_queue.cancel(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No such job.")
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return {"status": job.state.value, "id": job_id}
 
 
 @router.post("/transcriptions", response_model=AudioItem)
@@ -151,7 +142,7 @@ async def create_transcription(
     language: Optional[str] = Form(None),
 ) -> AudioItem:
     """Transcribes an uploaded recording with the running transcription model."""
-    base = _server_base(Modality.TRANSCRIPTION)
+    base = server_base(Modality.TRANSCRIPTION)
     model_id = _model_of(Modality.TRANSCRIPTION)
 
     payload = await file.read()
@@ -168,7 +159,7 @@ async def create_transcription(
 
     data = {"language": language} if language else None
     try:
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.post(
                 f"{base}/audio/transcriptions",
                 files={"file": (file.filename or "recording.wav", payload)},
@@ -181,7 +172,7 @@ async def create_transcription(
 
     if response.status_code != 200:
         raise HTTPException(
-            status_code=502, detail=_upstream_detail(response, "Transcription failed")
+            status_code=502, detail=upstream_detail(response, "Transcription failed")
         )
 
     body = response.json()
@@ -229,7 +220,7 @@ async def delete_item(item_id: str) -> dict:
     return {"status": "deleted", "id": item_id}
 
 
-def _upstream_detail(response: httpx.Response, fallback: str) -> str:
+def upstream_detail(response: httpx.Response, fallback: str) -> str:
     """The audio server's own explanation, when it gave one.
 
     Replacing it with a generic message would hide the only sentence that says what
@@ -242,7 +233,7 @@ def _upstream_detail(response: httpx.Response, fallback: str) -> str:
     return str(detail) if detail else f"{fallback} ({response.status_code})."
 
 
-def _wav_duration(data: bytes) -> Optional[float]:
+def wav_duration(data: bytes) -> Optional[float]:
     """Length of a WAV in seconds, when the bytes are a WAV at all.
 
     Read here rather than in the page: an <audio> element only knows the duration

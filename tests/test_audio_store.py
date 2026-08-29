@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.audio import store
-from backend.app.audio.models import AudioKind
+from backend.app.audio.models import AudioKind, JobState
 from backend.app.audio.store import AudioStoreError
 from backend.app.inference.audio_runtimes import SpeechRuntime, TranscriptionRuntime
 from backend.app.inference.models import DeployRequest, Modality
@@ -165,6 +165,78 @@ class TestRoutesWithNothingRunning:
 
         assert response.status_code in (400, 404)
         assert "root:" not in response.text
+
+
+class TestSynthesisQueue:
+    """The queue's own decisions, which need no model to exercise.
+
+    Synthesis used to be one blocking request from the browser: leaving the page
+    abandoned it while the container carried on, and a second submission queued
+    invisibly behind the first.
+    """
+
+    @pytest.fixture
+    def queue(self):
+        from backend.app.audio.jobs import SynthesisQueue
+
+        return SynthesisQueue()
+
+    def _request(self, text: str = "hello"):
+        from backend.app.audio.models import SpeechRequest
+
+        return SpeechRequest(text=text)
+
+    def test_submitting_returns_a_queued_job_not_audio(self, queue):
+        job = queue.submit(self._request(), "hexgrad/Kokoro-82M")
+
+        assert job.state == JobState.QUEUED
+        assert job.item_id is None
+        assert queue.list_jobs() == [job]
+
+    def test_jobs_are_listed_oldest_first(self, queue):
+        # A queue has to read as a queue: the next thing to run is at the top.
+        first = queue.submit(self._request("one"), "m")
+        second = queue.submit(self._request("two"), "m")
+
+        assert [job.text for job in queue.list_jobs()] == [first.text, second.text]
+
+    def test_a_queued_job_can_be_dropped(self, queue):
+        job = queue.submit(self._request(), "m")
+
+        assert queue.cancel(job.id).state == JobState.CANCELLED
+
+    def test_a_running_job_cannot_be_cancelled(self, queue):
+        job = queue.submit(self._request(), "m")
+        job.state = JobState.RUNNING
+
+        # The container is mid-generation; saying it was cancelled would be a lie
+        # about what actually happened.
+        with pytest.raises(ValueError):
+            queue.cancel(job.id)
+
+    def test_dismissing_a_finished_job_forgets_it(self, queue):
+        job = queue.submit(self._request(), "m")
+        job.state = JobState.DONE
+
+        queue.cancel(job.id)
+
+        assert queue.list_jobs() == []
+
+    def test_an_unknown_job_is_not_silently_accepted(self, queue):
+        with pytest.raises(KeyError):
+            queue.cancel("nope")
+
+    def test_finished_jobs_do_not_accumulate_forever(self, queue):
+        from backend.app.audio.jobs import MAX_FINISHED_JOBS
+
+        for index in range(MAX_FINISHED_JOBS + 5):
+            job = queue.submit(self._request(f"clip {index}"), "m")
+            job.state = JobState.DONE
+        queue._trim()
+
+        # The clips themselves are the durable record; the job list is a view of
+        # what is happening now.
+        assert len(queue.list_jobs()) == MAX_FINISHED_JOBS
 
 
 class TestTranscriptionRuntime:
