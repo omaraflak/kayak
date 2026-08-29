@@ -36,6 +36,12 @@ WATCHDOG_INTERVAL_SECONDS = 10.0
 HEALTH_TIMEOUT_SECONDS = 1800
 CONTAINER_CHECK_INTERVAL_SECONDS = 5.0
 
+#: Grace given to a server container when Kayak itself is shutting down. Short,
+#: because every modality's container has to be stopped inside the period the
+#: daemon allows the backend before it kills it -- and a server that ignores the
+#: signal loses nothing by being killed, since its weights are on disk.
+SHUTDOWN_STOP_TIMEOUT_SECONDS = 3
+
 _ACTIVE_STATES = frozenset({
     ServerState.PULLING_IMAGE,
     ServerState.STARTING_CONTAINER,
@@ -1330,11 +1336,25 @@ class ServerManager:
                 logger.exception("vLLM watchdog reconcile failed; will retry")
 
     async def shutdown(self) -> None:
-        """Stops background monitors on process shutdown.
+        """Stops this runtime's monitors and its server container.
 
-        The server container itself is left running deliberately: it survives a
-        backend restart and is re-adopted by check_and_sync_status on the way up.
+        The container used to be left running on purpose, so that a backend restart
+        could re-adopt it instead of paying for the model load again. That trade is
+        wrong for the app people actually run: closing the desktop app removes the
+        Kayak container, and a speech or text server was left behind holding several
+        gigabytes of memory -- and the GPU, where there is one -- with nothing left
+        alive to talk to it, until the user went looking for it in Docker by hand.
+        Loading the model again on the next launch is the cheaper mistake.
+
+        No lock is taken. A deployment that is wedged holding the control lock must
+        not be able to hold the whole shutdown past the daemon's grace period, and
+        bumping the generation is enough to keep an in-flight deploy from leaving a
+        container behind: the start path removes what it created once it sees it has
+        been superseded.
         """
+        self._deploy_generation += 1
+        self._active_request = None
+
         for task in (
             self._watchdog_task,
             self._monitor_task,
@@ -1350,4 +1370,40 @@ class ServerManager:
         if self._log_stop_event:
             self._log_stop_event.set()
             self._log_stop_event = None
+
+        await self._stop_container_for_shutdown()
+
+    async def _stop_container_for_shutdown(self) -> None:
+        """Stops and removes this runtime's container, quietly and quickly.
+
+        Found by name rather than by what this process started, so a container
+        adopted from a previous run is stopped too.
+        """
+        if not self._docker_available or not self._client:
+            return
+
+        client = self._client
+        name = self._runtime.container_name
+
+        def _stop() -> None:
+            try:
+                container = client.containers.get(name)
+            except Exception:
+                # Nothing of this name: the usual case, and not worth a log line
+                # on a process that is already on its way out.
+                return
+            try:
+                # A shorter grace than a user-driven stop, because the whole
+                # shutdown is racing the daemon's own timer and a model server
+                # holds nothing that is not already on disk.
+                container.stop(timeout=SHUTDOWN_STOP_TIMEOUT_SECONDS)
+            except Exception:
+                pass
+            try:
+                container.remove(force=True)
+            except Exception:
+                pass
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _stop)
 

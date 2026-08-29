@@ -101,9 +101,10 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: stop sandbox containers this process started so they do not outlive it.
-    # Model server containers are deliberately left running -- they are re-adopted on
-    # the next startup -- but their monitors must not outlive the event loop.
+    # Shutdown: nothing this process started may outlive it. Sandboxes are stopped
+    # and kept; model servers are stopped and removed, because a speech or text
+    # server left behind holds gigabytes of memory (and the GPU) after the app the
+    # user closed is gone.
     await turns.cancel_all()
     await sandbox_manager.shutdown_all()
     await audio_jobs.shutdown_all()

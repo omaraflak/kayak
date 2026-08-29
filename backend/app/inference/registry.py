@@ -140,7 +140,12 @@ async def sync_all() -> None:
 
 
 async def shutdown() -> None:
-    """Stops every manager's background monitors."""
+    """Stops every manager's monitors and its server container.
+
+    Concurrently, because this runs inside the grace period the Docker daemon
+    gives the backend before killing it, and a modality left until last is a
+    modality left running.
+    """
     await asyncio.gather(
         *(manager.shutdown() for manager in managers()),
         return_exceptions=True,
