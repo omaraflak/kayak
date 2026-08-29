@@ -12,7 +12,8 @@ import {
   AudioLines,
   Brain,
   Loader2,
-  Settings
+  Settings,
+  type LucideIcon,
 } from 'lucide-react';
 import { useConversationActivity } from '../../context/ConversationActivityContext';
 import { useDialog } from '../../context/DialogContext';
@@ -26,6 +27,30 @@ interface SidebarProps {
   currentTab: NavigationTab;
   onSelectTab: (tab: NavigationTab) => void;
 }
+
+/** One entry in the left-hand navigation. */
+const NavItem: React.FC<{
+  tab: NavigationTab;
+  currentTab: NavigationTab;
+  onSelect: (tab: NavigationTab) => void;
+  icon: LucideIcon;
+  label: string;
+}> = ({ tab, currentTab, onSelect, icon: Icon, label }) => {
+  const active = currentTab === tab;
+  return (
+    <button
+      onClick={() => onSelect(tab)}
+      className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+        active
+          ? 'bg-md-primary-container text-md-on-primary-container border border-md-primary/40 shadow-xs'
+          : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
+      }`}
+    >
+      <Icon className={`w-4 h-4 ${active ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
+      <span>{label}</span>
+    </button>
+  );
+};
 
 export const Sidebar: React.FC<SidebarProps> = ({
   conversations,
@@ -63,106 +88,77 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Navigation Tabs */}
+      {/* Navigation.
+
+          Split in two: the places you make something, then the places you set it
+          up. The list had grown to seven entries of equal weight, and the two
+          that get used constantly sat among five that are configured once. */}
       <div className="p-2 border-b border-md-outline-variant space-y-0.5">
-        <button
-          onClick={() => onSelectTab('chat')}
-          className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            currentTab === 'chat'
-              ? 'bg-md-primary-container text-md-on-primary-container border border-md-primary/40 shadow-xs'
-              : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
-          }`}
-        >
-          <MessageSquare className={`w-4 h-4 ${currentTab === 'chat' ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
-          <span>Conversations</span>
-        </button>
+        <NavItem
+          tab="chat"
+          currentTab={currentTab}
+          onSelect={onSelectTab}
+          icon={MessageSquare}
+          label="Conversations"
+        />
+        <NavItem
+          tab="audio"
+          currentTab={currentTab}
+          onSelect={onSelectTab}
+          icon={AudioLines}
+          label="Audio"
+        />
 
-        <button
-          onClick={() => onSelectTab('agents')}
-          className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            currentTab === 'agents'
-              ? 'bg-md-primary-container text-md-on-primary-container border border-md-primary/40 shadow-xs'
-              : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
-          }`}
-        >
-          <Bot className={`w-4 h-4 ${currentTab === 'agents' ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
-          <span>Agent Profiles</span>
-        </button>
+        <div className="pt-3 pb-1 px-3">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-md-on-surface-variant">
+            Configure
+          </span>
+        </div>
 
-        <button
-          onClick={() => onSelectTab('memories')}
-          className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            currentTab === 'memories'
-              ? 'bg-md-primary-container text-md-on-primary-container border border-md-primary/40 shadow-xs'
-              : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
-          }`}
-        >
-          <Brain className={`w-4 h-4 ${currentTab === 'memories' ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
-          <span>Memories</span>
-        </button>
-
-        <button
-          onClick={() => onSelectTab('skills')}
-          className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            currentTab === 'skills'
-              ? 'bg-md-primary-container text-md-on-primary-container border border-md-primary/40 shadow-xs'
-              : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
-          }`}
-        >
-          <Sparkles className={`w-4 h-4 ${currentTab === 'skills' ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
-          <span>Skills Directory</span>
-        </button>
-
-        <button
-          onClick={() => onSelectTab('tools')}
-          className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            currentTab === 'tools'
-              ? 'bg-md-primary-container text-md-on-primary-container border border-md-primary/40 shadow-xs'
-              : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
-          }`}
-        >
-          <Wrench className={`w-4 h-4 ${currentTab === 'tools' ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
-          <span>Custom Tools</span>
-        </button>
-
-        <button
-          onClick={() => onSelectTab('models')}
-          className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            currentTab === 'models'
-              ? 'bg-md-primary-container text-md-on-primary-container border border-md-primary/40 shadow-xs'
-              : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
-          }`}
-        >
-          <Cpu className={`w-4 h-4 ${currentTab === 'models' ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
-          <span>Local Models</span>
-        </button>
-
-        <button
-          onClick={() => onSelectTab('audio')}
-          className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            currentTab === 'audio'
-              ? 'bg-md-primary-container text-md-on-primary-container border border-md-primary/40 shadow-xs'
-              : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
-          }`}
-        >
-          <AudioLines className={`w-4 h-4 ${currentTab === 'audio' ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
-          <span>Audio</span>
-        </button>
-
-        <button
-          onClick={() => onSelectTab('settings')}
-          className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            currentTab === 'settings'
-              ? 'bg-md-primary-container text-md-on-primary-container border border-md-primary/40 shadow-xs'
-              : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
-          }`}
-        >
-          <Settings className={`w-4 h-4 ${currentTab === 'settings' ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
-          <span>Platform Settings</span>
-        </button>
+        <NavItem
+          tab="agents"
+          currentTab={currentTab}
+          onSelect={onSelectTab}
+          icon={Bot}
+          label="Agent Profiles"
+        />
+        <NavItem
+          tab="memories"
+          currentTab={currentTab}
+          onSelect={onSelectTab}
+          icon={Brain}
+          label="Memories"
+        />
+        <NavItem
+          tab="skills"
+          currentTab={currentTab}
+          onSelect={onSelectTab}
+          icon={Sparkles}
+          label="Skills Directory"
+        />
+        <NavItem
+          tab="tools"
+          currentTab={currentTab}
+          onSelect={onSelectTab}
+          icon={Wrench}
+          label="Custom Tools"
+        />
+        <NavItem
+          tab="models"
+          currentTab={currentTab}
+          onSelect={onSelectTab}
+          icon={Cpu}
+          label="Local Models"
+        />
+        <NavItem
+          tab="settings"
+          currentTab={currentTab}
+          onSelect={onSelectTab}
+          icon={Settings}
+          label="Platform Settings"
+        />
       </div>
 
-      {/* Conversations Section Header */}
       <div className="px-3 pt-3 pb-1 flex items-center justify-between">
         <span className="text-[11px] font-bold uppercase tracking-wider text-md-on-surface-variant">
           Chats ({ownConversations.length})

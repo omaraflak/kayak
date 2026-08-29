@@ -123,6 +123,15 @@ export const App: React.FC = () => {
     // shared across agents, skills and tools, so carrying it across a tab switch
     // produced URLs like /tools/coding_best_practices -- a skill id under the tools
     // tab, naming a tool that does not exist.
+    // Audio has no state without one of its two halves, so selecting it lands on
+    // one rather than on a bare /audio that renders the same page under a
+    // different address.
+    if (tab === 'audio') {
+      setSelectedItemId('synthesize');
+      navigateTo('audio', 'synthesize');
+      return;
+    }
+
     setSelectedItemId(null);
     navigateTo(tab, null);
   };
@@ -265,7 +274,13 @@ export const App: React.FC = () => {
         )}
 
         {currentTab === 'audio' && (
-          <AudioView onOpenModels={() => handleSelectTab('models')} />
+          <AudioView
+            onOpenModels={() => handleSelectTab('models')}
+            // Anything but 'transcribe' is the synthesize half, so a bare /audio
+            // or a stale link lands somewhere real rather than on nothing.
+            mode={selectedItemId === 'transcribe' ? 'transcribe' : 'synthesize'}
+            onSelectMode={(mode) => handleSelectItem('audio', mode)}
+          />
         )}
 
         {currentTab === 'settings' && (

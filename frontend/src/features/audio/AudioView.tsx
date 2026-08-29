@@ -20,7 +20,7 @@ import {
   Upload,
 } from 'lucide-react';
 
-type Mode = 'synthesize' | 'transcribe';
+export type Mode = 'synthesize' | 'transcribe';
 
 /** Formats like 1:04. Clips are short; hours would be noise. */
 function formatDuration(seconds?: number | null): string {
@@ -36,13 +36,19 @@ function formatWhen(epochSeconds: number): string {
 export interface AudioViewProps {
   /** Sends the user to Local Models, the one place servers are started. */
   onOpenModels: () => void;
+  /** Which half of the page is showing. Comes from the URL. */
+  mode: Mode;
+  onSelectMode: (mode: Mode) => void;
 }
 
 /** States in which a job is still going to produce something. */
 const ACTIVE_JOB_STATES: AudioJob['state'][] = ['queued', 'running'];
 
-export const AudioView: React.FC<AudioViewProps> = ({ onOpenModels }) => {
-  const [mode, setMode] = useState<Mode>('synthesize');
+export const AudioView: React.FC<AudioViewProps> = ({
+  onOpenModels,
+  mode,
+  onSelectMode,
+}) => {
   const [items, setItems] = useState<AudioItem[]>([]);
   const [jobs, setJobs] = useState<AudioJob[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -130,13 +136,13 @@ export const AudioView: React.FC<AudioViewProps> = ({ onOpenModels }) => {
         <div className="flex items-center gap-1 p-1 rounded-xl bg-md-surface-container-high border border-md-outline-variant">
           <ModeButton
             active={mode === 'synthesize'}
-            onClick={() => setMode('synthesize')}
+            onClick={() => onSelectMode('synthesize')}
             icon={<Type className="w-3 h-3" />}
             label="Synthesize"
           />
           <ModeButton
             active={mode === 'transcribe'}
-            onClick={() => setMode('transcribe')}
+            onClick={() => onSelectMode('transcribe')}
             icon={<Mic className="w-3 h-3" />}
             label="Transcribe"
           />

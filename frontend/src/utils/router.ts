@@ -6,8 +6,13 @@ export interface RouteState {
   itemId?: string | null;
 }
 
-/** Tabs that follow the /<tab>/<optional-id> URL pattern. */
-const ITEM_TABS = new Set<NavigationTab>(['agents', 'skills', 'tools']);
+/** Tabs that follow the /<tab>/<optional-id> URL pattern.
+ *
+ * Audio's "id" is which half of it you are on -- synthesize or transcribe -- so
+ * that each is a place you can link to and reload into, rather than two views
+ * hiding behind one address.
+ */
+const ITEM_TABS = new Set<NavigationTab>(['agents', 'skills', 'tools', 'audio']);
 
 /**
  * Parses the current window.location.pathname into structured RouteState.
@@ -33,7 +38,7 @@ export function parseCurrentUrl(): RouteState {
   }
 
   // Simple tabs without sub-IDs: /settings, /models, /memories, /audio
-  const SIMPLE_TABS = new Set<NavigationTab>(['settings', 'models', 'memories', 'audio']);
+  const SIMPLE_TABS = new Set<NavigationTab>(['settings', 'models', 'memories']);
   if (SIMPLE_TABS.has(firstPart)) {
     return { tab: firstPart };
   }
@@ -54,12 +59,12 @@ export function navigateTo(tab: NavigationTab, id?: string | null, replace = fal
     case 'agents':
     case 'skills':
     case 'tools':
+    case 'audio':
       targetPath = id ? `/${tab}/${encodeURIComponent(id)}` : `/${tab}`;
       break;
     case 'settings':
     case 'models':
     case 'memories':
-    case 'audio':
       targetPath = `/${tab}`;
       break;
     default:
