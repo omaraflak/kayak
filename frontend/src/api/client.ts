@@ -20,6 +20,7 @@ import {
   SpeechRequest,
   AudioJob,
   JobKind,
+  MessageSpeech,
   VoiceList,
   HostCapability,
   InstalledVersions,
@@ -389,6 +390,41 @@ export const api = {
    */
   synthesizeSpeech: (data: SpeechRequest): Promise<AudioJob> =>
     fetchJSONPost(`${API_BASE}/audio/speech`, data),
+
+  /**
+   * Ensures a chat message has speech, and says where that stands.
+   *
+   * Returns immediately rather than the audio: the result is kept against the
+   * message, so a reload can find work still in flight and asking twice is free.
+   */
+  requestMessageSpeech: (
+    messageId: string,
+    text: string,
+    voice?: string | null
+  ): Promise<MessageSpeech> =>
+    fetchJSONPost(`${API_BASE}/audio/messages/${encodeURIComponent(messageId)}/speech`, {
+      text,
+      voice: voice ?? null,
+    }),
+
+  /** What speech exists, or is being made, for these messages. */
+  getMessageSpeech: (messageIds: string[]): Promise<MessageSpeech[]> =>
+    fetchJSON(
+      `${API_BASE}/audio/messages/speech?ids=${messageIds.map(encodeURIComponent).join(',')}`
+    ),
+
+  /** Where a message's finished audio can be played from. */
+  messageSpeechUrl: (messageId: string): string =>
+    `${API_BASE}/audio/messages/${encodeURIComponent(messageId)}/speech/audio`,
+
+  /** Transcribes a recording and returns the text, storing nothing. */
+  listen: async (recording: Blob): Promise<string> => {
+    const body = new FormData();
+    body.append('file', recording, 'dictation.webm');
+    const response = await fetch(`${API_BASE}/audio/listen`, withAuth({ method: 'POST', body }));
+    await assertOk(response);
+    return (await response.json()).text ?? '';
+  },
 
   /** The queues: waiting, running, and recently finished, optionally by kind. */
   listAudioJobs: (kind?: JobKind): Promise<AudioJob[]> =>

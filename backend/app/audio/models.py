@@ -87,6 +87,20 @@ class SpeechRequest(BaseModel):
     response_format: str = "wav"
 
 
+class MessageSpeech(BaseModel):
+    """Speech for one chat message: ready, being made, or failed.
+
+    Kept against the message rather than in the tab that asked, so a reload can
+    show what is still in flight and a second request costs nothing.
+    """
+    message_id: str
+    #: pending, ready or failed.
+    state: str
+    chunks_done: int = 0
+    chunks_total: int = 0
+    error: Optional[str] = None
+
+
 class Voice(BaseModel):
     """A voice the running speech model offers."""
     id: str

@@ -85,6 +85,12 @@ async def lifespan(app: FastAPI):
 
     audio_jobs.start_all()
 
+    # Speech for chat messages is kept against the message for a day, so a reload
+    # can show work still in flight and never repeats work already done.
+    from backend.app.audio.speech_cache import speech_cache
+
+    speech_cache.start()
+
     if not settings.AUTH_TOKEN and settings.HOST not in ("127.0.0.1", "localhost", "::1"):
         logger.warning(
             "Kayak is bound to %s with no KAYAK_AUTH_TOKEN set. Agents have shell and "
@@ -101,6 +107,7 @@ async def lifespan(app: FastAPI):
     await turns.cancel_all()
     await sandbox_manager.shutdown_all()
     await audio_jobs.shutdown_all()
+    await speech_cache.shutdown()
     await inference_registry.shutdown()
 
 

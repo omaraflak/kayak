@@ -15,15 +15,17 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from backend.app.audio import store
 from backend.app.audio import jobs as job_queues
+from backend.app.audio.speech_cache import speech_cache
 from backend.app.audio.models import (
     AudioItem,
     AudioJob,
     AudioKind,
     JobKind,
+    MessageSpeech,
     SpeechRequest,
     Voice,
     VoiceList,
@@ -117,6 +119,88 @@ async def create_speech(request: SpeechRequest) -> AudioJob:
     # sitting in the queue to fail later.
     server_base(Modality.SPEECH)
     return job_queues.synthesis_queue.submit(request, _model_of(Modality.SPEECH))
+
+
+@router.post("/messages/{message_id}/speech", response_model=MessageSpeech)
+async def request_message_speech(message_id: str, request: SpeechRequest) -> MessageSpeech:
+    """Ensures a chat message has speech, and says where that stands.
+
+    Returns immediately rather than the audio: synthesis takes as long as the
+    speech does, and a request held open for it dies with the tab. Asking twice
+    is free -- the second caller joins the first, or is handed its result.
+    """
+    if not request.text.strip():
+        raise HTTPException(status_code=400, detail="There is no text to speak.")
+
+    # Refused now rather than left pending forever with no model to serve it.
+    server_base(Modality.SPEECH)
+    entry = speech_cache.request(message_id, request.text, request.voice)
+    return _as_message_speech(entry)
+
+
+@router.get("/messages/speech", response_model=list[MessageSpeech])
+async def get_message_speech(ids: str = Query("")) -> list[MessageSpeech]:
+    """What speech exists, or is being made, for these messages.
+
+    Asked when a conversation is opened so that work already in flight is visible
+    again after a reload, rather than the page forgetting it was ever started.
+    """
+    wanted = [item for item in ids.split(",") if item]
+    return [_as_message_speech(entry) for entry in speech_cache.states(wanted).values()]
+
+
+@router.get("/messages/{message_id}/speech/audio")
+async def get_message_speech_audio(message_id: str) -> FileResponse:
+    """The audio for one message, once it is ready."""
+    try:
+        path = speech_cache.audio_path(message_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    return FileResponse(str(path), media_type="audio/wav")
+
+
+def _as_message_speech(entry) -> MessageSpeech:
+    return MessageSpeech(
+        message_id=entry.message_id,
+        state=entry.state,
+        chunks_done=entry.chunks_done,
+        chunks_total=entry.chunks_total,
+        error=entry.error,
+    )
+
+
+@router.post("/listen")
+async def listen(file: UploadFile = File(...)) -> dict:
+    """Transcribes a recording and returns the text, without storing anything.
+
+    For dictating into a message box, where the text is the point and the audio
+    was never meant to be kept.
+    """
+    base = server_base(Modality.TRANSCRIPTION)
+
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(status_code=400, detail="The recording is empty.")
+    if len(payload) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="That recording is too long.")
+
+    try:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                f"{base}/audio/transcriptions",
+                files={"file": (file.filename or "dictation.webm", payload)},
+            )
+    except httpx.HTTPError as error:
+        raise HTTPException(
+            status_code=502, detail=f"The transcription server did not respond: {error}"
+        )
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=502, detail=upstream_detail(response, "Transcription failed")
+        )
+
+    return {"text": response.json().get("text", "")}
 
 
 @router.get("/jobs", response_model=list[AudioJob])

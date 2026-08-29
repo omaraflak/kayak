@@ -3,6 +3,7 @@ import { AudioItem, AudioJob, Modality, Voice } from '../../types';
 import { api, errorMessage } from '../../api/client';
 import { useVLLMStatus, VLLM_LOADING_STATES } from '../../context/VLLMStatusContext';
 import { formatBytes } from '../models/modelSizing';
+import { ProgressRing } from '../../ui/ProgressRing';
 import {
   AudioLines,
   AlertCircle,
@@ -454,54 +455,6 @@ const SynthesizePanel: React.FC<{
         )}
       </section>
     </>
-  );
-};
-
-/**
- * Progress as a ring, sized to sit inside a chip.
- *
- * Two modes, because there are two honest states: a job waiting for the server has
- * no progress to report and spins, and one being spoken has a real fraction. An
- * indeterminate bar that creeps forward on a timer would be inventing a number.
- */
-const ProgressRing: React.FC<{ fraction?: number }> = ({ fraction }) => {
-  const radius = 5;
-  const circumference = 2 * Math.PI * radius;
-
-  if (fraction === undefined) {
-    return (
-      <svg viewBox="0 0 14 14" className="w-3 h-3 animate-spin" aria-hidden="true">
-        <circle
-          cx="7"
-          cy="7"
-          r={radius}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeDasharray={`${circumference * 0.3} ${circumference}`}
-          opacity="0.9"
-        />
-      </svg>
-    );
-  }
-
-  return (
-    <svg viewBox="0 0 14 14" className="w-3 h-3 -rotate-90" aria-hidden="true">
-      <circle cx="7" cy="7" r={radius} fill="none" stroke="currentColor" strokeWidth="2" opacity="0.25" />
-      <circle
-        cx="7"
-        cy="7"
-        r={radius}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeDasharray={circumference}
-        strokeDashoffset={circumference * (1 - Math.min(1, Math.max(0, fraction)))}
-        className="transition-[stroke-dashoffset] duration-500 ease-out"
-      />
-    </svg>
   );
 };
 

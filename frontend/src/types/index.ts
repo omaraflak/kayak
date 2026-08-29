@@ -412,6 +412,20 @@ export interface AudioItem {
   created_at: number;
 }
 
+/**
+ * Speech for one chat message: ready, being made, or failed.
+ *
+ * Kept against the message rather than in the tab that asked, so a reload shows
+ * what is still in flight and a second request costs nothing.
+ */
+export interface MessageSpeech {
+  message_id: string;
+  state: 'pending' | 'ready' | 'failed';
+  chunks_done: number;
+  chunks_total: number;
+  error?: string | null;
+}
+
 /** A voice the running speech model offers. */
 export interface Voice {
   id: string;

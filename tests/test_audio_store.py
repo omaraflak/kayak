@@ -8,6 +8,7 @@ the page.
 
 import asyncio
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -292,6 +293,99 @@ class TestTranscriptionQueue:
         queue.submit(data=b"x", filename="voice.m4a", model_id="m")
 
         assert store.list_items() == []
+
+
+class TestSpeechCache:
+    """Speech kept against the message, for a day.
+
+    Reading a reply aloud used to exist only in the tab that asked: leaving the
+    conversation threw away work already done, and a reload lost any sign that a
+    message was still being synthesised.
+    """
+
+    @pytest.fixture
+    def cache(self, audio_dir):
+        from backend.app.audio.speech_cache import SpeechCache
+
+        return SpeechCache()
+
+    def test_asking_twice_for_the_same_words_is_free(self, cache):
+        first = cache.request("m1", "hello there", None)
+        second = cache.request("m1", "hello there", None)
+
+        # The second caller joins the first rather than starting a second one.
+        assert second is first
+        assert cache.get("m1").state == "pending"
+
+    def test_different_words_replace_the_old_audio(self, cache):
+        cache.request("m1", "hello there", None)
+        first = cache.get("m1").fingerprint
+        entry = cache.request("m1", "something else entirely", None)
+
+        # An edited message must not be served the previous message's audio.
+        assert entry.fingerprint != first
+
+    def test_a_different_voice_is_different_audio(self, cache):
+        from backend.app.audio.speech_cache import fingerprint_for
+
+        cache.request("m1", "hello", "af_heart")
+        entry = cache.request("m1", "hello", "am_michael")
+
+        assert entry.state == "pending"
+        assert entry.fingerprint == fingerprint_for("hello", "am_michael")
+
+    def test_nothing_is_playable_until_it_is_ready(self, cache):
+        cache.request("m1", "hello", None)
+
+        with pytest.raises(FileNotFoundError):
+            cache.audio_path("m1")
+
+    def test_entries_expire_after_a_day(self, cache, audio_dir):
+        from backend.app.audio.speech_cache import TTL_SECONDS
+
+        cache.request("m1", "hello", None)
+        entry = cache.get("m1")
+        entry.state = "ready"
+        audio = cache._audio_path("m1")
+        audio.write_bytes(WAV_BYTES)
+        entry.created_at = time.time() - TTL_SECONDS - 1
+
+        # A convenience, not a library: the Audio page is where audio is kept.
+        assert cache.get("m1") is None
+        assert not audio.exists()
+
+    def test_sweeping_removes_only_the_expired(self, cache):
+        from backend.app.audio.speech_cache import TTL_SECONDS
+
+        cache.request("old", "a", None)
+        cache.request("new", "b", None)
+        cache._entries["old"].created_at = time.time() - TTL_SECONDS - 1
+
+        assert cache.sweep() == 1
+        assert cache.get("new") is not None
+
+    def test_a_message_id_cannot_escape_the_directory(self, cache, audio_dir):
+        # Ids reach this from a URL and become filenames.
+        cache.request("../../etc/passwd", "hello", None)
+        entry = cache.get("../../etc/passwd")
+        entry.state = "ready"
+        cache._persist(entry)
+
+        written = list((audio_dir / "speech").glob("*.json"))
+        assert len(written) == 1
+        assert written[0].parent == audio_dir / "speech"
+
+    def test_a_pending_entry_does_not_survive_a_restart(self, cache, audio_dir):
+        # The process that was producing it is gone, so it would hang forever.
+        cache.request("m1", "hello", None)
+        cache._persist(cache.get("m1"))
+
+        from backend.app.audio.speech_cache import SpeechCache
+
+        revived = SpeechCache()
+        revived._load_from_disk()
+
+        assert revived.get("m1") is None
 
 
 class TestTranscriptionRuntime:

@@ -9,6 +9,10 @@ import { ToolCallsAccordion } from './ToolCallsAccordion';
 import { ThinkingAccordion } from './ThinkingAccordion';
 import { MarkdownContent } from '../../ui/Markdown';
 import { AutoGrowTextarea } from '../../ui/AutoGrowTextarea';
+import { coalesceQueued, QueuedMessage } from './messageQueue';
+import { useDictation, useMessageSpeech } from './useSpeech';
+import { ProgressRing } from '../../ui/ProgressRing';
+import { useVLLMStatus } from '../../context/VLLMStatusContext';
 import { MessageAction, MessageActions } from './MessageActions';
 import {
   GroupedTurn,
@@ -39,6 +43,10 @@ import {
   ShieldQuestion,
   Check,
   X,
+  Clock,
+  Mic,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { useDialog } from '../../context/DialogContext';
 
@@ -100,6 +108,10 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   const dialog = useDialog();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputContent, setInputContent] = useState('');
+  // Typed while the agent was still answering. Held here rather than sent, so
+  // each does not start its own turn and get answered out of order.
+  const [queued, setQueued] = useState<QueuedMessage[]>([]);
+  const [speakReplies, setSpeakReplies] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [streamingTokenText, setStreamingTokenText] = useState('');
   const [streamingThinkingText, setStreamingThinkingText] = useState('');
@@ -114,16 +126,32 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
+  // Reading replies aloud and dictating them both need their model running, so
+  // the controls appear only when the machine can actually do it.
+  const { statuses: audioServers } = useVLLMStatus();
+  const canSpeak = audioServers.speech?.state === 'ready';
+  const canListen = audioServers.transcription?.state === 'ready';
+  const spoken = useMessageSpeech(canSpeak);
+  const dictation = useDictation((text) =>
+    // Appended rather than replacing: dictation is often a second thought added
+    // to something already typed.
+    setInputContent((current) => (current.trim() ? `${current.trim()} ${text}` : text))
+  );
+
   const transcript = useChatAutoScroll(
     [messages, streamingTokenText, streamingThinkingText, activeToolExecutions],
     conversationId
   );
 
-  const loadConversationData = useCallback(async () => {
+  /** Reloads the transcript, and hands back what it loaded.
+
+      Returned rather than only stored: a caller that needs to act on the fresh
+      messages cannot read them from state, which has not re-rendered yet. */
+  const loadConversationData = useCallback(async (): Promise<Message[]> => {
     if (!conversationId) {
       setMessages([]);
       setIsSending(false);
-      return;
+      return [];
     }
     try {
       const data = await api.getConversation(conversationId);
@@ -135,8 +163,10 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       if (data.conversation?.status === 'running') {
         setIsSending(true);
       }
+      return data.messages || [];
     } catch (err) {
       console.error('Failed to load conversation messages:', err);
+      return [];
     }
   }, [conversationId]);
 
@@ -212,8 +242,14 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     },
     onDone: () => {
       resetStreamState();
-      loadConversationData();
+      // Spoken after the reload rather than from the streamed text: speech is
+      // kept against the message, and the message only has an id once it has
+      // been persisted. The cost is a moment's delay before the voice starts.
+      loadConversationData().then((loaded) => {
+        if (speakRepliesRef.current) speakLatestRef.current(loaded);
+      });
       onRefreshConversations?.();
+      flushRef.current();
     },
     onCancelled: () => {
       resetStreamState();
@@ -248,14 +284,9 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     },
   });
 
-  const handleSend = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    // Guarded here as well as on the controls: Enter reaches this without them.
-    if (readOnly) return;
-    if (!inputContent.trim() || isSending || !vllm.isReady) return;
-
-    const text = inputContent.trim();
-    setInputContent('');
+  /** Sends one message and starts a turn. The queue and the composer share it. */
+  const deliver = async (text: string) => {
+    if (!text.trim()) return;
     setIsSending(true);
     transcript.followOutput();
 
@@ -303,6 +334,82 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       });
     }
   };
+
+  const handleSend = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    // Guarded here as well as on the controls: Enter reaches this without them.
+    if (readOnly) return;
+    if (!inputContent.trim() || !vllm.isReady) return;
+
+    const text = inputContent.trim();
+    setInputContent('');
+
+    // Mid-turn this joins the queue rather than being refused, and goes when the
+    // agent finishes. Sending it now would start a second turn that the agent
+    // answers before it has seen the first one's reply.
+    if (isSending) {
+      setQueued((previous) => [
+        ...previous,
+        { id: `queued_${Date.now()}_${previous.length}`, text },
+      ]);
+      return;
+    }
+
+    // Anything queued from a cancelled turn goes along with it, in order.
+    const pending = coalesceQueued([...queued, { id: 'now', text }]);
+    setQueued([]);
+    await deliver(pending);
+  };
+
+  // The stream handlers are built before this function exists, and are not
+  // rebuilt as it changes, so they reach it through a ref rather than closing
+  // over a version of it from an earlier render.
+  const deliverRef = useRef(deliver);
+  deliverRef.current = deliver;
+  const queuedRef = useRef(queued);
+  queuedRef.current = queued;
+
+  /**
+   * Sends whatever was typed while the agent was working.
+   *
+   * Only after a turn that finished on its own. Stopping a turn is a decision to
+   * stop, and firing the queue into a new one immediately afterwards would
+   * override it.
+   */
+  const flushQueue = () => {
+    const pending = queuedRef.current;
+    if (pending.length === 0) return;
+    const text = coalesceQueued(pending);
+    setQueued([]);
+    if (text) deliverRef.current(text);
+  };
+  const flushRef = useRef(flushQueue);
+  flushRef.current = flushQueue;
+  /** Reads the newest agent message aloud, once it has been persisted. */
+  const speakLatest = (loaded: Message[]) => {
+    const latest = [...loaded]
+      .reverse()
+      .find((message) => message.role === 'assistant' && message.content?.trim());
+    if (latest?.id && latest.content) spoken.speak(latest.id, latest.content.trim());
+  };
+  const speakLatestRef = useRef(speakLatest);
+  speakLatestRef.current = speakLatest;
+
+  // Whenever the transcript changes, ask what speech exists for what is on it.
+  // This is what brings a chip back after a reload, and what lets an older
+  // message offer to play immediately when its audio is still cached.
+  useEffect(() => {
+    const ids = messages
+      .filter((message) => message.role === 'assistant' && message.id)
+      .map((message) => message.id!);
+    spoken.sync(ids);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, canSpeak]);
+  const speakRepliesRef = useRef(speakReplies);
+  speakRepliesRef.current = speakReplies;
+  // The text of the reply currently streaming, for reading it aloud once it ends.
+  const streamedTextRef = useRef('');
+  streamedTextRef.current = streamingTokenText;
 
   const handleCancelGeneration = async () => {
     if (!conversationId) return;
@@ -493,6 +600,49 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                     </MarkdownContent>
                   )}
 
+                  {/* Being synthesised right now. Read from the server rather
+                      than from this page's memory, so it is still here after a
+                      reload or a trip to another conversation. */}
+                  {(() => {
+                    const speech = turn.id ? spoken.states[turn.id] : undefined;
+                    if (!speech) return null;
+
+                    // A synthesis that died -- the speech container running out
+                    // of memory, most often -- used to leave nothing on screen at
+                    // all, so the reply simply never spoke and never said why.
+                    if (speech.state === 'failed') {
+                      return (
+                        <div className="pt-0.5">
+                          <span
+                            className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-200 border-rose-300 dark:border-rose-800/80"
+                            title={speech.error || undefined}
+                          >
+                            <AlertCircle className="w-2.5 h-2.5" />
+                            COULD NOT SPEAK
+                          </span>
+                        </div>
+                      );
+                    }
+
+                    if (speech.state !== 'pending') return null;
+                    return (
+                      <div className="pt-0.5">
+                        <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-md-primary-container text-md-on-primary-container border-md-primary/40">
+                          <ProgressRing
+                            fraction={
+                              speech.chunks_total > 0
+                                ? speech.chunks_done / speech.chunks_total
+                                : undefined
+                            }
+                          />
+                          {speech.chunks_total > 0
+                            ? `${speech.chunks_done}/${speech.chunks_total}`
+                            : 'SPEAKING'}
+                        </span>
+                      </div>
+                    );
+                  })()}
+
                   {/* Collapsible Dropdown Button for Tool Calls */}
                   {turn.toolCalls.length > 0 && (
                     <ToolCallsAccordion toolCalls={turn.toolCalls} />
@@ -531,6 +681,22 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                       }
                       content={turn.content || ''}
                       onAction={(action) => handleTurnAction(turn, action)}
+                      // Reading an older reply aloud does not depend on the
+                      // toggle: that decides what happens automatically, this is
+                      // an explicit ask for one message.
+                      onSpeak={
+                        canSpeak && turn.content && turn.id
+                          ? () =>
+                              spoken.playingId === turn.id
+                                ? spoken.stop()
+                                : spoken.speak(turn.id!, turn.content!.trim())
+                          : undefined
+                      }
+                      // Playing rather than merely being synthesised: the button
+                      // stops the audio, and there is nothing to stop until there
+                      // is sound.
+                      isPlaying={spoken.playingId === turn.id}
+                      isPreparing={turn.id ? spoken.states[turn.id]?.state === 'pending' : false}
                     />
                   )}
                 </div>
@@ -671,6 +837,64 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
         </div>
       )}
 
+      {/* A refused microphone, or a transcription that failed. Without this the
+          button simply does nothing and there is no way to tell why. */}
+      {dictation.error && (
+        <div
+          className={`px-4 pt-3 ${fullWidthInput ? 'w-full' : 'max-w-3xl mx-auto w-full'}`}
+        >
+          <div className="flex items-start gap-2 px-3 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800/80 text-rose-900 dark:text-rose-100 text-[11px] leading-relaxed">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <p className="flex-1">{dictation.error}</p>
+            <button
+              type="button"
+              onClick={dictation.clearError}
+              className="font-bold underline cursor-pointer shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Waiting to be sent. Above the composer rather than in the transcript:
+          they are not part of the conversation yet, and showing them as messages
+          would claim the agent had seen them. */}
+      {queued.length > 0 && (
+        <div
+          className={`px-4 pt-3 ${fullWidthInput ? 'w-full' : 'max-w-3xl mx-auto w-full'} space-y-1.5`}
+        >
+          <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-md-on-surface-variant">
+            <Clock className="w-3 h-3" />
+            <span>
+              {queued.length === 1
+                ? 'Queued · sends when the agent finishes'
+                : `Queued · ${queued.length} messages send together when the agent finishes`}
+            </span>
+          </div>
+          {queued.map((message) => (
+            <div
+              key={message.id}
+              className="flex items-start justify-between gap-2 px-3 py-2 rounded-xl border border-dashed border-md-outline-variant bg-md-surface-container-low"
+            >
+              <p className="text-[11px] text-md-on-surface-variant leading-relaxed whitespace-pre-wrap flex-1 min-w-0">
+                {message.text}
+              </p>
+              <button
+                type="button"
+                onClick={() =>
+                  setQueued((previous) => previous.filter((entry) => entry.id !== message.id))
+                }
+                title="Remove from the queue"
+                className="p-1 rounded-lg text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors cursor-pointer shrink-0"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Input Composer - Constrained to max-w-3xl for standard chat, full width in studio mode */}
       <div className="p-4 border-t border-md-outline-variant bg-md-surface shrink-0 transition-colors">
         <form
@@ -724,6 +948,58 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
             </div>
 
             <div className="flex items-center space-x-2">
+              {canSpeak && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Switching it off stops what is being read now, rather
+                    // than only affecting the next reply.
+                    if (speakReplies) spoken.stop();
+                    setSpeakReplies(!speakReplies);
+                  }}
+                  title={
+                    speakReplies
+                      ? 'Stop reading replies aloud'
+                      : 'Read replies aloud as they arrive'
+                  }
+                  className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                    speakReplies
+                      ? 'bg-md-primary-container text-md-on-primary-container'
+                      : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
+                  }`}
+                >
+                  {speakReplies ? (
+                    <Volume2 className={`w-3.5 h-3.5 ${spoken.playingId ? 'animate-pulse' : ''}`} />
+                  ) : (
+                    <VolumeX className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              )}
+
+              {canListen && !readOnly && (
+                <button
+                  type="button"
+                  onClick={() => (dictation.isRecording ? dictation.stop() : dictation.start())}
+                  disabled={dictation.isTranscribing}
+                  title={
+                    dictation.isRecording
+                      ? 'Stop recording and transcribe'
+                      : 'Dictate a message'
+                  }
+                  className={`p-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-50 ${
+                    dictation.isRecording
+                      ? 'bg-md-error text-md-on-error'
+                      : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
+                  }`}
+                >
+                  {dictation.isTranscribing ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Mic className={`w-3.5 h-3.5 ${dictation.isRecording ? 'animate-pulse' : ''}`} />
+                  )}
+                </button>
+              )}
+
               {isSending ? (
                 <button
                   type="button"
