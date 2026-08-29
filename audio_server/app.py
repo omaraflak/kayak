@@ -1,36 +1,43 @@
-"""An OpenAI-compatible speech server that serves whatever model it is given.
+"""An OpenAI-compatible audio server that serves whatever model it is given.
 
-Started as ``python -m tts_server --model <repo_id>``, exactly the way the vLLM image
-is started with a text model. The model is an argument; the image is a runtime.
+Started as ``python -m audio_server --modality speech|transcription --model <repo_id>``,
+the same way the vLLM image is started with a text model. The model is an argument; the
+image is a runtime. One process serves one model in one direction -- the two directions
+share this image only because they share torch and `transformers`, not because they
+share a container.
 
-Endpoints follow OpenAI's audio API so that Kayak talks to speech the same way it
-talks to text, and so anything else that speaks that API can use this too:
+Endpoints follow OpenAI's audio API, so Kayak talks to audio the way it talks to text
+and anything else speaking that API can use this too:
 
-    GET  /v1/models          the loaded model, which is how readiness is verified
-    GET  /v1/audio/voices    what this particular model offers, discovered not listed
-    POST /v1/audio/speech    text in, audio out
+    GET  /v1/models                 the loaded model, which is how readiness is verified
+    GET  /v1/audio/voices           what this model offers, discovered rather than listed
+    POST /v1/audio/speech           text in, audio out
+    POST /v1/audio/transcriptions   audio in, text out
 """
 
 import argparse
 import asyncio
 import io
 import logging
+import os
+import tempfile
 from typing import List, Optional
 
 import numpy as np
 import soundfile as sf
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from tts_server.backends import SpeechBackend, UnsupportedModelError, select_backend
-from tts_server.chunking import split_for_synthesis
+from audio_server.backends import SpeechBackend, UnsupportedModelError, select_backend
+from audio_server.backends.transcription_backend import TranscriptionBackend
+from audio_server.chunking import split_for_synthesis
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
-logger = logging.getLogger("tts_server")
+logger = logging.getLogger("audio_server")
 
 #: Formats soundfile writes reliably in this image. MP3 is deliberately absent: it
 #: depends on the libsndfile build, and returning a WAV labelled as an MP3 would be
@@ -62,25 +69,64 @@ class VoiceInfo(BaseModel):
     language: Optional[str] = None
 
 
+class VoiceListResponse(BaseModel):
+    """Voices, and which one the server uses when the caller names none.
+
+    The default travels with the list so a client opens on the same voice the
+    server would have chosen, rather than on whichever sorts first.
+    """
+    voices: List[VoiceInfo] = []
+    default_voice: Optional[str] = None
+
+
+class TranscriptionResponse(BaseModel):
+    """OpenAI's ``POST /v1/audio/transcriptions`` JSON response."""
+    text: str
+    language: Optional[str] = None
+
+
 class ServerState:
-    """The single loaded model, and the lock serialising synthesis against it."""
+    """The single loaded model, and the lock serialising work against it."""
 
     def __init__(self) -> None:
         self.model_id: str = ""
+        self.modality: str = "speech"
         self.backend: Optional[SpeechBackend] = None
         # Most of these models are not safe to call concurrently, and a second
         # request arriving mid-generation corrupts the first one's output rather
         # than queueing behind it.
         self.lock = asyncio.Lock()
 
+    def require(self, modality: str):
+        """The loaded backend, or a refusal explaining what this server is.
+
+        A transcription request reaching a speech server is a wiring mistake, and
+        saying so beats whatever a synthesis model would do with an audio file.
+        """
+        if not self.backend:
+            raise HTTPException(status_code=503, detail="The model is still loading.")
+        if self.modality != modality:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"This server does {self.modality}, not {modality}. "
+                    f"It is serving {self.model_id}."
+                ),
+            )
+        return self.backend
+
 
 state = ServerState()
-app = FastAPI(title="Kayak speech server")
+app = FastAPI(title="Kayak audio server")
 
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok" if state.backend else "loading", "model": state.model_id}
+    return {
+        "status": "ok" if state.backend else "loading",
+        "model": state.model_id,
+        "modality": state.modality,
+    }
 
 
 @app.get("/v1/models")
@@ -104,26 +150,27 @@ async def list_models() -> dict:
     }
 
 
-@app.get("/v1/audio/voices", response_model=List[VoiceInfo])
-async def list_voices() -> List[VoiceInfo]:
+@app.get("/v1/audio/voices", response_model=VoiceListResponse)
+async def list_voices() -> VoiceListResponse:
     """Voices the loaded model offers.
 
     Served rather than hardcoded anywhere: models differ completely here, and a
     client with its own list would be wrong for every model but one.
     """
-    if not state.backend:
-        raise HTTPException(status_code=503, detail="The model is still loading.")
-    return [
-        VoiceInfo(id=voice.id, label=voice.label, language=voice.language)
-        for voice in state.backend.voices()
-    ]
+    backend = state.require("speech")
+    return VoiceListResponse(
+        voices=[
+            VoiceInfo(id=voice.id, label=voice.label, language=voice.language)
+            for voice in backend.voices()
+        ],
+        default_voice=backend.default_voice(),
+    )
 
 
 @app.post("/v1/audio/speech")
 async def create_speech(request: SpeechRequest) -> Response:
     """Speaks the given text and returns an audio file."""
-    if not state.backend:
-        raise HTTPException(status_code=503, detail="The model is still loading.")
+    state.require("speech")
 
     text_format = request.response_format.lower()
     if text_format not in SUPPORTED_FORMATS:
@@ -154,6 +201,59 @@ async def create_speech(request: SpeechRequest) -> Response:
     return Response(content=buffer.getvalue(), media_type=media_type)
 
 
+@app.post("/v1/audio/transcriptions", response_model=TranscriptionResponse)
+async def create_transcription(
+    file: UploadFile = File(..., description="Audio file to transcribe"),
+    model: Optional[str] = Form(None),
+    language: Optional[str] = Form(None),
+    response_format: str = Form("json"),
+) -> TranscriptionResponse:
+    """Transcribes an uploaded recording.
+
+    The upload is written to a temporary file rather than decoded here: the models
+    read a path, and letting the library decode means every container format ffmpeg
+    knows is accepted rather than only the ones soundfile reads.
+    """
+    backend = state.require("transcription")
+
+    if response_format not in ("json", "text"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{response_format}' is not supported. Use 'json' or 'text'.",
+        )
+
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+
+    suffix = os.path.splitext(file.filename or "")[1] or ".wav"
+    handle, temp_path = tempfile.mkstemp(suffix=suffix)
+    os.close(handle)
+    try:
+        with open(temp_path, "wb") as stream:
+            stream.write(payload)
+
+        async with state.lock:
+            try:
+                text, used_language = await asyncio.get_running_loop().run_in_executor(
+                    None, backend.transcribe, temp_path, language
+                )
+            except Exception as error:
+                logger.exception("Transcription failed for %s", state.model_id)
+                raise HTTPException(
+                    status_code=500, detail=f"Transcription failed: {error}"
+                )
+    finally:
+        # The recording is the user's; it must not linger in the container after
+        # the request that carried it.
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+
+    return TranscriptionResponse(text=text, language=used_language)
+
+
 def _synthesize_all(chunks: List[str], voice: Optional[str], speed: float):
     """Speaks every chunk and joins the results with a short gap."""
     pieces = []
@@ -173,14 +273,25 @@ def _synthesize_all(chunks: List[str], voice: Optional[str], speed: float):
     return np.concatenate(pieces), sample_rate
 
 
-def load_model(model_id: str, trust_remote_code: bool) -> None:
-    """Selects a backend and loads the model, or exits with a legible reason."""
+def load_model(model_id: str, modality: str, trust_remote_code: bool) -> None:
+    """Loads the model for one direction, or raises with a legible reason."""
+    if modality == "transcription":
+        logger.info("Loading %s for transcription", model_id)
+        backend = TranscriptionBackend(model_id, trust_remote_code=trust_remote_code)
+        backend.load()
+        state.model_id = model_id
+        state.modality = modality
+        state.backend = backend
+        logger.info("Ready: transcribing with %s", model_id)
+        return
+
     logger.info("Selecting a backend for %s", model_id)
     backend = select_backend(model_id, trust_remote_code=trust_remote_code)
     logger.info("Loading %s with the %s backend", model_id, backend.name)
     backend.load()
 
     state.model_id = model_id
+    state.modality = modality
     state.backend = backend
     voices = backend.voices()
     logger.info(
@@ -192,8 +303,14 @@ def load_model(model_id: str, trust_remote_code: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Kayak speech server")
+    parser = argparse.ArgumentParser(description="Kayak audio server")
     parser.add_argument("--model", required=True, help="Hugging Face repository id")
+    parser.add_argument(
+        "--modality",
+        default="speech",
+        choices=("speech", "transcription"),
+        help="Which direction this server runs in",
+    )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument(
@@ -206,7 +323,7 @@ def main() -> None:
     import uvicorn
 
     try:
-        load_model(args.model, args.trust_remote_code)
+        load_model(args.model, args.modality, args.trust_remote_code)
     except UnsupportedModelError as error:
         # Named as its own failure so the deployment log explains that the model is
         # unsupported rather than showing a library traceback.

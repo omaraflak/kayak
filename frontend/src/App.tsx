@@ -9,6 +9,7 @@ import { SkillsView } from './features/skills/SkillsView';
 import { ToolsView } from './features/tools/ToolsView';
 import { SettingsView } from './features/settings/SettingsView';
 import { ModelsView } from './features/models/ModelsView';
+import { AudioView } from './features/audio/AudioView';
 import { GlobalVLLMStatusWidget } from './features/models/GlobalVLLMStatusWidget';
 import { useDialog } from './context/DialogContext';
 import { parseCurrentUrl, navigateTo } from './utils/router';
@@ -261,6 +262,10 @@ export const App: React.FC = () => {
 
         {currentTab === 'models' && (
           <ModelsView />
+        )}
+
+        {currentTab === 'audio' && (
+          <AudioView onOpenModels={() => handleSelectTab('models')} />
         )}
 
         {currentTab === 'settings' && (

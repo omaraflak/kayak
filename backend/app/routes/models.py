@@ -42,6 +42,11 @@ class HuggingFaceModelSearchResult(BaseModel):
     downloads: int
     likes: int
     pipeline_tag: Optional[str] = None
+    #: Library the Hub says loads this repository, when it says. Absent for a
+    #: surprising share of popular models -- Kokoro among them -- which is why the
+    #: runtimes match on repository id as well.
+    library_name: Optional[str] = None
+    tags: List[str] = []
     model_string_hf: str
     model_string_vllm: str
 
@@ -146,17 +151,29 @@ async def list_available_models() -> List[ProviderModels]:
 
 @router.get("/huggingface/search", response_model=List[HuggingFaceModelSearchResult])
 async def search_huggingface_models(
-    query: str = Query(..., min_length=2, description="Search term for Hugging Face Hub")
+    query: str = Query(..., min_length=2, description="Search term for Hugging Face Hub"),
+    pipeline_tag: str = Query(
+        "text-generation",
+        description="Hugging Face task to search within, e.g. text-to-speech",
+    ),
 ) -> List[HuggingFaceModelSearchResult]:
-    """Queries the Hugging Face Hub API for open-weight LLM models matching search query."""
+    """Queries the Hugging Face Hub for models of one task matching a search query.
+
+    The task is a parameter rather than a constant because the catalogue serves every
+    modality now. Clients take the value from the runtime descriptors, so a runtime
+    added later is searchable without a change here or in the page.
+    """
     results: List[HuggingFaceModelSearchResult] = []
     url = "https://huggingface.co/api/models"
     params = {
-        "pipeline_tag": "text-generation",
+        "pipeline_tag": pipeline_tag,
         "search": query,
         "limit": "16",
         "sort": "downloads",
         "direction": "-1",
+        # Needed to tell which runtime can load a result: the short form omits both
+        # the library and the tags.
+        "full": "true",
     }
 
     headers: Dict[str, str] = {}
@@ -211,6 +228,8 @@ async def search_huggingface_models(
                     downloads=item.get("downloads", 0),
                     likes=item.get("likes", 0),
                     pipeline_tag=item.get("pipeline_tag"),
+                    library_name=item.get("library_name"),
+                    tags=[tag for tag in (item.get("tags") or []) if isinstance(tag, str)],
                     model_string_hf=f"huggingface/{model_id}",
                     model_string_vllm=f"vllm/{model_id}",
                 )

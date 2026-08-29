@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { HuggingFaceModelSearchResult } from '../../types';
+import React, { useState, useEffect, useRef } from 'react';
+import { HuggingFaceModelSearchResult, Modality, RuntimeDescriptor } from '../../types';
 import { api, errorMessage } from '../../api/client';
 import { estimateModelSize, judgeFit } from './modelSizing';
 import { MLX_SEARCH_PREFIX, isMlxModel } from './metalModels';
+import { canRuntimeServe, defaultQueryFor, pipelineTagFor, runtimeFor } from './runtimeSupport';
 import {
   Search,
   Loader2,
@@ -33,6 +34,11 @@ export interface HuggingFaceCatalogProps {
   availableVramGB?: number;
   /** Whether this machine can serve MLX weights on the Apple GPU. */
   metalSupported?: boolean;
+  /** Runtimes the server offers, which drive the filters and the support badge. */
+  runtimes?: RuntimeDescriptor[];
+  /** Which runtime's catalogue is being browsed. */
+  modality?: Modality;
+  onSelectModality?: (modality: Modality) => void;
 }
 
 export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
@@ -47,6 +53,9 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
   cachedModelIds,
   availableVramGB = 0,
   metalSupported = false,
+  runtimes = [],
+  modality = 'text',
+  onSelectModality,
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>(initialQuery);
   const [results, setResults] = useState<HuggingFaceModelSearchResult[]>([]);
@@ -54,14 +63,19 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
   const [searchError, setSearchError] = useState<string | null>(null);
   const [lastQuery, setLastQuery] = useState<string>(initialQuery);
 
-  const handleSearch = async (queryToSearch: string) => {
+  const activeRuntime = runtimeFor(runtimes, modality);
+
+  const handleSearch = async (queryToSearch: string, task?: string) => {
     const trimmed = queryToSearch.trim();
     if (!trimmed || trimmed.length < 2) return;
     setIsLoading(true);
     setSearchError(null);
     setLastQuery(trimmed);
     try {
-      const data = await api.searchHuggingFaceModels(trimmed);
+      const data = await api.searchHuggingFaceModels(
+        trimmed,
+        task ?? pipelineTagFor(runtimes, modality)
+      );
       setResults(data);
     } catch (error) {
       // Reporting this as "no models found" would send the user off rewording a query
@@ -79,6 +93,20 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
     }
   }, []);
 
+  // Switching modality re-runs the search against the new task with a query that
+  // suits it. Keeping the old results would show text models under "Speech".
+  const firstRender = useRef(true);
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false;
+      return;
+    }
+    const query = defaultQueryFor(runtimes, modality);
+    setSearchQuery(query);
+    setResults([]);
+    if (query) handleSearch(query, pipelineTagFor(runtimes, modality));
+  }, [modality]);
+
   return (
     <div className="space-y-4 font-sans">
       {/* Search Input Bar */}
@@ -95,7 +123,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search Hugging Face Hub (e.g. qwen2.5-coder, deepseek-r1, llama-3.2, mistral, gemma-2)..."
+            placeholder={`Search Hugging Face for ${activeRuntime?.label.toLowerCase() ?? 'text generation'} models...`}
             className="w-full bg-md-surface-container-lowest border border-md-outline-variant rounded-xl pl-9 pr-4 py-2.5 text-xs text-md-on-surface placeholder:text-md-on-surface-variant/70 focus:outline-none focus:border-md-primary focus:ring-1 focus:ring-md-primary shadow-xs transition-colors"
           />
         </div>
@@ -113,7 +141,27 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
         </button>
       </form>
 
-      {metalSupported && (
+      {runtimes.length > 1 && onSelectModality && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {runtimes.map((runtime) => (
+            <button
+              key={runtime.modality}
+              type="button"
+              onClick={() => onSelectModality(runtime.modality)}
+              title={runtime.description}
+              className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer border ${
+                runtime.modality === modality
+                  ? 'bg-md-primary text-md-on-primary border-md-primary shadow-2xs'
+                  : 'bg-md-surface-container-high text-md-on-surface-variant border-md-outline-variant hover:text-md-on-surface'
+              }`}
+            >
+              {runtime.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {metalSupported && modality === 'text' && (
         <button
           type="button"
           onClick={() => {
@@ -131,7 +179,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
       {isLoading ? (
         <div className="py-16 text-center text-md-on-surface-variant text-xs flex flex-col items-center justify-center space-y-2">
           <Loader2 className="w-6 h-6 animate-spin text-md-primary" />
-          <span>Querying Hugging Face text-generation repository catalog...</span>
+          <span>Querying the Hugging Face catalogue...</span>
         </div>
       ) : searchError ? (
         <div className="py-12 px-8 text-center bg-rose-50 dark:bg-rose-950/40 rounded-2xl border border-rose-300 dark:border-rose-800/80 space-y-3">
@@ -160,6 +208,9 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
             const isCurrentlyLoading = isVllmLoading && activeVllmModelId === rawModelId;
             const isCurrentlyServing = activeVllmModelId === rawModelId && !isVllmLoading;
             const isCached = cachedModelIds?.has(rawModelId) ?? false;
+            // Whether this machine's runtime can actually load it. Offering a Start
+            // button that fails minutes into a download is worse than saying so now.
+            const isSupported = activeRuntime ? canRuntimeServe(activeRuntime, hfModel) : true;
             const estimate = estimateModelSize(rawModelId);
             const fit = judgeFit(estimate, availableVramGB);
 
@@ -243,6 +294,14 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                         <HardDrive className="w-2.5 h-2.5" /> Downloaded
                       </span>
                     )}
+                    {!isSupported && (
+                      <span
+                        className="text-[10px] font-semibold px-1.5 py-0.5 rounded border inline-flex items-center gap-1 bg-md-surface-container-high text-md-on-surface-variant border-md-outline-variant"
+                        title={`This model needs ${hfModel.library_name ?? 'a library'}, which the ${activeRuntime?.label.toLowerCase() ?? 'local'} runtime does not ship yet.`}
+                      >
+                        <AlertTriangle className="w-2.5 h-2.5" /> Not supported yet
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center justify-between text-[10px] text-md-on-surface-variant">
@@ -271,6 +330,8 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                           ? 'Serving now'
                           : isCurrentlyLoading
                           ? 'Coming up now'
+                          : !isSupported
+                          ? 'No backend for this one'
                           : isVllmLoading
                           ? 'Another model is starting'
                           : isCached
@@ -290,7 +351,12 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                         <button
                           type="button"
                           onClick={() => onDeployVLLM?.(hfModel.id)}
-                          disabled={isVllmLoading}
+                          disabled={isVllmLoading || !isSupported}
+                          title={
+                            isSupported
+                              ? undefined
+                              : 'No backend in the local runtime can load this repository.'
+                          }
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-md-primary hover:opacity-90 disabled:opacity-40 text-md-on-primary text-xs font-semibold transition-opacity shadow-2xs cursor-pointer"
                         >
                           <Play className="w-3 h-3 fill-current" />

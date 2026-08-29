@@ -15,7 +15,7 @@ from backend.app.inference import registry
 from backend.app.inference.manager import ServerManager, StatusBroadcaster
 from backend.app.inference.models import DeployRequest, Modality, ServerState
 from backend.app.inference.runtimes import SpecContext
-from backend.app.inference.speech_runtime import SpeechRuntime
+from backend.app.inference.audio_runtimes import SpeechRuntime
 from backend.app.inference.vllm_runtime import VLLMRuntime
 
 

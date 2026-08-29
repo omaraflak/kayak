@@ -17,7 +17,15 @@ import {
 import { api, errorMessage } from '../../api/client';
 import { useDialog } from '../../context/DialogContext';
 import { useVLLMStatus } from '../../context/VLLMStatusContext';
-import { HostCapability, MetalStatus, ModelCacheInfo, VLLMDeployRequest } from '../../types';
+import {
+  HostCapability,
+  MetalStatus,
+  Modality,
+  ModelCacheInfo,
+  RuntimeDescriptor,
+  VLLMDeployRequest,
+  VLLMDeploymentProgress,
+} from '../../types';
 import { HuggingFaceCatalog } from './HuggingFaceCatalog';
 import { isMlxModel } from './metalModels';
 import { VLLMLaunchDialog } from './VLLMLaunchDialog';
@@ -35,14 +43,24 @@ import { formatBytes } from './modelSizing';
 
 export const ModelsView: React.FC = () => {
   const dialog = useDialog();
-  const { status, logs, refresh: fetchStatus } = useVLLMStatus();
+  const { status, logs, statuses, logsByModality, refresh: fetchStatus } = useVLLMStatus();
   const [capability, setCapability] = useState<HostCapability | null>(null);
   const [metal, setMetal] = useState<MetalStatus | null>(null);
   const [cache, setCache] = useState<ModelCacheInfo | null>(null);
-  const [isStopping, setIsStopping] = useState(false);
+  /** Which server is winding down, so only its row shows the stopping state. */
+  const [stoppingModality, setStoppingModality] = useState<Modality | null>(null);
   const [isDeploying, setIsDeploying] = useState(false);
   const [pendingLaunch, setPendingLaunch] = useState<string | null>(null);
-  const [showLogs, setShowLogs] = useState(false);
+  /** Which server's log drawer is open. Only one at a time; they are long. */
+  const [openLogsFor, setOpenLogsFor] = useState<Modality | null>(null);
+  const [runtimes, setRuntimes] = useState<RuntimeDescriptor[]>([]);
+  // Which runtime's catalogue is being browsed. Every start on this page goes to
+  // the matching server, so a speech model can never be handed to vLLM.
+  const [modality, setModality] = useState<Modality>('text');
+  // Which runtime the pending launch goes to. Distinct from the browsing
+  // modality above: a cached model is started from "This machine", where no
+  // filter is in play, and it has to reach the runtime that can load it.
+  const [launchModality, setLaunchModality] = useState<Modality>('text');
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   const isReady = status?.state === 'ready';
@@ -59,6 +77,10 @@ export const ModelsView: React.FC = () => {
     if (capabilityResult.status === 'fulfilled') setCapability(capabilityResult.value);
     if (metalResult.status === 'fulfilled') setMetal(metalResult.value);
     if (cacheResult.status === 'fulfilled') setCache(cacheResult.value);
+  }, []);
+
+  useEffect(() => {
+    api.listInferenceRuntimes().then(setRuntimes).catch(() => setRuntimes([]));
   }, []);
 
   useEffect(() => {
@@ -99,18 +121,37 @@ export const ModelsView: React.FC = () => {
   }, [dockerDown, refreshMachine]);
 
   useEffect(() => {
-    if (showLogs && logContainerRef.current) {
+    if (openLogsFor && logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
-  }, [logs, showLogs]);
+  }, [logsByModality, openLogsFor]);
 
   // While provisioning or after a failure the logs are the only thing worth reading,
-  // so they open themselves rather than hiding behind a click.
+  // so they open themselves rather than hiding behind a click. Whichever server is
+  // in that state claims the drawer.
   useEffect(() => {
-    if (isLoading || isError) setShowLogs(true);
-  }, [isLoading, isError]);
+    for (const progress of Object.values(statuses)) {
+      if (!progress) continue;
+      if (LOADING_STATES.includes(progress.state) || progress.state === 'error') {
+        setOpenLogsFor(progress.modality);
+        return;
+      }
+    }
+  }, [statuses]);
 
   const cachedIds = new Set((cache?.models || []).map((model) => model.repo_id));
+  /**
+   * Whether any server is mid-deployment.
+   *
+   * Start is blocked while one is: they share the weight cache and the machine's
+   * memory, and two first-time downloads at once is not what anyone means by
+   * clicking two buttons.
+   */
+  const anyServerBusy =
+    isDeploying ||
+    Object.values(statuses).some(
+      (progress) => !!progress && LOADING_STATES.includes(progress.state)
+    );
 
   /**
    * The model whose card carries the server state. Status, logs, and the stop
@@ -118,22 +159,47 @@ export const ModelsView: React.FC = () => {
    * "Server" section used to describe the same model a second time, and the two
    * could disagree.
    */
-  const activeModelId = isReady || isLoading || isError ? status?.model_id ?? null : null;
-  const cachedModels = cache?.models || [];
-  /** Inventory rows, the active model first -- including one being downloaded
-      or served from outside the cache, which has no cached entry yet. */
-  const displayModels =
-    activeModelId && !cachedModels.some((model) => model.repo_id === activeModelId)
-      ? [{ repo_id: activeModelId, size_bytes: 0, modified_at: 0 }, ...cachedModels]
-      : [...cachedModels].sort((a, b) =>
-          a.repo_id === activeModelId ? -1 : b.repo_id === activeModelId ? 1 : 0
-        );
-
   /** The GPU server's model, while it is coming up or serving. */
   const metalModelId =
     metal && (metal.state === 'ready' || metal.state === 'starting') ? metal.model : null;
   /** True while the GPU server is installing or loading. */
   const metalBusy = metal?.state === 'installing' || metal?.state === 'starting';
+
+  /**
+   * Every server holding a model right now, keyed by the model it holds.
+   *
+   * Plural on purpose. This was a single value read from the text server, so once
+   * a second modality existed a running speech or transcription model rendered as
+   * an inert "Start" row -- the page said nothing was running while the Audio page
+   * was happily using it.
+   */
+  const activeByModel = new Map<string, VLLMDeploymentProgress>();
+  for (const progress of Object.values(statuses)) {
+    if (!progress?.model_id) continue;
+    if (SERVER_HELD_STATES.includes(progress.state)) {
+      activeByModel.set(progress.model_id, progress);
+    }
+  }
+  // The GPU server is the text server by another route, so its model belongs in
+  // the same map rather than in a branch of its own.
+  if (metalModelId && !activeByModel.has(metalModelId) && statuses.text) {
+    activeByModel.set(metalModelId, statuses.text);
+  }
+
+  const cachedModels = cache?.models || [];
+  /** Inventory rows, running models first -- including one being downloaded or
+      served from outside the cache, which has no cached entry yet. */
+  const uncachedActive = [...activeByModel.keys()].filter(
+    (repoId) => !cachedModels.some((model) => model.repo_id === repoId)
+  );
+  const displayModels = [
+    ...uncachedActive.map((repo_id) => ({ repo_id, size_bytes: 0, modified_at: 0 })),
+    ...[...cachedModels].sort((a, b) => {
+      const left = activeByModel.has(a.repo_id) ? 0 : 1;
+      const right = activeByModel.has(b.repo_id) ? 0 : 1;
+      return left - right;
+    }),
+  ];
 
   const requestLaunch = (modelId: string) => {
     if (capability && !capability.docker_available) {
@@ -187,18 +253,43 @@ export const ModelsView: React.FC = () => {
         }
         return;
       }
+      // Which runtime can serve it is decided by the Hub's own metadata, not by
+      // the filter the user happens to be browsing: pressing Start on a cached
+      // Kokoro sent it to vLLM, which spent minutes on a model it cannot load.
+      let target: Modality = modality;
+      try {
+        const classification = await api.classifyModel(modelId);
+        if (classification.modality && !classification.supported) {
+          dialog.alert({
+            title: 'This model cannot run here yet',
+            message:
+              `${modelId} is a ${classification.pipeline_tag ?? 'model'} that needs ` +
+              `${classification.library_name ?? 'a library'}, which the local runtime ` +
+              'does not ship a backend for.',
+            variant: 'danger',
+          });
+          return;
+        }
+        if (classification.modality) target = classification.modality;
+      } catch {
+        // The Hub being unreachable must not stop a start; the filter in view is
+        // the best remaining guess.
+      }
+
+      setLaunchModality(target);
       requestLaunch(modelId);
     },
-    [metal?.supported, requestLaunch, fetchStatus, dialog]
+    [metal?.supported, requestLaunch, fetchStatus, dialog, modality]
   );
 
 
   const handleLaunch = async (request: VLLMDeployRequest) => {
     setPendingLaunch(null);
     setIsDeploying(true);
-    setShowLogs(true);
+    // Open the drawer of the server being started, not whichever was open before.
+    setOpenLogsFor(launchModality);
     try {
-      await api.deployVLLMModel(request);
+      await api.deployVLLMModel(request, launchModality);
       await fetchStatus();
     } catch (err) {
       dialog.alert({
@@ -211,23 +302,26 @@ export const ModelsView: React.FC = () => {
     }
   };
 
-  const handleStopServer = async () => {
+  const handleStopServer = async (modality: Modality) => {
+    const label =
+      runtimes.find((runtime) => runtime.modality === modality)?.label ?? 'this server';
     const confirmed = await dialog.confirm({
-      title: 'Stop vLLM Container?',
+      title: `Stop ${label}?`,
       message:
-        'Stopping the server will terminate the local container and unload models from memory. Active conversations using this local model will be interrupted.',
+        'Stopping the server will terminate its container and unload the model from ' +
+        'memory. Anything using it right now will be interrupted. Other local servers ' +
+        'keep running.',
       confirmText: 'Stop Server',
       cancelText: 'Keep Running',
       variant: 'danger',
     });
     if (!confirmed) return;
 
-    setIsStopping(true);
+    setStoppingModality(modality);
     try {
-      // Whichever backend is up. Stopping the one that is not running is a
-      // no-op on both sides, so this needs no branch.
-      await api.stopVLLMServer();
-      if (metal?.supported) setMetal(await api.stopMetal());
+      await api.stopVLLMServer(modality);
+      // Metal is the text server by another route, so it winds down with it.
+      if (modality === 'text' && metal?.supported) setMetal(await api.stopMetal());
       await fetchStatus();
     } catch (err) {
       dialog.alert({
@@ -236,7 +330,7 @@ export const ModelsView: React.FC = () => {
         variant: 'danger',
       });
     } finally {
-      setIsStopping(false);
+      setStoppingModality(null);
     }
   };
 
@@ -365,9 +459,19 @@ export const ModelsView: React.FC = () => {
           {displayModels.length > 0 && (
             <div className="space-y-1.5 pt-1">
               {displayModels.map((model) => {
-                const isActive = model.repo_id === activeModelId;
+                // Each row describes the server actually holding that model, not
+                // whatever the text server happens to be doing.
+                const server = activeByModel.get(model.repo_id);
+                const rowModality = server?.modality ?? 'text';
+                const rowReady = server?.state === 'ready';
+                const rowLoading =
+                  !!server && LOADING_STATES.includes(server.state);
+                const rowError = server?.state === 'error';
+                const rowStopping = stoppingModality === rowModality;
+                const rowLogs = logsByModality[rowModality] ?? [];
+                const rowLogsOpen = openLogsFor === rowModality;
 
-                if (!isActive) {
+                if (!server) {
                   return (
                     <div
                       key={model.repo_id}
@@ -386,7 +490,7 @@ export const ModelsView: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => handleLaunchRequest(model.repo_id)}
-                          disabled={isLoading}
+                          disabled={anyServerBusy}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-md-outline-variant bg-md-surface-container-low hover:bg-md-surface-container-high disabled:opacity-40 text-[11px] font-semibold text-md-on-surface transition-colors cursor-pointer"
                         >
                           <Play className="w-3 h-3 fill-current" />
@@ -422,25 +526,31 @@ export const ModelsView: React.FC = () => {
                               {model.repo_id}
                             </span>
                             <StatusPill
-                              isReady={isReady}
-                              isLoading={isLoading}
-                              isError={isError}
-                              isStopping={isStopping}
+                              isReady={rowReady}
+                              isLoading={rowLoading}
+                              isError={rowError}
+                              isStopping={rowStopping}
                             />
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-md-on-surface-variant">
+                              {runtimes.find((r) => r.modality === rowModality)?.label ??
+                                rowModality}
+                            </span>
                           </div>
                           <p className="text-[11px] text-md-on-surface-variant mt-1 leading-relaxed">
-                            {isStopping ? 'Stopping the server and unloading the model...' : status?.message}
+                            {rowStopping
+                              ? 'Stopping the server and unloading the model...'
+                              : server.message}
                             {model.size_bytes > 0 && ` · ${formatBytes(model.size_bytes)} on disk`}
                           </p>
-                          {isReady && status?.endpoint && (
+                          {rowReady && server.endpoint && (
                             <p className="text-[10px] font-mono text-md-on-surface-variant/80 mt-0.5">
-                              {status.endpoint}
+                              {server.endpoint}
                             </p>
                           )}
                         </div>
 
                         <div className="flex items-center gap-1.5 shrink-0">
-                          {isError ? (
+                          {rowError ? (
                             <button
                               type="button"
                               onClick={() => handleLaunchRequest(model.repo_id)}
@@ -452,11 +562,11 @@ export const ModelsView: React.FC = () => {
                           ) : (
                             <button
                               type="button"
-                              onClick={handleStopServer}
-                              disabled={isStopping}
+                              onClick={() => handleStopServer(rowModality)}
+                              disabled={rowStopping}
                               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-md-error hover:opacity-90 disabled:opacity-50 text-md-on-error text-xs font-semibold shadow-xs transition-opacity cursor-pointer"
                             >
-                              {isStopping ? (
+                              {rowStopping ? (
                                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
                               ) : (
                                 <Square className="w-3.5 h-3.5 fill-current" />
@@ -467,39 +577,41 @@ export const ModelsView: React.FC = () => {
                         </div>
                       </div>
 
-                      {isError && status?.error && (
+                      {rowError && server.error && (
                         <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800/80 text-rose-900 dark:text-rose-100 text-[11px] leading-relaxed">
-                          {status.error}
+                          {server.error}
                         </div>
                       )}
 
-                      {(isLoading || isError || logs.length > 0) && (
+                      {(rowLoading || rowError || rowLogs.length > 0) && (
                         <div className="pt-2 border-t border-md-outline-variant space-y-2">
                           <button
                             type="button"
-                            onClick={() => setShowLogs(!showLogs)}
+                            onClick={() =>
+                              setOpenLogsFor(rowLogsOpen ? null : rowModality)
+                            }
                             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-md-outline-variant bg-md-surface-container-low hover:bg-md-surface-container-high text-xs font-semibold text-md-on-surface transition-colors cursor-pointer shadow-2xs"
                           >
                             <Terminal className="w-3.5 h-3.5 text-md-on-surface-variant" />
-                            <span>Container Logs ({logs.length} lines)</span>
-                            {showLogs ? (
+                            <span>Container Logs ({rowLogs.length} lines)</span>
+                            {rowLogsOpen ? (
                               <ChevronUp className="w-3.5 h-3.5 text-md-on-surface-variant" />
                             ) : (
                               <ChevronDown className="w-3.5 h-3.5 text-md-on-surface-variant" />
                             )}
                           </button>
 
-                          {showLogs && (
+                          {rowLogsOpen && (
                             <div
                               ref={logContainerRef}
                               className="p-3.5 bg-md-surface-container-lowest text-md-on-surface font-mono text-[11px] rounded-xl overflow-y-auto space-y-0.5 leading-relaxed h-72 border border-md-outline-variant"
                             >
-                              {logs.length === 0 ? (
+                              {rowLogs.length === 0 ? (
                                 <div className="text-md-on-surface-variant italic">
                                   Waiting for container log output...
                                 </div>
                               ) : (
-                                logs.map((line, idx) => (
+                                rowLogs.map((line, idx) => (
                                   <div key={idx} className="break-all whitespace-pre-wrap">
                                     {line}
                                   </div>
@@ -529,7 +641,7 @@ export const ModelsView: React.FC = () => {
           <SectionHeading
             icon={<Layers className="w-3.5 h-3.5 text-md-primary" />}
             title="Find a model"
-            note="Open-weights text-generation models from the Hugging Face Hub"
+            note="Open-weights models from the Hugging Face Hub"
           />
 
           <HuggingFaceCatalog
@@ -538,11 +650,18 @@ export const ModelsView: React.FC = () => {
             // Only a model that is actually up or coming up occupies the server:
             // after a stop or a failure, status.model_id still names the last
             // model, and passing it here showed that model as "Active".
-            activeVllmModelId={metalModelId ?? (isReady || isLoading ? status?.model_id : null)}
+            activeVllmModelId={
+              modality === 'text'
+                ? metalModelId ?? (isReady || isLoading ? status?.model_id : null)
+                : activeModelFor(statuses[modality])
+            }
             isVllmLoading={isLoading || metalBusy}
             cachedModelIds={cachedIds}
             availableVramGB={(capability?.total_vram_mb ?? 0) / 1024}
             metalSupported={metal?.supported ?? false}
+            runtimes={runtimes}
+            modality={modality}
+            onSelectModality={setModality}
           />
         </section>
       </div>
@@ -553,6 +672,9 @@ export const ModelsView: React.FC = () => {
           capability={capability}
           replacingModelId={isReady || isLoading ? status?.model_id : null}
           isCached={cachedIds.has(pendingLaunch)}
+          // Only the settings the runtime this launch is bound for actually reads:
+          // a transcription model has no context window to offer.
+          tunableFields={runtimes.find((r) => r.modality === launchModality)?.tunable_fields}
           onCancel={() => setPendingLaunch(null)}
           onLaunch={handleLaunch}
         />
@@ -560,6 +682,24 @@ export const ModelsView: React.FC = () => {
     </div>
   );
 };
+
+/**
+ * The model a server is actually holding, or null.
+ *
+ * "Serving" and "starting" stay disjoint here as everywhere else: after a stop or
+ * a failure the status still names the last model, and treating that as active
+ * marked a dead server's model as running.
+ */
+/** States in which a server is holding a model, so its row owns the status card. */
+const SERVER_HELD_STATES = ['ready', 'pulling_image', 'starting_container', 'loading', 'error'];
+/** States in which a server is coming up rather than serving. */
+const LOADING_STATES = ['pulling_image', 'starting_container', 'loading'];
+
+function activeModelFor(progress?: VLLMDeploymentProgress): string | null {
+  if (!progress) return null;
+  const active = ['ready', 'pulling_image', 'starting_container', 'loading'];
+  return active.includes(progress.state) ? progress.model_id ?? null : null;
+}
 
 const SectionHeading: React.FC<{ icon: React.ReactNode; title: string; note?: string }> = ({
   icon,

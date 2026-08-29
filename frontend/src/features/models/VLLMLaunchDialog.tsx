@@ -31,6 +31,14 @@ const CONTEXT_PRESETS = [
 
 interface VLLMLaunchDialogProps {
   modelId: string;
+  /**
+   * Settings the target runtime actually honours, from its descriptor.
+   *
+   * Offering the rest is not merely untidy: a transcription model has no context
+   * window and no KV cache, so those controls promise a effect they cannot have.
+   * Undefined means "everything", which is what the vLLM path has always shown.
+   */
+  tunableFields?: string[];
   capability: HostCapability | null;
   /** The model currently serving, when starting this one would replace it. */
   replacingModelId?: string | null;
@@ -42,6 +50,7 @@ interface VLLMLaunchDialogProps {
 
 export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
   modelId,
+  tunableFields,
   capability,
   replacingModelId,
   isCached,
@@ -52,6 +61,13 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
   const [dtype, setDtype] = useState('auto');
   const [gpuMemory, setGpuMemory] = useState(0.9);
   const [trustRemoteCode, setTrustRemoteCode] = useState(false);
+  /**
+   * Whether the target runtime honours a setting.
+   *
+   * Undefined means unrestricted, which keeps the vLLM path exactly as it was
+   * before other runtimes existed.
+   */
+  const offers = (field: string): boolean => !tunableFields || tunableFields.includes(field);
   const [enforceEager, setEnforceEager] = useState(false);
 
   const hasGPU = (capability?.total_vram_mb ?? 0) > 0;
@@ -177,6 +193,7 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
             )}
           </div>
 
+          {offers('max_model_len') && (
           <Field
             label="Context length"
             hint="How much of a conversation the model can take into account at once. Shorter needs less memory, and is the first thing to reduce if a model will not start."
@@ -198,7 +215,9 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
               ))}
             </div>
           </Field>
+          )}
 
+          {offers('dtype') && (
           <Field label="Weight precision" hint={DTYPE_OPTIONS.find((o) => o.value === dtype)?.hint}>
             <div className="flex gap-1.5">
               {DTYPE_OPTIONS.map((option) => (
@@ -217,8 +236,9 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
               ))}
             </div>
           </Field>
+          )}
 
-          {systemMemoryGB > 0 && (
+          {offers('memory_limit_gb') && systemMemoryGB > 0 && (
             <Field
               label={`Container memory — ${effectiveContainerMemoryGB} GB${
                 effectiveContainerMemoryGB >= maxContainerMemoryGB ? ' (all of it)' : ''
@@ -250,7 +270,7 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
             </Field>
           )}
 
-          {totalCpus > 0 && (
+          {offers('cpu_limit') && totalCpus > 0 && (
             <Field
               label={`Container CPU — ${effectiveContainerCpus} core${
                 effectiveContainerCpus === 1 ? '' : 's'
@@ -274,7 +294,7 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
             </Field>
           )}
 
-          {hasGPU ? (
+          {offers('gpu_memory_utilization') && hasGPU ? (
             <Field
               label={`GPU memory fraction — ${Math.round(gpuMemory * 100)}%`}
               hint="How much of the card vLLM reserves. Lower it to leave room for anything else using the GPU."
@@ -289,7 +309,7 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
                 className="w-full accent-md-primary cursor-pointer"
               />
             </Field>
-          ) : (
+          ) : offers('cpu_kvcache_space_gb') ? (
             <Field
               label={`Conversation memory — ${effectiveKvCacheGB} GB`}
               hint={
@@ -320,23 +340,27 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
                 </span>
               </div>
             </Field>
-          )}
+          ) : null}
 
           <div className="space-y-2.5 pt-1">
-            <Toggle
-              checked={enforceEager}
-              onChange={setEnforceEager}
-              label="Disable CUDA graphs"
-              hint="Slower, but uses noticeably less memory. Worth trying after a failed load."
-            />
+            {offers('enforce_eager') && (
+              <Toggle
+                checked={enforceEager}
+                onChange={setEnforceEager}
+                label="Disable CUDA graphs"
+                hint="Slower, but uses noticeably less memory. Worth trying after a failed load."
+              />
+            )}
 
-            <Toggle
-              checked={trustRemoteCode}
-              onChange={setTrustRemoteCode}
-              label="Trust remote code"
-              danger
-              hint="Runs Python published in the model repository inside the container, with your Hugging Face token in its environment. Only needed for architectures vLLM does not ship support for."
-            />
+            {offers('trust_remote_code') && (
+              <Toggle
+                checked={trustRemoteCode}
+                onChange={setTrustRemoteCode}
+                label="Trust remote code"
+                danger
+                hint="Runs Python published in the model repository inside the container, with your Hugging Face token in its environment. Only needed for architectures the runtime does not ship support for."
+              />
+            )}
           </div>
         </div>
 

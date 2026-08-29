@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional, Tuple
 
-from tts_server.backends.base import SpeechBackend, Voice
+from audio_server.backends.base import SpeechBackend, Voice
 
 logger = logging.getLogger(__name__)
 

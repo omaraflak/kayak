@@ -7,9 +7,12 @@
 FROM python:3.11-slim
 
 # espeak-ng is Kokoro's grapheme-to-phoneme fallback; libsndfile backs soundfile's
-# WAV/FLAC/OGG writing. Both are needed at runtime, not only to build.
+# WAV/FLAC/OGG writing; ffmpeg decodes whatever a person actually uploads, which is
+# an m4a voice memo far more often than a wav. All three are runtime dependencies:
+# without ffmpeg, transcription fails on the file rather than at startup.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         espeak-ng \
+        ffmpeg \
         libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -23,8 +26,8 @@ RUN pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
         torch==2.5.1
 
-COPY tts_server/requirements.txt /app/tts_server/requirements.txt
-RUN pip install --no-cache-dir -r /app/tts_server/requirements.txt
+COPY audio_server/requirements.txt /app/audio_server/requirements.txt
+RUN pip install --no-cache-dir -r /app/audio_server/requirements.txt
 
 # Kokoro's English text processing loads a spaCy model, and downloads it on first
 # use if it is missing. That download lands in site-packages rather than in the
@@ -32,7 +35,7 @@ RUN pip install --no-cache-dir -r /app/tts_server/requirements.txt
 # measured at 45 seconds and a network round trip before the server could answer.
 RUN python -m spacy download en_core_web_sm
 
-COPY tts_server /app/tts_server
+COPY audio_server /app/audio_server
 
 # Weights land in the cache Kayak mounts from the host, shared with every other
 # runtime, so a model downloaded once is not downloaded again.
@@ -41,5 +44,5 @@ ENV HF_HOME=/root/.cache/huggingface \
 
 EXPOSE 8000
 
-ENTRYPOINT ["python", "-m", "tts_server"]
+ENTRYPOINT ["python", "-m", "audio_server"]
 CMD ["--help"]

@@ -66,4 +66,4 @@ All optional. Provider keys are deliberately absent — they come from the Setti
 | `KAYAK_DATA_DIR` | `./data` | Agents, skills, tools, workspaces, and the database. |
 | `KAYAK_VLLM_PORT` | `8001` | Port the local vLLM container serves on. |
 | `KAYAK_TTS_PORT` | `8011` | Port the local speech container serves on. |
-| `KAYAK_TTS_IMAGE` | `omaraflak/kayak-tts:latest` | Image that serves speech models. |
+| `KAYAK_TTS_IMAGE` | `omaraflak/kayak-audio:latest` | Image that serves speech models. |

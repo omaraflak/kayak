@@ -8,10 +8,15 @@ torch nor the speech libraries installed.
 
 import pytest
 
-from tts_server.backends import UnsupportedModelError, select_backend
-from tts_server.backends.kokoro_backend import KokoroBackend, voice_label, voice_language
-from tts_server.backends.transformers_backend import TransformersBackend
-from tts_server.chunking import DEFAULT_CHUNK_CHARS, split_for_synthesis
+from audio_server.backends import UnsupportedModelError, select_backend
+from audio_server.backends.kokoro_backend import (
+    KokoroBackend,
+    preferred_voice,
+    voice_label,
+    voice_language,
+)
+from audio_server.backends.transformers_backend import TransformersBackend
+from audio_server.chunking import DEFAULT_CHUNK_CHARS, split_for_synthesis
 
 
 class TestBackendDispatch:
@@ -53,6 +58,31 @@ class TestKokoroVoiceNaming:
     def test_labels_are_readable(self):
         assert voice_label("af_heart") == "Heart (American English)"
         assert voice_label("bm_george") == "George (British English)"
+
+
+class TestKokoroDefaultVoice:
+    """Which voice a Kokoro server speaks in when the caller names none."""
+
+    # A realistic slice of what the repository publishes, in listing order.
+    VOICES = ["af_alloy", "af_heart", "am_michael", "bf_emma", "bm_george"]
+
+    def test_michael_is_preferred_when_published(self):
+        # The voices sort alphabetically, which puts "af_alloy" first -- an
+        # accident of naming rather than a choice anyone made.
+        assert preferred_voice(self.VOICES) == "am_michael"
+
+    def test_it_is_matched_by_name_not_by_exact_id(self):
+        # A repository may publish the same speaker under a different
+        # language/gender prefix; the preference should still find it.
+        assert preferred_voice(["af_alloy", "bm_michael"]) == "bm_michael"
+
+    def test_a_repository_without_it_falls_back_to_the_first(self):
+        assert preferred_voice(["af_alloy", "bf_emma"]) == "af_alloy"
+
+    def test_no_voices_at_all_is_not_an_error(self):
+        # Some repositories publish none, and synthesis then uses the model's own
+        # default rather than failing.
+        assert preferred_voice([]) is None
 
 
 class TestChunking:

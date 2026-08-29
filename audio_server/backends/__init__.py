@@ -11,9 +11,9 @@ Adding support for a family of models is a new backend module plus one entry in
 
 from typing import Tuple
 
-from tts_server.backends.base import SpeechBackend, Voice
-from tts_server.backends.kokoro_backend import KokoroBackend
-from tts_server.backends.transformers_backend import TransformersBackend
+from audio_server.backends.base import SpeechBackend, Voice
+from audio_server.backends.kokoro_backend import KokoroBackend
+from audio_server.backends.transformers_backend import TransformersBackend
 
 #: Ordered; the first backend that claims a repository serves it. More specific
 #: backends come first, so a model with a dedicated implementation is not swallowed

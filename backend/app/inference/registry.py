@@ -23,10 +23,11 @@ from backend.app.inference.models import (
     CachedModel,
     Modality,
     ModelCacheInfo,
+    ModelClassification,
     RuntimeDescriptor,
 )
+from backend.app.inference.audio_runtimes import SpeechRuntime, TranscriptionRuntime
 from backend.app.inference.runtimes import Runtime
-from backend.app.inference.speech_runtime import SpeechRuntime
 from backend.app.inference.vllm_runtime import VLLMRuntime
 
 #: One stream carries every modality. Browsers cap concurrent HTTP/1.1 connections at
@@ -34,7 +35,7 @@ from backend.app.inference.vllm_runtime import VLLMRuntime
 #: affordable.
 _broadcaster = StatusBroadcaster()
 
-_RUNTIMES: tuple = (VLLMRuntime(), SpeechRuntime())
+_RUNTIMES: tuple = (VLLMRuntime(), SpeechRuntime(), TranscriptionRuntime())
 
 _MANAGERS: Dict[Modality, ServerManager] = {
     runtime.modality: ServerManager(runtime, _broadcaster) for runtime in _RUNTIMES
@@ -66,6 +67,37 @@ def runtimes() -> List[Runtime]:
 def describe_runtimes() -> List[RuntimeDescriptor]:
     """What clients need to know about each runtime, served rather than hardcoded."""
     return [runtime.describe() for runtime in runtimes()]
+
+
+def classify(
+    repo_id: str,
+    pipeline_tag: Optional[str] = None,
+    library_name: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+) -> ModelClassification:
+    """Which runtime should serve a repository, from Hub metadata.
+
+    The task decides the runtime, and the runtime then says whether it can actually
+    load that repository. Both halves matter: a text-to-speech model belongs to the
+    speech runtime even when no backend can load it, and saying so is more useful
+    than silently offering it to vLLM.
+    """
+    result = ModelClassification(
+        repo_id=repo_id,
+        pipeline_tag=pipeline_tag,
+        library_name=library_name,
+    )
+
+    for runtime in runtimes():
+        if pipeline_tag and pipeline_tag in runtime.pipeline_tags:
+            result.modality = runtime.modality
+            result.runtime_key = runtime.key
+            result.supported = runtime.can_serve(repo_id, library_name, tags)
+            return result
+
+    # No runtime claims this task at all -- an image model, say. Reported as
+    # unsupported with no modality rather than guessed into the text runtime.
+    return result
 
 
 def subscribe() -> asyncio.Queue:

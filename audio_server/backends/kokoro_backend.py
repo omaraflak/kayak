@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional, Tuple
 
-from tts_server.backends.base import SpeechBackend, Voice
+from audio_server.backends.base import SpeechBackend, Voice
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,33 @@ _LANGUAGE_PREFIXES = {
 
 _DEFAULT_LANGUAGE = ("en-us", "American English")
 
+#: Voice preferred when the repository ships one by that name. Kokoro's voices sort
+#: alphabetically, which puts "af_alloy" first -- nobody's deliberate choice. Matched
+#: on the name after the language/gender prefix, so it works for whichever prefix a
+#: repository happens to publish it under, and falls back when it ships none.
+_PREFERRED_VOICE_NAME = "michael"
+
+
+def voice_name(voice_id: str) -> str:
+    """The speaker name in a Kokoro voice id: "am_michael" -> "michael"."""
+    return voice_id.split("_", 1)[-1].lower()
+
+
+def preferred_voice(voice_ids: List[str]) -> Optional[str]:
+    """The default voice for a set of Kokoro voices.
+
+    Args:
+        voice_ids: Voice ids the repository publishes, in listing order.
+
+    Returns:
+        The preferred voice when present, otherwise the first one, or None when the
+        repository publishes no voices at all.
+    """
+    for voice_id in voice_ids:
+        if voice_name(voice_id) == _PREFERRED_VOICE_NAME:
+            return voice_id
+    return voice_ids[0] if voice_ids else None
+
 
 def voice_language(voice_id: str) -> Tuple[str, str]:
     """The language tag and label a Kokoro voice id implies."""
@@ -45,7 +72,7 @@ def voice_language(voice_id: str) -> Tuple[str, str]:
 def voice_label(voice_id: str) -> str:
     """A readable name for a voice id such as ``af_heart``."""
     _tag, language = voice_language(voice_id)
-    name = voice_id.split("_", 1)[-1].replace("_", " ").title()
+    name = voice_name(voice_id).replace("_", " ").title()
     return f"{name} ({language})"
 
 
@@ -84,10 +111,10 @@ class KokoroBackend(SpeechBackend):
 
         # Loading one pipeline eagerly turns a broken install into a startup failure,
         # which the deployment log shows, rather than a failure on first synthesis.
-        self._pipeline_for(self._default_voice())
+        self._pipeline_for(self.default_voice())
 
-    def _default_voice(self) -> Optional[str]:
-        return self._voices[0].id if self._voices else None
+    def default_voice(self) -> Optional[str]:
+        return preferred_voice([voice.id for voice in self._voices])
 
     def _pipeline_for(self, voice: Optional[str]):
         """One pipeline per language code; Kokoro's G2P is language-specific."""
@@ -110,7 +137,7 @@ class KokoroBackend(SpeechBackend):
         # be inspected wherever the speech stack is not installed.
         import numpy as np
 
-        chosen = voice or self._default_voice()
+        chosen = voice or self.default_voice()
         pipeline = self._pipeline_for(chosen)
 
         segments = [

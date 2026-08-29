@@ -11,6 +11,7 @@ class Modality(str, Enum):
     """
     TEXT = "text"
     SPEECH = "speech"
+    TRANSCRIPTION = "transcription"
 
 
 class ServerState(str, Enum):
@@ -100,6 +101,10 @@ class RuntimeDescriptor(BaseModel):
     #: Names of DeployRequest fields this runtime honours; the rest are ignored and
     #: must not be offered.
     tunable_fields: List[str] = []
+    #: Query the catalogue opens with for this runtime, so switching to it shows
+    #: something rather than an empty result. A suggestion, not a restriction --
+    #: the search box accepts anything.
+    default_query: str = ""
 
 
 class GPUDevice(BaseModel):
@@ -160,6 +165,27 @@ class MetalStatus(BaseModel):
 class MetalStartRequest(BaseModel):
     """Asks the launcher to serve a model on the host GPU."""
     model_id: str = Field(..., description="MLX repository, e.g. 'mlx-community/Qwen3.8-27B-8bit'")
+
+
+class ModelClassification(BaseModel):
+    """Which local runtime should serve a repository.
+
+    Answered from the Hub's own metadata rather than guessed from the name, because
+    the name is not reliable: pressing Start on a cached Kokoro sent it to vLLM,
+    which spent minutes on a model it could never load.
+    """
+    repo_id: str
+    #: The runtime that claims it, or None when nothing here can serve it.
+    modality: Optional[Modality] = None
+    runtime_key: Optional[str] = None
+    #: What the Hub says, echoed so the UI can explain an unsupported model.
+    pipeline_tag: Optional[str] = None
+    library_name: Optional[str] = None
+    #: False when the repository was found but no runtime can load it.
+    supported: bool = False
+    #: Set when the Hub could not be reached, so the caller can fall back rather
+    #: than treat "unknown" as "unsupported".
+    unknown: bool = False
 
 
 class CachedModel(BaseModel):

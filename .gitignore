@@ -20,6 +20,10 @@ data/kayak.db-shm
 *.sqlite3
 data/workspaces/*
 !data/workspaces/.gitkeep
+# Clips and transcripts the Audio page produces. Someone's own recordings and
+# generated audio, in the same category as their conversations.
+data/audio/*
+!data/audio/.gitkeep
 data/huggingface_cache/
 data/agents/new_agent.yaml
 

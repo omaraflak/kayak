@@ -53,6 +53,17 @@ class SpeechBackend(ABC):
     def voices(self) -> List[Voice]:
         """Voices the loaded model offers. Empty when it has no notion of them."""
 
+    def default_voice(self) -> Optional[str]:
+        """The voice to use when the caller names none.
+
+        The first voice by default, which is only an arbitrary choice; a backend
+        whose model has a voice worth preferring overrides this. Reported to
+        clients so the page opens on the same voice the server would have picked,
+        rather than on whatever sorts first.
+        """
+        voices = self.voices()
+        return voices[0].id if voices else None
+
     @abstractmethod
     def synthesize(
         self, text: str, voice: Optional[str], speed: float

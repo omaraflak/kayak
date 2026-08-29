@@ -17,6 +17,7 @@ export type NavigationTab =
   | 'skills'
   | 'tools'
   | 'models'
+  | 'audio'
   | 'settings';
 
 export type ToolCategory =
@@ -199,6 +200,13 @@ export interface HuggingFaceModelSearchResult {
   downloads: number;
   likes: number;
   pipeline_tag?: string | null;
+  /**
+   * Library the Hub says loads this repository, when it says. Absent for a
+   * surprising share of popular models, which is why support is also matched on
+   * the repository id.
+   */
+  library_name?: string | null;
+  tags?: string[];
   model_string_hf: string;
   model_string_vllm: string;
 }
@@ -261,7 +269,7 @@ export type VLLMServerState =
  * independently: starting a voice model must never evict the text model an agent
  * is using.
  */
-export type Modality = 'text' | 'speech';
+export type Modality = 'text' | 'speech' | 'transcription';
 
 /**
  * What a local runtime serves and can be told, as the API describes it.
@@ -282,6 +290,8 @@ export interface RuntimeDescriptor {
   supported_id_fragments: string[];
   /** DeployRequest fields this runtime honours; the rest must not be offered. */
   tunable_fields: string[];
+  /** Query the catalogue opens with for this runtime. A suggestion, not a filter. */
+  default_query: string;
 }
 
 export interface VLLMDeploymentProgress {
@@ -379,4 +389,68 @@ export interface ModelCacheInfo {
   path: string;
   total_bytes: number;
   models: CachedModel[];
+}
+
+/** What a stored audio item is. */
+export type AudioKind = 'clip' | 'transcript';
+
+/** One thing the Audio page has produced. */
+export interface AudioItem {
+  id: string;
+  kind: AudioKind;
+  /** Repository that produced it, so a clip stays identifiable after the server moves on. */
+  model_id: string;
+  /** The spoken text for a clip, or the transcript for a transcription. */
+  text: string;
+  voice?: string | null;
+  language?: string | null;
+  filename?: string | null;
+  size_bytes: number;
+  duration_seconds?: number | null;
+  /** Name of the file the user uploaded, for transcripts. */
+  source_filename?: string | null;
+  created_at: number;
+}
+
+/** A voice the running speech model offers. */
+export interface Voice {
+  id: string;
+  label: string;
+  language?: string | null;
+}
+
+/**
+ * Voices, and which model they belong to. The model id travels with them so a list
+ * fetched before the server was switched is recognisable as stale.
+ */
+export interface VoiceList {
+  model_id?: string | null;
+  voices: Voice[];
+  /** Voice the server uses when none is named, so the page opens on the same one. */
+  default_voice?: string | null;
+}
+
+/** What the Audio page sends to have something spoken. */
+export interface SpeechRequest {
+  text: string;
+  voice?: string | null;
+  speed?: number;
+  response_format?: string;
+}
+
+/**
+ * Which local runtime should serve a repository.
+ *
+ * Answered from the Hub's own metadata rather than guessed from the name: a cached
+ * model is only a name and a size on disk, and guessing sent speech models to vLLM.
+ */
+export interface ModelClassification {
+  repo_id: string;
+  modality?: Modality | null;
+  runtime_key?: string | null;
+  pipeline_tag?: string | null;
+  library_name?: string | null;
+  supported: boolean;
+  /** True when the Hub could not be reached, so the caller should fall back. */
+  unknown: boolean;
 }

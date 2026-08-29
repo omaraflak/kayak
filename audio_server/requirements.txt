@@ -2,6 +2,9 @@
 # months later must produce the same server rather than whatever resolved that day.
 fastapi==0.115.6
 uvicorn==0.34.0
+# Required by FastAPI to accept the uploaded recording. Checked when the route is
+# defined, not when it is called, so its absence stopped the whole server booting.
+python-multipart==0.0.20
 pydantic==2.10.4
 numpy==1.26.4
 soundfile==0.12.1

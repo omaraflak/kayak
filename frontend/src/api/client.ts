@@ -12,8 +12,13 @@ import {
   ToolCategoryInfo,
   VLLMDeploymentProgress,
   VLLMDeployRequest,
+  AudioItem,
+  AudioKind,
   Modality,
+  ModelClassification,
   RuntimeDescriptor,
+  SpeechRequest,
+  VoiceList,
   HostCapability,
   InstalledVersions,
   MetalStatus,
@@ -303,8 +308,15 @@ export const api = {
   listModels: (): Promise<ProviderModels[]> =>
     fetchJSON(`${API_BASE}/models`),
 
-  searchHuggingFaceModels: (query: string): Promise<HuggingFaceModelSearchResult[]> =>
-    fetchJSON(`${API_BASE}/models/huggingface/search?query=${encodeURIComponent(query)}`),
+  /** Searches one Hugging Face task; the task comes from a runtime descriptor. */
+  searchHuggingFaceModels: (
+    query: string,
+    pipelineTag = 'text-generation'
+  ): Promise<HuggingFaceModelSearchResult[]> =>
+    fetchJSON(
+      `${API_BASE}/models/huggingface/search?query=${encodeURIComponent(query)}` +
+        `&pipeline_tag=${encodeURIComponent(pipelineTag)}`
+    ),
 
   // Local model servers, one per modality.
 
@@ -357,4 +369,41 @@ export const api = {
     fetchJSON(`${API_BASE}/inference/cache/${repoId.split('/').map(encodeURIComponent).join('/')}`, {
       method: 'DELETE',
     }),
+
+  // The Audio workbench. Requests go through Kayak rather than to the audio server
+  // directly: the browser may not be on the machine the server is published on, and
+  // going through Kayak is what stores the result.
+
+  /** Which local runtime should serve a repository, from the Hub's own metadata. */
+  classifyModel: (repoId: string): Promise<ModelClassification> =>
+    fetchJSON(`${API_BASE}/inference/classify?repo_id=${encodeURIComponent(repoId)}`),
+
+  /** Voices the running speech model offers; empty when none is running. */
+  getVoices: (): Promise<VoiceList> => fetchJSON(`${API_BASE}/audio/voices`),
+
+  /** Speaks text and stores the clip. Slow by nature — minutes for a long article. */
+  synthesizeSpeech: (data: SpeechRequest): Promise<AudioItem> =>
+    fetchJSONPost(`${API_BASE}/audio/speech`, data),
+
+  transcribeAudio: async (file: File, language?: string): Promise<AudioItem> => {
+    const body = new FormData();
+    body.append('file', file);
+    if (language) body.append('language', language);
+    // No Content-Type header: the browser has to set the multipart boundary itself.
+    const response = await fetch(`${API_BASE}/audio/transcriptions`, withAuth({
+      method: 'POST',
+      body,
+    }));
+    await assertOk(response);
+    return response.json();
+  },
+
+  listAudioItems: (kind?: AudioKind): Promise<AudioItem[]> =>
+    fetchJSON(`${API_BASE}/audio/items${kind ? `?kind=${kind}` : ''}`),
+
+  /** URL the <audio> element and the download link both point at. */
+  audioFileUrl: (itemId: string): string => `${API_BASE}/audio/items/${itemId}/file`,
+
+  deleteAudioItem: (itemId: string): Promise<{ status: string; id: string }> =>
+    fetchJSON(`${API_BASE}/audio/items/${itemId}`, { method: 'DELETE' }),
 };

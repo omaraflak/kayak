@@ -177,6 +177,7 @@ class VLLMRuntime(Runtime):
     container_name = "kayak-vllm-server"
     supports_metal = True
     pipeline_tags = ("text-generation",)
+    default_query = "qwen2.5-coder"
     tunable_fields = (
         "max_model_len",
         "gpu_memory_utilization",

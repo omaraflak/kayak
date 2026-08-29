@@ -9,6 +9,7 @@ import {
   Sparkles, 
   Wrench,
   Cpu,
+  AudioLines,
   Brain,
   Loader2,
   Settings
@@ -134,6 +135,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           <Cpu className={`w-4 h-4 ${currentTab === 'models' ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
           <span>Local Models</span>
+        </button>
+
+        <button
+          onClick={() => onSelectTab('audio')}
+          className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+            currentTab === 'audio'
+              ? 'bg-md-primary-container text-md-on-primary-container border border-md-primary/40 shadow-xs'
+              : 'text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high'
+          }`}
+        >
+          <AudioLines className={`w-4 h-4 ${currentTab === 'audio' ? 'text-md-primary' : 'text-md-on-surface-variant'}`} />
+          <span>Audio</span>
         </button>
 
         <button

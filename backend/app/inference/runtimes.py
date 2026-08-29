@@ -81,6 +81,8 @@ class Runtime(ABC):
     #: DeployRequest fields this runtime honours. Anything else is ignored, and the
     #: launch dialog is told not to offer it.
     tunable_fields: Tuple[str, ...] = ()
+    #: What the catalogue searches for when this runtime is selected.
+    default_query: str = ""
 
     @property
     @abstractmethod
@@ -175,4 +177,5 @@ class Runtime(ABC):
             supported_libraries=list(self.supported_libraries),
             supported_id_fragments=list(self.supported_id_fragments),
             tunable_fields=list(self.tunable_fields),
+            default_query=self.default_query,
         )

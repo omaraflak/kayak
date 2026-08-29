@@ -29,6 +29,7 @@ from backend.app.routes.auth import PUBLIC_API_PATHS, is_authorized
 from backend.app.skills.registry import skill_registry
 from backend.app import support
 from backend.app.tools.registry import tool_registry
+from backend.app.audio import routes as audio_routes
 from backend.app.inference import routes as inference_routes
 
 logging.basicConfig(level=logging.INFO)
@@ -137,6 +138,7 @@ app.include_router(workspace.router)
 app.include_router(agents.router)
 app.include_router(models.router)
 app.include_router(inference_routes.router)
+app.include_router(audio_routes.router)
 app.include_router(skills.router)
 app.include_router(tools.router)
 app.include_router(tool_builder.router)

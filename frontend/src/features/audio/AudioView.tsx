@@ -1,0 +1,672 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AudioItem, Modality, Voice } from '../../types';
+import { api, errorMessage } from '../../api/client';
+import { useVLLMStatus, VLLM_LOADING_STATES } from '../../context/VLLMStatusContext';
+import { formatBytes } from '../models/modelSizing';
+import {
+  AudioLines,
+  AlertCircle,
+  Check,
+  Copy,
+  Download,
+  FileAudio,
+  Loader2,
+  Mic,
+  Trash2,
+  Type,
+  Upload,
+} from 'lucide-react';
+
+type Mode = 'synthesize' | 'transcribe';
+
+/** Formats like 1:04. Clips are short; hours would be noise. */
+function formatDuration(seconds?: number | null): string {
+  if (!seconds || seconds <= 0) return '';
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(Math.round(seconds % 60)).padStart(2, '0')}`;
+}
+
+function formatWhen(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toLocaleString();
+}
+
+export interface AudioViewProps {
+  /** Sends the user to Local Models, the one place servers are started. */
+  onOpenModels: () => void;
+}
+
+export const AudioView: React.FC<AudioViewProps> = ({ onOpenModels }) => {
+  const [mode, setMode] = useState<Mode>('synthesize');
+  const [items, setItems] = useState<AudioItem[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const refreshItems = useCallback(async () => {
+    try {
+      setItems(await api.listAudioItems());
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshItems();
+  }, [refreshItems]);
+
+  const handleDelete = async (item: AudioItem) => {
+    // Removed from the list first: the request is a formality, and waiting for it
+    // makes deleting a dozen clips feel broken.
+    setItems((previous) => previous.filter((entry) => entry.id !== item.id));
+    try {
+      await api.deleteAudioItem(item.id);
+    } catch (err) {
+      setError(errorMessage(err));
+      refreshItems();
+    }
+  };
+
+  return (
+    <div className="flex-1 flex flex-col h-full min-h-0 bg-md-surface overflow-hidden font-sans transition-colors">
+      <div className="h-16 border-b border-md-outline-variant px-8 flex items-center justify-between bg-md-surface-container-low shrink-0 transition-colors">
+        <div className="flex items-center space-x-3">
+          <div className="w-8 h-8 rounded-xl bg-md-primary-container text-md-on-primary-container border border-md-outline-variant flex items-center justify-center shadow-2xs">
+            <AudioLines className="w-4 h-4" />
+          </div>
+          <div>
+            <h2 className="font-bold text-sm text-md-on-surface">Audio</h2>
+            <p className="text-xs text-md-on-surface-variant">
+              Turn text into speech, and recordings into text, on this machine
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1 p-1 rounded-xl bg-md-surface-container-high border border-md-outline-variant">
+          <ModeButton
+            active={mode === 'synthesize'}
+            onClick={() => setMode('synthesize')}
+            icon={<Type className="w-3 h-3" />}
+            label="Synthesize"
+          />
+          <ModeButton
+            active={mode === 'transcribe'}
+            onClick={() => setMode('transcribe')}
+            icon={<Mic className="w-3 h-3" />}
+            label="Transcribe"
+          />
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-8 py-6 space-y-8 bg-md-surface">
+        {error && (
+          <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800/80 text-rose-900 dark:text-rose-100 text-[11px] leading-relaxed flex items-start gap-2">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <p className="flex-1">{error}</p>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="text-[11px] font-bold underline cursor-pointer"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {mode === 'synthesize' ? (
+          <SynthesizePanel
+            onOpenModels={onOpenModels}
+            onProduced={(item) => setItems((previous) => [item, ...previous])}
+            onError={setError}
+            clips={items.filter((item) => item.kind === 'clip')}
+            onDelete={handleDelete}
+          />
+        ) : (
+          <TranscribePanel
+            onOpenModels={onOpenModels}
+            onProduced={(item) => setItems((previous) => [item, ...previous])}
+            onError={setError}
+            transcripts={items.filter((item) => item.kind === 'transcript')}
+            onDelete={handleDelete}
+          />
+        )}
+      </div>
+    </div>
+  );
+};
+
+const ModeButton: React.FC<{
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}> = ({ active, onClick, icon, label }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+      active
+        ? 'bg-md-primary text-md-on-primary shadow-2xs'
+        : 'text-md-on-surface-variant hover:text-md-on-surface'
+    }`}
+  >
+    {icon}
+    {label}
+  </button>
+);
+
+/**
+ * The state of one audio server, and what to do when it is not running.
+ *
+ * Models are started from Local Models and nowhere else: a second place to start
+ * them would be a second surface to keep truthful.
+ */
+const ServerState: React.FC<{
+  modality: Modality;
+  what: string;
+  onOpenModels: () => void;
+}> = ({ modality, what, onOpenModels }) => {
+  const { statuses } = useVLLMStatus();
+  const status = statuses[modality];
+  const isReady = status?.state === 'ready';
+  const isBusy = Boolean(status && VLLM_LOADING_STATES.includes(status.state));
+
+  if (isReady) {
+    return (
+      <div className="flex items-center gap-2 text-[11px] text-md-on-surface-variant">
+        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 border-emerald-300 dark:border-emerald-800/80">
+          ONLINE
+        </span>
+        <span className="font-mono">{status?.model_id}</span>
+      </div>
+    );
+  }
+
+  if (isBusy) {
+    return (
+      <div className="flex items-center gap-2 text-[11px] text-md-on-surface-variant">
+        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 border-amber-300 dark:border-amber-800/80">
+          <Loader2 className="w-2.5 h-2.5 animate-spin" />
+          STARTING
+        </span>
+        <span className="font-mono">{status?.model_id}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2 text-[11px] text-md-on-surface-variant">
+      <span>No {what} model is running.</span>
+      <button
+        type="button"
+        onClick={onOpenModels}
+        className="text-md-primary font-bold hover:underline cursor-pointer"
+      >
+        Start one
+      </button>
+    </div>
+  );
+};
+
+const SynthesizePanel: React.FC<{
+  onOpenModels: () => void;
+  onProduced: (item: AudioItem) => void;
+  onError: (message: string) => void;
+  clips: AudioItem[];
+  onDelete: (item: AudioItem) => void;
+}> = ({ onOpenModels, onProduced, onError, clips, onDelete }) => {
+  const { statuses, logsByModality } = useVLLMStatus();
+  const speechStatus = statuses.speech;
+  const isReady = speechStatus?.state === 'ready';
+
+  const [text, setText] = useState('');
+  const [voices, setVoices] = useState<Voice[]>([]);
+  const [voice, setVoice] = useState<string>('');
+  const [speed, setSpeed] = useState(1);
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  // Voices belong to the loaded model, so they are re-read whenever it changes
+  // rather than once: a list from the previous model offers voices the current
+  // one has never heard of.
+  useEffect(() => {
+    let cancelled = false;
+    if (!isReady) {
+      setVoices([]);
+      return;
+    }
+    api
+      .getVoices()
+      .then((response) => {
+        if (cancelled) return;
+        setVoices(response.voices);
+        setVoice((current) => {
+          // A voice the user picked survives a refetch of the same model's list.
+          if (response.voices.some((entry) => entry.id === current)) return current;
+          // Otherwise open on the server's own default rather than whichever
+          // voice happens to sort first.
+          const preferred = response.default_voice;
+          if (preferred && response.voices.some((entry) => entry.id === preferred)) {
+            return preferred;
+          }
+          return response.voices[0]?.id ?? '';
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setVoices([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isReady, speechStatus?.model_id]);
+
+  // Synthesis of a long text runs for minutes with nothing to show. The server
+  // logs its progress per chunk, and that stream is already open, so the last
+  // chunk line is a real progress indicator rather than an invented one.
+  const progressLine = useMemo(() => {
+    if (!isGenerating) return null;
+    const lines = logsByModality.speech ?? [];
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      // Just the sentence, not the log line around it: the timestamp and logger
+      // name in front of it are noise next to a progress counter.
+      const match = lines[index].match(/Synthesised chunk \d+\/\d+/);
+      if (match) return match[0];
+    }
+    return null;
+  }, [isGenerating, logsByModality.speech]);
+
+  const characters = text.trim().length;
+
+  const handleGenerate = async () => {
+    if (!text.trim() || isGenerating) return;
+    setIsGenerating(true);
+    try {
+      const item = await api.synthesizeSpeech({
+        text,
+        voice: voice || null,
+        speed,
+        response_format: 'wav',
+      });
+      onProduced(item);
+    } catch (err) {
+      onError(errorMessage(err));
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const grouped = useMemo(() => groupVoicesByLanguage(voices), [voices]);
+
+  return (
+    <>
+      <section className="space-y-3">
+        <SectionHeading
+          icon={<AudioLines className="w-3.5 h-3.5 text-md-primary" />}
+          title="Speech model"
+        />
+        <ServerState modality="speech" what="speech" onOpenModels={onOpenModels} />
+      </section>
+
+      <section className="space-y-3">
+        <SectionHeading
+          icon={<Type className="w-3.5 h-3.5 text-md-primary" />}
+          title="Text"
+          note={characters ? `${characters.toLocaleString()} characters` : undefined}
+        />
+
+        <textarea
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          placeholder="Paste or type anything to be spoken. Long text is split into sentences automatically."
+          rows={8}
+          className="w-full bg-md-surface-container-lowest border border-md-outline-variant rounded-xl px-4 py-3 text-xs text-md-on-surface placeholder:text-md-on-surface-variant/70 focus:outline-none focus:border-md-primary focus:ring-1 focus:ring-md-primary shadow-xs transition-colors resize-y font-sans leading-relaxed"
+        />
+
+        <div className="flex items-end gap-3 flex-wrap">
+          {voices.length > 0 && (
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-md-on-surface-variant">
+                Voice
+              </span>
+              <select
+                value={voice}
+                onChange={(event) => setVoice(event.target.value)}
+                className="bg-md-surface-container-lowest border border-md-outline-variant rounded-xl px-3 py-2 text-xs text-md-on-surface focus:outline-none focus:border-md-primary cursor-pointer"
+              >
+                {grouped.map(([language, entries]) => (
+                  <optgroup key={language} label={language}>
+                    {entries.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+          )}
+
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-md-on-surface-variant">
+              Speed · {speed.toFixed(2)}×
+            </span>
+            <input
+              type="range"
+              min={0.5}
+              max={2}
+              step={0.05}
+              value={speed}
+              onChange={(event) => setSpeed(Number(event.target.value))}
+              className="w-40 accent-md-primary cursor-pointer"
+            />
+          </label>
+
+          <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={!isReady || !text.trim() || isGenerating}
+            className="px-5 py-2.5 rounded-xl bg-md-primary hover:opacity-90 disabled:opacity-40 text-md-on-primary text-xs font-bold flex items-center gap-1.5 transition-opacity shadow-xs cursor-pointer"
+          >
+            {isGenerating ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <AudioLines className="w-3.5 h-3.5" />
+            )}
+            <span>{isGenerating ? 'Generating...' : 'Generate speech'}</span>
+          </button>
+
+          {isGenerating && progressLine && (
+            <span className="text-[11px] text-md-on-surface-variant font-mono">
+              {progressLine}
+            </span>
+          )}
+        </div>
+
+        {isGenerating && (
+          <p className="text-[11px] text-md-on-surface-variant">
+            Generating on the CPU takes roughly as long as the audio itself. You can
+            leave this page; the clip is saved when it finishes.
+          </p>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <SectionHeading
+          icon={<FileAudio className="w-3.5 h-3.5 text-md-primary" />}
+          title="Clips"
+          note={clips.length ? `${clips.length} saved` : undefined}
+        />
+
+        {clips.length === 0 ? (
+          <p className="text-[11px] text-md-on-surface-variant">
+            Nothing generated yet. Clips are saved on this machine and stay here until
+            you delete them.
+          </p>
+        ) : (
+          <div className="space-y-2.5">
+            {clips.map((clip) => (
+              <ClipRow key={clip.id} clip={clip} onDelete={onDelete} />
+            ))}
+          </div>
+        )}
+      </section>
+    </>
+  );
+};
+
+const ClipRow: React.FC<{ clip: AudioItem; onDelete: (item: AudioItem) => void }> = ({
+  clip,
+  onDelete,
+}) => (
+  <div className="p-3.5 rounded-2xl border border-md-outline-variant bg-md-surface shadow-xs space-y-2.5">
+    <div className="flex items-start justify-between gap-3">
+      <p className="text-xs text-md-on-surface leading-relaxed flex-1 line-clamp-3">
+        {clip.text}
+      </p>
+      <div className="flex items-center gap-1 shrink-0">
+        <a
+          href={api.audioFileUrl(clip.id)}
+          download={clip.filename ?? undefined}
+          className="p-1.5 rounded-lg text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors"
+          title="Download"
+        >
+          <Download className="w-3.5 h-3.5" />
+        </a>
+        <button
+          type="button"
+          onClick={() => onDelete(clip)}
+          className="p-1.5 rounded-lg text-md-on-surface-variant hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+          title="Delete"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
+
+    <audio controls preload="none" src={api.audioFileUrl(clip.id)} className="w-full h-8" />
+
+    <div className="flex items-center gap-2 text-[10px] text-md-on-surface-variant flex-wrap">
+      <span className="font-mono">{clip.model_id}</span>
+      {clip.voice && <Tag>{clip.voice}</Tag>}
+      {clip.duration_seconds ? <Tag>{formatDuration(clip.duration_seconds)}</Tag> : null}
+      <Tag>{formatBytes(clip.size_bytes)}</Tag>
+      <span className="ml-auto">{formatWhen(clip.created_at)}</span>
+    </div>
+  </div>
+);
+
+const TranscribePanel: React.FC<{
+  onOpenModels: () => void;
+  onProduced: (item: AudioItem) => void;
+  onError: (message: string) => void;
+  transcripts: AudioItem[];
+  onDelete: (item: AudioItem) => void;
+}> = ({ onOpenModels, onProduced, onError, transcripts, onDelete }) => {
+  const { statuses } = useVLLMStatus();
+  const isReady = statuses.transcription?.state === 'ready';
+
+  const [file, setFile] = useState<File | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleTranscribe = async () => {
+    if (!file || isTranscribing) return;
+    setIsTranscribing(true);
+    try {
+      onProduced(await api.transcribeAudio(file));
+      setFile(null);
+      if (inputRef.current) inputRef.current.value = '';
+    } catch (err) {
+      onError(errorMessage(err));
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  return (
+    <>
+      <section className="space-y-3">
+        <SectionHeading
+          icon={<Mic className="w-3.5 h-3.5 text-md-primary" />}
+          title="Transcription model"
+        />
+        <ServerState
+          modality="transcription"
+          what="transcription"
+          onOpenModels={onOpenModels}
+        />
+      </section>
+
+      <section className="space-y-3">
+        <SectionHeading
+          icon={<Upload className="w-3.5 h-3.5 text-md-primary" />}
+          title="Recording"
+        />
+
+        <div
+          onDragOver={(event) => {
+            event.preventDefault();
+            setIsDragging(true);
+          }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setIsDragging(false);
+            const dropped = event.dataTransfer.files?.[0];
+            if (dropped) setFile(dropped);
+          }}
+          onClick={() => inputRef.current?.click()}
+          className={`p-8 rounded-2xl border border-dashed text-center cursor-pointer transition-colors ${
+            isDragging
+              ? 'border-md-primary bg-md-primary-container/40'
+              : 'border-md-outline-variant bg-md-surface-container-lowest hover:bg-md-surface-container'
+          }`}
+        >
+          <input
+            ref={inputRef}
+            type="file"
+            accept="audio/*,video/*"
+            className="hidden"
+            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+          />
+          <Upload className="w-5 h-5 text-md-on-surface-variant mx-auto mb-2" />
+          {file ? (
+            <p className="text-xs text-md-on-surface font-semibold">
+              {file.name}{' '}
+              <span className="text-md-on-surface-variant font-normal">
+                ({formatBytes(file.size)})
+              </span>
+            </p>
+          ) : (
+            <p className="text-xs text-md-on-surface-variant">
+              Drop an audio file here, or click to choose one
+            </p>
+          )}
+        </div>
+
+        <button
+          type="button"
+          onClick={handleTranscribe}
+          disabled={!isReady || !file || isTranscribing}
+          className="px-5 py-2.5 rounded-xl bg-md-primary hover:opacity-90 disabled:opacity-40 text-md-on-primary text-xs font-bold flex items-center gap-1.5 transition-opacity shadow-xs cursor-pointer"
+        >
+          {isTranscribing ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <Mic className="w-3.5 h-3.5" />
+          )}
+          <span>{isTranscribing ? 'Transcribing...' : 'Transcribe'}</span>
+        </button>
+      </section>
+
+      <section className="space-y-3">
+        <SectionHeading
+          icon={<Type className="w-3.5 h-3.5 text-md-primary" />}
+          title="Transcripts"
+          note={transcripts.length ? `${transcripts.length} saved` : undefined}
+        />
+
+        {transcripts.length === 0 ? (
+          <p className="text-[11px] text-md-on-surface-variant">
+            Nothing transcribed yet. The recording itself is not kept — only the text.
+          </p>
+        ) : (
+          <div className="space-y-2.5">
+            {transcripts.map((item) => (
+              <TranscriptRow key={item.id} item={item} onDelete={onDelete} />
+            ))}
+          </div>
+        )}
+      </section>
+    </>
+  );
+};
+
+const TranscriptRow: React.FC<{
+  item: AudioItem;
+  onDelete: (item: AudioItem) => void;
+}> = ({ item, onDelete }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(item.text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* a browser that refuses clipboard access is not worth an error banner */
+    }
+  };
+
+  return (
+    <div className="p-3.5 rounded-2xl border border-md-outline-variant bg-md-surface shadow-xs space-y-2.5">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-xs text-md-on-surface leading-relaxed flex-1 whitespace-pre-wrap">
+          {item.text || <span className="text-md-on-surface-variant">(silence)</span>}
+        </p>
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="p-1.5 rounded-lg text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors cursor-pointer"
+            title="Copy"
+          >
+            {copied ? (
+              <Check className="w-3.5 h-3.5 text-emerald-600" />
+            ) : (
+              <Copy className="w-3.5 h-3.5" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(item)}
+            className="p-1.5 rounded-lg text-md-on-surface-variant hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+            title="Delete"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 text-[10px] text-md-on-surface-variant flex-wrap">
+        {item.source_filename && <Tag>{item.source_filename}</Tag>}
+        {item.language && <Tag>{item.language}</Tag>}
+        <span className="font-mono">{item.model_id}</span>
+        <span className="ml-auto">{formatWhen(item.created_at)}</span>
+      </div>
+    </div>
+  );
+};
+
+const Tag: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <span className="px-1.5 py-0.5 rounded border border-md-outline-variant bg-md-surface-container-high text-md-on-surface">
+    {children}
+  </span>
+);
+
+const SectionHeading: React.FC<{ icon: React.ReactNode; title: string; note?: string }> = ({
+  icon,
+  title,
+  note,
+}) => (
+  <div className="flex items-center justify-between gap-3 flex-wrap">
+    <h4 className="text-xs font-bold uppercase tracking-wider text-md-on-surface flex items-center gap-1.5">
+      {icon} {title}
+    </h4>
+    {note && <span className="text-[11px] text-md-on-surface-variant">{note}</span>}
+  </div>
+);
+
+/**
+ * Groups voices by the language they speak.
+ *
+ * Kokoro alone offers 54 across nine languages, which as one flat list is unusable.
+ * The grouping comes from what the server reported, so a model with no languages
+ * simply yields one group.
+ */
+export function groupVoicesByLanguage(voices: Voice[]): Array<[string, Voice[]]> {
+  const groups = new Map<string, Voice[]>();
+  for (const voice of voices) {
+    const key = voice.language || 'Voices';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(voice);
+  }
+  return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
+}

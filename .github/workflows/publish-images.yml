@@ -27,8 +27,8 @@ jobs:
           - image: omaraflak/kayak-sandbox
             dockerfile: Dockerfile.sandbox
             cache: sandbox
-          - image: omaraflak/kayak-tts
-            dockerfile: Dockerfile.tts
+          - image: omaraflak/kayak-audio
+            dockerfile: Dockerfile.audio
             cache: tts
 
     steps:
@@ -94,4 +94,4 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: >
           python3 scripts/prune_dockerhub_tags.py
-          omaraflak/kayak omaraflak/kayak-sandbox omaraflak/kayak-tts
+          omaraflak/kayak omaraflak/kayak-sandbox omaraflak/kayak-audio

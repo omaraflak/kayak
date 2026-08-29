@@ -3,9 +3,11 @@ import json
 import logging
 from typing import Dict, List
 
-from fastapi import APIRouter, HTTPException
+import httpx
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from backend.app.config import settings
 from backend.app.inference import metal, registry
 from backend.app.inference.cache import CachePathError
 from backend.app.inference.models import (
@@ -16,6 +18,7 @@ from backend.app.inference.models import (
     MetalStatus,
     Modality,
     ModelCacheInfo,
+    ModelClassification,
     RuntimeDescriptor,
 )
 
@@ -44,6 +47,44 @@ async def list_runtimes() -> List[RuntimeDescriptor]:
     client.
     """
     return registry.describe_runtimes()
+
+
+@router.get("/classify", response_model=ModelClassification)
+async def classify_model(repo_id: str = Query(..., min_length=1)) -> ModelClassification:
+    """Which local runtime should serve a repository.
+
+    Asked before starting a model whose task is not already known -- a cached model
+    is only a name and a size on disk. Answered from the Hub rather than guessed from
+    the name: starting a cached Kokoro used to go to vLLM, which spent minutes on a
+    model it could never load.
+    """
+    url = f"https://huggingface.co/api/models/{repo_id}"
+    headers: Dict[str, str] = {}
+    if settings.HUGGINGFACE_API_KEY:
+        headers["Authorization"] = f"Bearer {settings.HUGGINGFACE_API_KEY}"
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(url, headers=headers)
+    except httpx.HTTPError:
+        # Unreachable is not the same as unsupported. The caller falls back rather
+        # than refusing to start a model because the Hub was down.
+        return ModelClassification(repo_id=repo_id, unknown=True)
+
+    if response.status_code != 200:
+        return ModelClassification(repo_id=repo_id, unknown=True)
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return ModelClassification(repo_id=repo_id, unknown=True)
+
+    return registry.classify(
+        repo_id,
+        pipeline_tag=payload.get("pipeline_tag"),
+        library_name=payload.get("library_name"),
+        tags=[tag for tag in (payload.get("tags") or []) if isinstance(tag, str)],
+    )
 
 
 @router.get("/status", response_model=Dict[str, DeploymentProgress])
