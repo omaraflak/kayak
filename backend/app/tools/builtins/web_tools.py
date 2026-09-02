@@ -26,7 +26,7 @@ def _clean_html_text(html_content: str, max_length: int = 4000) -> str:
     return text
 
 
-@tool_metadata(category=ToolCategory.WEB, risk=ToolRisk.LOW)
+@tool_metadata(category=ToolCategory.WEB, risk=ToolRisk.LOW, read_only=True)
 async def web_search(query: str, max_results: Optional[int] = 5) -> str:
     """Performs an open-source web search using DuckDuckGo and returns search results.
 
@@ -61,7 +61,7 @@ async def web_search(query: str, max_results: Optional[int] = 5) -> str:
         return f"Error performing web search: {str(e)}"
 
 
-@tool_metadata(category=ToolCategory.WEB, risk=ToolRisk.MODERATE)
+@tool_metadata(category=ToolCategory.WEB, risk=ToolRisk.MODERATE, read_only=True)
 async def fetch_url(url: str, max_length: Optional[int] = 4000) -> str:
     """Fetches the text content of a public web page, stripping HTML and scripts.
 

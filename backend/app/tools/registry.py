@@ -4,6 +4,7 @@ from typing import Any, Callable, Dict, List, Optional, get_type_hints
 from backend.app.config import settings
 from backend.app.models import ToolCategory, ToolDefinition, ToolRisk
 from backend.app.tools.metadata import (
+    ToolMetadata,
     read_function_metadata,
     read_module_metadata,
 )
@@ -162,7 +163,7 @@ class ToolRegistry:
         self._custom_schemas: Dict[str, Dict[str, Any]] = {}
         self._custom_source_codes: Dict[str, str] = {}
         self._custom_verify_codes: Dict[str, str] = {}
-        self._metadata: Dict[str, tuple[ToolCategory, ToolRisk]] = {}
+        self._metadata: Dict[str, ToolMetadata] = {}
 
     def register_builtin(self, func: Callable, name: Optional[str] = None):
         """Registers a built-in tool function."""
@@ -226,6 +227,16 @@ class ToolRegistry:
         """Returns the callable for a tool."""
         return self._builtin_tools.get(name) or self._custom_tools.get(name)
 
+    def is_read_only(self, name: str) -> bool:
+        """Returns True if the tool has no side effects and is safe for concurrent execution."""
+        meta = self._metadata.get(name)
+        if meta is not None:
+            return meta.read_only
+        func = self.get_tool(name)
+        if func is not None:
+            return read_function_metadata(func).read_only
+        return False
+
     def get_tool_definitions(
         self, allowed_names: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
@@ -243,17 +254,16 @@ class ToolRegistry:
         for name, schema in all_schemas.items():
             fn = schema.get("function", {})
             is_builtin = name in self._builtin_schemas
-            category, risk = self._metadata.get(
-                name, (ToolCategory.CUSTOM, ToolRisk.MODERATE)
-            )
+            meta = self._metadata.get(name, ToolMetadata())
             result.append(
                 ToolDefinition(
                     name=name,
                     description=fn.get("description", ""),
                     parameters=fn.get("parameters", {}),
                     is_builtin=is_builtin,
-                    category=category,
-                    risk=risk,
+                    category=meta.category,
+                    risk=meta.risk,
+                    read_only=meta.read_only,
                     source_code=self._custom_source_codes.get(name) if not is_builtin else None,
                     verify_code=self._custom_verify_codes.get(name) if not is_builtin else None,
                 )

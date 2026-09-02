@@ -11,18 +11,28 @@ Custom tools in ``data/tools/<name>/tool.py`` declare module-level ``CATEGORY`` 
 verification and inside the sandbox container.
 """
 
+from dataclasses import dataclass
 from typing import Any, Callable, List, Tuple, TypeVar
 from backend.app.models import ToolCategory, ToolCategoryInfo, ToolRisk
 
 F = TypeVar("F", bound=Callable[..., Any])
 
-CATEGORY_ATTRIBUTE = "__kayak_category__"
-RISK_ATTRIBUTE = "__kayak_risk__"
+METADATA_ATTRIBUTE = "__kayak_metadata__"
 
 # Anything a user writes runs in the Kayak server process just like a built-in, so an
 # unclassified tool is assumed to be more than trivially capable.
 DEFAULT_CATEGORY = ToolCategory.CUSTOM
 DEFAULT_RISK = ToolRisk.MODERATE
+DEFAULT_READ_ONLY = False
+
+
+@dataclass(frozen=True)
+class ToolMetadata:
+    """Classification and execution properties of a tool."""
+    category: ToolCategory = DEFAULT_CATEGORY
+    risk: ToolRisk = DEFAULT_RISK
+    read_only: bool = DEFAULT_READ_ONLY
+
 
 # Display order is declaration order here; clients render categories as served.
 _CATEGORY_CATALOG: Tuple[Tuple[ToolCategory, str, str], ...] = (
@@ -64,16 +74,20 @@ _CATEGORY_CATALOG: Tuple[Tuple[ToolCategory, str, str], ...] = (
 )
 
 
-def tool_metadata(category: ToolCategory, risk: ToolRisk) -> Callable[[F], F]:
-    """Annotates a built-in tool with its category and risk.
+def tool_metadata(
+    category: ToolCategory,
+    risk: ToolRisk,
+    read_only: bool = False,
+) -> Callable[[F], F]:
+    """Annotates a built-in tool with its category, risk, and read-only status.
 
     Attributes are attached to the function itself rather than wrapping it, so
     signature introspection and coroutine detection keep working unchanged.
     """
+    metadata = ToolMetadata(category=category, risk=risk, read_only=read_only)
 
     def decorator(func: F) -> F:
-        setattr(func, CATEGORY_ATTRIBUTE, category)
-        setattr(func, RISK_ATTRIBUTE, risk)
+        setattr(func, METADATA_ATTRIBUTE, metadata)
         return func
 
     return decorator
@@ -91,19 +105,20 @@ def _coerce(value: Any, enum_type: Any, default: Any) -> Any:
     return default
 
 
-def read_function_metadata(func: Callable) -> Tuple[ToolCategory, ToolRisk]:
-    """Reads category and risk declared on a built-in tool function."""
-    return (
-        _coerce(getattr(func, CATEGORY_ATTRIBUTE, None), ToolCategory, DEFAULT_CATEGORY),
-        _coerce(getattr(func, RISK_ATTRIBUTE, None), ToolRisk, DEFAULT_RISK),
-    )
+def read_function_metadata(func: Callable) -> ToolMetadata:
+    """Reads category, risk, and read-only flag declared on a built-in tool function."""
+    meta = getattr(func, METADATA_ATTRIBUTE, None)
+    if isinstance(meta, ToolMetadata):
+        return meta
+    return ToolMetadata()
 
 
-def read_module_metadata(module: Any) -> Tuple[ToolCategory, ToolRisk]:
-    """Reads optional CATEGORY and RISK constants declared by a custom tool module."""
-    return (
-        _coerce(getattr(module, "CATEGORY", None), ToolCategory, DEFAULT_CATEGORY),
-        _coerce(getattr(module, "RISK", None), ToolRisk, DEFAULT_RISK),
+def read_module_metadata(module: Any) -> ToolMetadata:
+    """Reads optional CATEGORY, RISK, and READ_ONLY constants declared by a custom tool module."""
+    return ToolMetadata(
+        category=_coerce(getattr(module, "CATEGORY", None), ToolCategory, DEFAULT_CATEGORY),
+        risk=_coerce(getattr(module, "RISK", None), ToolRisk, DEFAULT_RISK),
+        read_only=bool(getattr(module, "READ_ONLY", DEFAULT_READ_ONLY)),
     )
 
 

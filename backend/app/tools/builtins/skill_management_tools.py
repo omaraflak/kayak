@@ -23,7 +23,7 @@ def create_or_update_skill(name: str, description: str, instructions: str) -> st
     )
 
 
-@tool_metadata(category=ToolCategory.KNOWLEDGE, risk=ToolRisk.LOW)
+@tool_metadata(category=ToolCategory.KNOWLEDGE, risk=ToolRisk.LOW, read_only=True)
 def list_available_skills() -> str:
     """Lists all skills currently registered in the Kayak skills directory."""
     skills = skill_registry.list_skills()

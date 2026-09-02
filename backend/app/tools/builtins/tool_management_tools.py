@@ -101,7 +101,7 @@ async def activate_tool(
     return result.message
 
 
-@tool_metadata(category=ToolCategory.TOOLING, risk=ToolRisk.LOW)
+@tool_metadata(category=ToolCategory.TOOLING, risk=ToolRisk.LOW, read_only=True)
 def get_tool_source(tool_name: str) -> str:
     """Reads the current source code and test suite of an installed custom tool.
 

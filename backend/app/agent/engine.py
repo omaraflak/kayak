@@ -460,7 +460,48 @@ class AgentEngine:
         session: _SessionContext,
         executed_ids: Set[str],
     ) -> AsyncGenerator[AgentEvent, None]:
-        """Executes each requested tool call, enforcing agent permissions along the way."""
+        """Executes each requested tool call, enforcing agent permissions along the way.
+
+        If all requested tools are read-only (have no side effects) and auto-approved,
+        they are executed concurrently via asyncio.gather to minimize turn latency.
+        Otherwise, tools are executed sequentially to avoid race conditions.
+        """
+        can_run_concurrently = len(tool_calls) > 1 and all(
+            resolve_tool_permission(session.agent_config, tc["function"]["name"])
+            == ToolPermission.AUTO_APPROVE
+            and tool_registry.is_read_only(tc["function"]["name"])
+            for tc in tool_calls
+        )
+
+        if can_run_concurrently:
+            for tc in tool_calls:
+                call_id = tc["id"]
+                fn_name = tc["function"]["name"]
+                raw_args = tc["function"]["arguments"]
+                yield events.tool_call_executing(call_id, fn_name, raw_args)
+
+            async def _run_single(
+                tool_call: Dict[str, Any]
+            ) -> Tuple[str, str, str, bool]:
+                call_id = tool_call["id"]
+                fn_name = tool_call["function"]["name"]
+                output, is_error = await _execute_single_tool(tool_call, session)
+                return call_id, fn_name, output, is_error
+
+            results = await asyncio.gather(
+                *[_run_single(tc) for tc in tool_calls]
+            )
+
+            for call_id, fn_name, output, is_error in results:
+                yield events.tool_call_result(
+                    call_id, fn_name, output, is_error=is_error
+                )
+                await _record_tool_result(
+                    session.conversation_id, call_id, fn_name, output
+                )
+                executed_ids.add(call_id)
+            return
+
         for tc in tool_calls:
             call_id = tc["id"]
             fn_name = tc["function"]["name"]

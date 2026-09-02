@@ -59,7 +59,7 @@ async def start_background_task(
     )
 
 
-@tool_metadata(category=ToolCategory.EXECUTION, risk=ToolRisk.LOW)
+@tool_metadata(category=ToolCategory.EXECUTION, risk=ToolRisk.LOW, read_only=True)
 async def get_task_status(task_id: str) -> str:
     """Checks the status and recent stdout/stderr output of a background task.
 

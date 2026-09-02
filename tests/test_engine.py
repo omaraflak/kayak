@@ -322,3 +322,121 @@ async def test_stream_error_does_not_leave_dangling_calls(agent_env, monkeypatch
     _assert_history_is_well_formed(await get_messages(conversation.id))
     reloaded = await get_conversation(conversation.id)
     assert reloaded.status == ConversationStatus.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_read_only_tools_execute_concurrently(agent_env, monkeypatch):
+    """Multiple read-only tool calls in a turn must run concurrently via asyncio.gather."""
+    agent_env.allowed_tools = ["read_file", "list_directory"]
+
+    running_tools = 0
+    max_concurrent_tools = 0
+
+    async def concurrent_mock_tool(
+        name: str, args: Dict[str, Any], context: Dict[str, Any]
+    ) -> str:
+        nonlocal running_tools, max_concurrent_tools
+        running_tools += 1
+        max_concurrent_tools = max(max_concurrent_tools, running_tools)
+        await asyncio.sleep(0.05)
+        running_tools -= 1
+        return f"{name} output"
+
+    _stub_stream(
+        monkeypatch,
+        [
+            [
+                {
+                    "type": "tool_call_delta",
+                    "index": 0,
+                    "id": "call_read1",
+                    "name": "read_file",
+                    "arguments": "{}",
+                },
+                {
+                    "type": "tool_call_delta",
+                    "index": 1,
+                    "id": "call_read2",
+                    "name": "list_directory",
+                    "arguments": "{}",
+                },
+            ],
+            _text_turn("done"),
+        ],
+    )
+    _stub_tool(monkeypatch, concurrent_mock_tool)
+
+    conversation = await create_conversation(title="t", agent_id="tester")
+    await add_message(conversation.id, MessageRole.USER, content="read files")
+
+    events = await _drain(conversation.id)
+
+    assert max_concurrent_tools == 2
+    assert any(
+        e["type"] == "tool_call_result" and e["id"] == "call_read1"
+        for e in events
+    )
+    assert any(
+        e["type"] == "tool_call_result" and e["id"] == "call_read2"
+        for e in events
+    )
+    _assert_history_is_well_formed(await get_messages(conversation.id))
+
+
+@pytest.mark.asyncio
+async def test_mixed_or_mutating_tools_execute_sequentially(
+    agent_env, monkeypatch
+):
+    """Turns with any mutating tool must execute serially to prevent race conditions."""
+    agent_env.allowed_tools = ["run_command", "read_file"]
+
+    running_tools = 0
+    max_concurrent_tools = 0
+
+    async def serial_mock_tool(
+        name: str, args: Dict[str, Any], context: Dict[str, Any]
+    ) -> str:
+        nonlocal running_tools, max_concurrent_tools
+        running_tools += 1
+        max_concurrent_tools = max(max_concurrent_tools, running_tools)
+        await asyncio.sleep(0.05)
+        running_tools -= 1
+        return f"{name} output"
+
+    _stub_stream(
+        monkeypatch,
+        [
+            [
+                {
+                    "type": "tool_call_delta",
+                    "index": 0,
+                    "id": "call_run",
+                    "name": "run_command",
+                    "arguments": "{}",
+                },
+                {
+                    "type": "tool_call_delta",
+                    "index": 1,
+                    "id": "call_read",
+                    "name": "read_file",
+                    "arguments": "{}",
+                },
+            ],
+            _text_turn("done"),
+        ],
+    )
+    _stub_tool(monkeypatch, serial_mock_tool)
+
+    conversation = await create_conversation(title="t", agent_id="tester")
+    await add_message(conversation.id, MessageRole.USER, content="run and read")
+
+    events = await _drain(conversation.id)
+
+    assert max_concurrent_tools == 1
+    assert any(
+        e["type"] == "tool_call_result" and e["id"] == "call_run" for e in events
+    )
+    assert any(
+        e["type"] == "tool_call_result" and e["id"] == "call_read" for e in events
+    )
+    _assert_history_is_well_formed(await get_messages(conversation.id))

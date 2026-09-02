@@ -106,30 +106,55 @@ class TestBuiltinAnnotations:
         assert unclassified == []
 
     @pytest.mark.parametrize(
-        "name,category,risk",
+        "name,category,risk,read_only",
         [
-            ("run_command", ToolCategory.EXECUTION, ToolRisk.HIGH),
-            ("read_file", ToolCategory.FILESYSTEM, ToolRisk.LOW),
-            ("write_file", ToolCategory.FILESYSTEM, ToolRisk.MODERATE),
-            ("web_search", ToolCategory.WEB, ToolRisk.LOW),
-            ("spawn_subagent", ToolCategory.ORCHESTRATION, ToolRisk.MODERATE),
-            ("load_skill", ToolCategory.KNOWLEDGE, ToolRisk.LOW),
-            ("activate_tool", ToolCategory.TOOLING, ToolRisk.HIGH),
+            ("run_command", ToolCategory.EXECUTION, ToolRisk.HIGH, False),
+            ("read_file", ToolCategory.FILESYSTEM, ToolRisk.LOW, True),
+            ("list_directory", ToolCategory.FILESYSTEM, ToolRisk.LOW, True),
+            ("find_files", ToolCategory.FILESYSTEM, ToolRisk.LOW, True),
+            ("write_file", ToolCategory.FILESYSTEM, ToolRisk.MODERATE, False),
+            ("edit_file", ToolCategory.FILESYSTEM, ToolRisk.MODERATE, False),
+            ("web_search", ToolCategory.WEB, ToolRisk.LOW, True),
+            ("fetch_url", ToolCategory.WEB, ToolRisk.MODERATE, True),
+            ("spawn_subagent", ToolCategory.ORCHESTRATION, ToolRisk.MODERATE, False),
+            ("get_subagent_result", ToolCategory.ORCHESTRATION, ToolRisk.LOW, True),
+            ("load_skill", ToolCategory.KNOWLEDGE, ToolRisk.LOW, True),
+            ("list_available_skills", ToolCategory.KNOWLEDGE, ToolRisk.LOW, True),
+            ("activate_tool", ToolCategory.TOOLING, ToolRisk.HIGH, False),
+            ("get_tool_source", ToolCategory.TOOLING, ToolRisk.LOW, True),
         ],
     )
-    def test_representative_builtins_are_classified(self, name, category, risk):
+    def test_representative_builtins_are_classified(self, name, category, risk, read_only):
         import backend.app.tools  # noqa: F401
 
         tool = _find(name)
         assert tool is not None
         assert tool.category == category
         assert tool.risk == risk
+        assert tool.read_only == read_only
+        assert tool_registry.is_read_only(name) == read_only
 
     def test_code_executing_tools_are_marked_high_risk(self):
         import backend.app.tools  # noqa: F401
 
         for name in ("run_command", "start_background_task", "activate_tool"):
             assert _find(name).risk == ToolRisk.HIGH
+
+
+TOOL_WITH_READ_ONLY = '''
+CATEGORY = "filesystem"
+RISK = "low"
+READ_ONLY = True
+
+
+def execute(path: str) -> str:
+    """Reads a file.
+
+    Args:
+        path: File path.
+    """
+    return path
+'''
 
 
 class TestCustomToolMetadata:
@@ -140,6 +165,18 @@ class TestCustomToolMetadata:
         tool = _find("webby")
         assert tool.category == ToolCategory.WEB
         assert tool.risk == ToolRisk.HIGH
+        assert tool.read_only is False
+        assert tool_registry.is_read_only("webby") is False
+
+    def test_custom_tool_read_only_declared(self, custom_tools_dir: Path):
+        _install(custom_tools_dir, "reader", TOOL_WITH_READ_ONLY)
+        tool_registry.load_custom_tools()
+
+        tool = _find("reader")
+        assert tool.category == ToolCategory.FILESYSTEM
+        assert tool.risk == ToolRisk.LOW
+        assert tool.read_only is True
+        assert tool_registry.is_read_only("reader") is True
 
     def test_undeclared_metadata_falls_back_to_custom(self, custom_tools_dir: Path):
         _install(custom_tools_dir, "plain", TOOL_WITHOUT_METADATA)

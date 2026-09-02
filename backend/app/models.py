@@ -153,6 +153,7 @@ class ToolDefinition(BaseModel):
     is_builtin: bool = False
     category: ToolCategory = ToolCategory.CUSTOM
     risk: ToolRisk = ToolRisk.MODERATE
+    read_only: bool = False
     source_code: Optional[str] = None
     verify_code: Optional[str] = None
 

@@ -193,7 +193,7 @@ async def spawn_subagent(
     )
 
 
-@tool_metadata(category=ToolCategory.ORCHESTRATION, risk=ToolRisk.LOW)
+@tool_metadata(category=ToolCategory.ORCHESTRATION, risk=ToolRisk.LOW, read_only=True)
 async def get_subagent_result(
     subagent_conversation_id: str,
 ) -> str:

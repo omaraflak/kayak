@@ -154,7 +154,7 @@ def iter_matching_files(root: Path, pattern: str) -> List[str]:
     return sorted(matches)
 
 
-@tool_metadata(category=ToolCategory.FILESYSTEM, risk=ToolRisk.LOW)
+@tool_metadata(category=ToolCategory.FILESYSTEM, risk=ToolRisk.LOW, read_only=True)
 async def find_files(
     pattern: str,
     path: Optional[str] = ".",
@@ -189,7 +189,7 @@ async def find_files(
     return "\n".join(lines)
 
 
-@tool_metadata(category=ToolCategory.FILESYSTEM, risk=ToolRisk.LOW)
+@tool_metadata(category=ToolCategory.FILESYSTEM, risk=ToolRisk.LOW, read_only=True)
 async def read_file(
     path: str,
     start_line: Optional[int] = None,
@@ -365,7 +365,7 @@ except Exception as e:
         return f"Error editing file '{path}': {str(e)}"
 
 
-@tool_metadata(category=ToolCategory.FILESYSTEM, risk=ToolRisk.LOW)
+@tool_metadata(category=ToolCategory.FILESYSTEM, risk=ToolRisk.LOW, read_only=True)
 async def list_directory(
     path: Optional[str] = ".",
     workspace_dir: Optional[Path] = None,
