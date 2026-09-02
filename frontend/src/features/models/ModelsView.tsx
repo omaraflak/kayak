@@ -41,7 +41,16 @@ import { formatBytes } from './modelSizing';
  * an agent needs.
  */
 
-export const ModelsView: React.FC = () => {
+export interface ModelsViewProps {
+  /** Which runtime's catalogue to browse. Comes from the URL. */
+  modality: Modality;
+  onSelectModality: (modality: Modality) => void;
+}
+
+export const ModelsView: React.FC<ModelsViewProps> = ({
+  modality,
+  onSelectModality,
+}) => {
   const dialog = useDialog();
   const { status, logs, statuses, logsByModality, refresh: fetchStatus } = useVLLMStatus();
   const [capability, setCapability] = useState<HostCapability | null>(null);
@@ -54,9 +63,6 @@ export const ModelsView: React.FC = () => {
   /** Which server's log drawer is open. Only one at a time; they are long. */
   const [openLogsFor, setOpenLogsFor] = useState<Modality | null>(null);
   const [runtimes, setRuntimes] = useState<RuntimeDescriptor[]>([]);
-  // Which runtime's catalogue is being browsed. Every start on this page goes to
-  // the matching server, so a speech model can never be handed to vLLM.
-  const [modality, setModality] = useState<Modality>('text');
   // Which runtime the pending launch goes to. Distinct from the browsing
   // modality above: a cached model is started from "This machine", where no
   // filter is in play, and it has to reach the runtime that can load it.
@@ -662,7 +668,7 @@ export const ModelsView: React.FC = () => {
             metalSupported={metal?.supported ?? false}
             runtimes={runtimes}
             modality={modality}
-            onSelectModality={setModality}
+            onSelectModality={onSelectModality}
           />
         </section>
       </div>

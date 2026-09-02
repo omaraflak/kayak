@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Conversation, AgentConfig, NavigationTab } from './types';
+import { Conversation, AgentConfig, Modality, MODALITIES, NavigationTab } from './types';
 import { api, errorMessage } from './api/client';
 import { Sidebar } from './features/conversations/Sidebar';
 import { ChatView } from './features/chat/ChatView';
@@ -206,6 +206,13 @@ export const App: React.FC = () => {
     navigateTo(tab, id);
   };
 
+  /** Opens Local Models with one runtime's catalogue already selected. */
+  const handleOpenModels = async (modality: Modality) => {
+    if (!(await confirmLeavingSettings())) return;
+    setCurrentTab('models');
+    handleSelectItem('models', modality);
+  };
+
   /** Opens an agent's profile from another tab, e.g. from a sub-agent transcript. */
   const handleOpenAgentProfile = (agentId: string) => {
     setCurrentTab('agents');
@@ -270,12 +277,21 @@ export const App: React.FC = () => {
         )}
 
         {currentTab === 'models' && (
-          <ModelsView />
+          <ModelsView
+            // Anything the URL does not name as a runtime is the text catalogue,
+            // so a bare /models or a stale link still lands somewhere real.
+            modality={MODALITIES.includes(selectedItemId as Modality)
+              ? (selectedItemId as Modality)
+              : 'text'}
+            onSelectModality={(next) => handleSelectItem('models', next)}
+          />
         )}
 
         {currentTab === 'audio' && (
           <AudioView
-            onOpenModels={() => handleSelectTab('models')}
+            // Audio knows which runtime it is missing, so it opens that catalogue
+            // rather than dropping the user on text to find the tab themselves.
+            onOpenModels={(needed) => handleOpenModels(needed)}
             // Anything but 'transcribe' is the synthesize half, so a bare /audio
             // or a stale link lands somewhere real rather than on nothing.
             mode={selectedItemId === 'transcribe' ? 'transcribe' : 'synthesize'}

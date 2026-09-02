@@ -35,8 +35,11 @@ function formatWhen(epochSeconds: number): string {
 }
 
 export interface AudioViewProps {
-  /** Sends the user to Local Models, the one place servers are started. */
-  onOpenModels: () => void;
+  /**
+   * Sends the user to Local Models, the one place servers are started, with the
+   * catalogue for the runtime they are missing already open.
+   */
+  onOpenModels: (modality: Modality) => void;
   /** Which half of the page is showing. Comes from the URL. */
   mode: Mode;
   onSelectMode: (mode: Mode) => void;
@@ -220,7 +223,7 @@ const ModeButton: React.FC<{
 const ServerState: React.FC<{
   modality: Modality;
   what: string;
-  onOpenModels: () => void;
+  onOpenModels: (modality: Modality) => void;
 }> = ({ modality, what, onOpenModels }) => {
   const { statuses } = useVLLMStatus();
   const status = statuses[modality];
@@ -255,7 +258,7 @@ const ServerState: React.FC<{
       <span>No {what} model is running.</span>
       <button
         type="button"
-        onClick={onOpenModels}
+        onClick={() => onOpenModels(modality)}
         className="text-md-primary font-bold hover:underline cursor-pointer"
       >
         Start one
@@ -265,7 +268,7 @@ const ServerState: React.FC<{
 };
 
 const SynthesizePanel: React.FC<{
-  onOpenModels: () => void;
+  onOpenModels: (modality: Modality) => void;
   onQueued: () => void;
   onError: (message: string) => void;
   jobs: AudioJob[];
@@ -620,7 +623,7 @@ const ClipRow: React.FC<{ clip: AudioItem; onDelete: (item: AudioItem) => void }
 );
 
 const TranscribePanel: React.FC<{
-  onOpenModels: () => void;
+  onOpenModels: (modality: Modality) => void;
   onQueued: () => void;
   onError: (message: string) => void;
   jobs: AudioJob[];

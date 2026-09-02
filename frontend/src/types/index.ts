@@ -272,6 +272,9 @@ export type VLLMServerState =
  */
 export type Modality = 'text' | 'speech' | 'transcription';
 
+/** Every Modality, for checking one that arrives as a bare string such as a URL segment. */
+export const MODALITIES: Modality[] = ['text', 'speech', 'transcription'];
+
 /**
  * What a local runtime serves and can be told, as the API describes it.
  *

@@ -27,7 +27,6 @@ export interface HuggingFaceCatalogProps {
   selectedHfMode?: 'hf' | 'vllm' | null;
   activeVllmModelId?: string | null;
   isVllmLoading?: boolean;
-  initialQuery?: string;
   /** Repositories already downloaded, so the catalog can say what is free to start. */
   cachedModelIds?: Set<string>;
   /** Accelerator memory available, for flagging models that cannot fit. */
@@ -51,7 +50,6 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
   selectedHfMode,
   activeVllmModelId,
   isVllmLoading = false,
-  initialQuery = 'qwen2.5-coder',
   cachedModelIds,
   availableVramGB = 0,
   hasAccelerator = false,
@@ -60,11 +58,13 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
   modality = 'text',
   onSelectModality,
 }) => {
-  const [searchQuery, setSearchQuery] = useState<string>(initialQuery);
+  // Seeded by the effect below once the runtime descriptors say what this
+  // modality's catalogue should open on.
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [results, setResults] = useState<HuggingFaceModelSearchResult[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [searchError, setSearchError] = useState<string | null>(null);
-  const [lastQuery, setLastQuery] = useState<string>(initialQuery);
+  const [lastQuery, setLastQuery] = useState<string>('');
 
   const activeRuntime = runtimeFor(runtimes, modality);
 
@@ -90,25 +90,27 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
     }
   };
 
+  /**
+   * Opens each runtime's catalogue on a query and task that suit it.
+   *
+   * Both come from the descriptors, so this waits for them rather than searching
+   * on mount: opening straight onto a modality -- which is what Audio's "Start
+   * one" now does -- used to run the text-generation default before the
+   * descriptors arrived and list coding models under "Transcription". Keyed on
+   * the modality so switching tabs re-runs it and a re-fetch of the same
+   * descriptors does not.
+   */
+  const openedFor = useRef<Modality | null>(null);
   useEffect(() => {
-    if (results.length === 0 && initialQuery) {
-      handleSearch(initialQuery);
-    }
-  }, []);
+    if (openedFor.current === modality) return;
+    if (!runtimeFor(runtimes, modality)) return;
+    openedFor.current = modality;
 
-  // Switching modality re-runs the search against the new task with a query that
-  // suits it. Keeping the old results would show text models under "Speech".
-  const firstRender = useRef(true);
-  useEffect(() => {
-    if (firstRender.current) {
-      firstRender.current = false;
-      return;
-    }
     const query = defaultQueryFor(runtimes, modality);
     setSearchQuery(query);
     setResults([]);
     if (query) handleSearch(query, pipelineTagFor(runtimes, modality));
-  }, [modality]);
+  }, [modality, runtimes]);
 
   return (
     <div className="space-y-4 font-sans">
