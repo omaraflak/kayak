@@ -224,9 +224,11 @@ export const api = {
     callId: string,
     approved: boolean
   ): Promise<{ status: string }> =>
+    // The call id goes in the body, not the path: Gemini's ids are long and contain
+    // "/", which no amount of encoding survives a round trip through the router.
     fetchJSONPost(
-      `${API_BASE}/conversations/${conversationId}/tool-approvals/${encodeURIComponent(callId)}`,
-      { approved }
+      `${API_BASE}/conversations/${conversationId}/tool-approvals`,
+      { call_id: callId, approved }
     ),
 
   // Agents

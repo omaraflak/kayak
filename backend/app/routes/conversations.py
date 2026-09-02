@@ -60,7 +60,16 @@ _side_tasks: Set[asyncio.Task[None]] = set()
 
 
 class ToolApprovalRequest(BaseModel):
-    """Payload recording the user's decision on a gated tool call."""
+    """Payload recording the user's decision on a gated tool call.
+
+    The call id travels in the body rather than the path because providers do not
+    agree on what an id may contain. Gemini's are thousands of characters of
+    base64 that routinely include "/", and percent-encoding one into a path
+    segment does not survive: the server decodes it back to a separator before
+    routing, the request misses this route, and the user's decision came back as
+    "Method Not Allowed".
+    """
+    call_id: str
     approved: bool
 
 
@@ -295,19 +304,19 @@ async def cancel_agent_turn(conversation_id: str) -> Dict[str, str]:
     return {"status": "not_running"}
 
 
-@router.post("/{conversation_id}/tool-approvals/{call_id}")
+@router.post("/{conversation_id}/tool-approvals")
 async def resolve_tool_approval(
-    conversation_id: str, call_id: str, request: ToolApprovalRequest
+    conversation_id: str, request: ToolApprovalRequest
 ) -> Dict[str, str]:
     """Records the user's decision for a tool call gated by an `ask_user` permission.
 
     Raises:
         HTTPException: If no tool call with this id is awaiting a decision.
     """
-    if not approval_registry.resolve(call_id, request.approved):
+    if not approval_registry.resolve(request.call_id, request.approved):
         raise HTTPException(
             status_code=404,
-            detail=f"No pending approval for tool call '{call_id}'.",
+            detail=f"No pending approval for tool call '{request.call_id}'.",
         )
     return {"status": "approved" if request.approved else "rejected"}
 

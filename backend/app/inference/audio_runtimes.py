@@ -77,7 +77,7 @@ class SpeechRuntime(AudioRuntime):
     container_name = "kayak-tts-server"
     server_mode = "speech"
     pipeline_tags = ("text-to-speech",)
-    default_query = "kokoro"
+    default_query = "hexgrad/kokoro"
     #: Backends the image ships with. `transformers` covers the models implemented in
     #: the library itself; Kokoro publishes no library at all on the Hub and is matched
     #: by repository id. Adding a backend is a change here and in the image, never in
@@ -111,7 +111,7 @@ class TranscriptionRuntime(AudioRuntime):
     container_name = "kayak-stt-server"
     server_mode = "transcription"
     pipeline_tags = ("automatic-speech-recognition",)
-    default_query = "whisper"
+    default_query = "openai/whisper"
     #: Transcription is the well-behaved half of audio: nearly every popular model is
     #: a `transformers` one, so a single backend covers the field.
     supported_libraries = ("transformers",)
