@@ -213,8 +213,8 @@ class ToolRegistry:
                 self._custom_tools[tool_name] = target_func
                 self._custom_schemas[tool_name] = extract_tool_schema(target_func, tool_name)
                 # A custom tool declares its own classification with module-level
-                # CATEGORY / RISK constants; it cannot import Kayak because the same
-                # file also runs standalone during verification and in the sandbox.
+                # CATEGORY / RISK / READ_ONLY constants; it cannot import Kayak because
+                # the same file also runs standalone during verification and in the sandbox.
                 self._metadata[tool_name] = read_module_metadata(module)
                 self._custom_source_codes[tool_name] = tool_file.read_text(encoding="utf-8")
                 if verify_file.exists():

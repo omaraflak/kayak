@@ -440,3 +440,170 @@ async def test_mixed_or_mutating_tools_execute_sequentially(
         e["type"] == "tool_call_result" and e["id"] == "call_read" for e in events
     )
     _assert_history_is_well_formed(await get_messages(conversation.id))
+
+
+def _calls_turn(*names_and_ids: tuple) -> List[Dict[str, Any]]:
+    """A streamed turn asking for several tool calls in the order given."""
+    return [
+        {
+            "type": "tool_call_delta",
+            "index": index,
+            "id": call_id,
+            "name": name,
+            "arguments": "{}",
+        }
+        for index, (name, call_id) in enumerate(names_and_ids)
+    ]
+
+
+def _recording_tool(log: List[str], delay: float = 0.05):
+    """A tool double that records when each call starts and finishes."""
+
+    async def handler(name: str, args: Dict[str, Any], context: Dict[str, Any]) -> str:
+        log.append(f"start:{name}")
+        await asyncio.sleep(delay)
+        log.append(f"end:{name}")
+        return f"{name} output"
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_reads_before_a_write_run_together_and_still_precede_it(
+    agent_env, monkeypatch
+):
+    """A read/read/write/read turn parallelizes the leading reads but keeps the order."""
+    agent_env.allowed_tools = ["read_file", "list_directory", "write_file", "find_files"]
+    log: List[str] = []
+
+    _stub_stream(
+        monkeypatch,
+        [
+            _calls_turn(
+                ("read_file", "call_a"),
+                ("list_directory", "call_b"),
+                ("write_file", "call_c"),
+                ("find_files", "call_d"),
+            ),
+            _text_turn("done"),
+        ],
+    )
+    _stub_tool(monkeypatch, _recording_tool(log))
+
+    conversation = await create_conversation(title="t", agent_id="tester")
+    await add_message(conversation.id, MessageRole.USER, content="read then write")
+
+    events = await _drain(conversation.id)
+
+    # The two reads overlap: both start before either finishes.
+    assert log[:2] == ["start:read_file", "start:list_directory"]
+    # The write waits for them, and the trailing read waits for the write.
+    assert log.index("start:write_file") > log.index("end:list_directory")
+    assert log.index("start:find_files") > log.index("end:write_file")
+
+    results = [e["id"] for e in events if e["type"] == "tool_call_result"]
+    assert results == ["call_a", "call_b", "call_c", "call_d"]
+    _assert_history_is_well_formed(await get_messages(conversation.id))
+
+
+@pytest.mark.asyncio
+async def test_parallel_batch_respects_the_concurrency_ceiling(agent_env, monkeypatch):
+    """More read-only calls than the ceiling allows are run in waves, not all at once."""
+    agent_env.allowed_tools = ["read_file"]
+    monkeypatch.setattr(settings, "AGENT_MAX_CONCURRENT_TOOLS", 2)
+
+    running = 0
+    peak = 0
+
+    async def handler(name: str, args: Dict[str, Any], context: Dict[str, Any]) -> str:
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.02)
+        running -= 1
+        return "ok"
+
+    _stub_stream(
+        monkeypatch,
+        [
+            _calls_turn(*[("read_file", f"call_{i}") for i in range(5)]),
+            _text_turn("done"),
+        ],
+    )
+    _stub_tool(monkeypatch, handler)
+
+    conversation = await create_conversation(title="t", agent_id="tester")
+    await add_message(conversation.id, MessageRole.USER, content="read a lot")
+
+    events = await _drain(conversation.id)
+
+    assert peak == 2
+    assert len([e for e in events if e["type"] == "tool_call_result"]) == 5
+    _assert_history_is_well_formed(await get_messages(conversation.id))
+
+
+@pytest.mark.asyncio
+async def test_one_failing_tool_does_not_discard_its_batch(agent_env, monkeypatch):
+    """A tool that raises is reported as an error without losing the calls beside it."""
+    agent_env.allowed_tools = ["read_file", "list_directory"]
+
+    async def handler(name: str, args: Dict[str, Any], context: Dict[str, Any]) -> str:
+        if name == "read_file":
+            raise RuntimeError("disk on fire")
+        return "listing"
+
+    _stub_stream(
+        monkeypatch,
+        [
+            _calls_turn(("read_file", "call_bad"), ("list_directory", "call_good")),
+            _text_turn("done"),
+        ],
+    )
+    _stub_tool(monkeypatch, handler)
+
+    conversation = await create_conversation(title="t", agent_id="tester")
+    await add_message(conversation.id, MessageRole.USER, content="go")
+
+    events = await _drain(conversation.id)
+
+    results = {e["id"]: e for e in events if e["type"] == "tool_call_result"}
+    assert results["call_bad"]["is_error"] is True
+    assert "disk on fire" in results["call_bad"]["output"]
+    assert results["call_good"]["output"] == "listing"
+    _assert_history_is_well_formed(await get_messages(conversation.id))
+
+
+@pytest.mark.asyncio
+async def test_read_only_tools_needing_approval_are_not_parallelized(
+    agent_env, monkeypatch
+):
+    """A tool the user must approve is asked about on its own, never batched."""
+    agent_env.allowed_tools = ["read_file", "list_directory"]
+    agent_env.tool_permissions = {"list_directory": ToolPermission.ASK_USER}
+    log: List[str] = []
+
+    _stub_stream(
+        monkeypatch,
+        [
+            _calls_turn(("read_file", "call_a"), ("list_directory", "call_b")),
+            _text_turn("done"),
+        ],
+    )
+    _stub_tool(monkeypatch, _recording_tool(log))
+
+    conversation = await create_conversation(title="t", agent_id="tester")
+    await add_message(conversation.id, MessageRole.USER, content="go")
+
+    async def approve_when_asked():
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if engine_module.approval_registry.resolve("call_b", True):
+                return
+
+    approver = asyncio.create_task(approve_when_asked())
+    events = await _drain(conversation.id)
+    approver.cancel()
+
+    assert any(e["type"] == "tool_approval_required" for e in events)
+    assert log.index("start:list_directory") > log.index("end:read_file")
+    _assert_history_is_well_formed(await get_messages(conversation.id))

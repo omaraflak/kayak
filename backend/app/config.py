@@ -146,6 +146,11 @@ class Settings:
         self.AGENT_MAX_SUBAGENT_DEPTH: int = int(
             os.getenv("KAYAK_AGENT_MAX_SUBAGENT_DEPTH", "3")
         )
+        # Read-only tool calls from one model turn run in parallel, but a model that
+        # asks for thirty page fetches at once should not open thirty sockets.
+        self.AGENT_MAX_CONCURRENT_TOOLS: int = max(
+            1, int(os.getenv("KAYAK_AGENT_MAX_CONCURRENT_TOOLS", "8"))
+        )
 
         # Storage Paths
         self.BASE_DIR: Path = BASE_DIR

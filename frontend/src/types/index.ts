@@ -146,6 +146,7 @@ export interface ToolDefinition {
   is_builtin: boolean;
   category: ToolCategory;
   risk: ToolRisk;
+  read_only: boolean;
   source_code?: string;
   verify_code?: string;
 }

@@ -1,14 +1,19 @@
 """Classification that travels with the tool.
 
-A tool's category and risk are properties of the tool, so they are declared where it
-is defined rather than in a lookup table somewhere else. A separate mapping -- in the
-registry, or worse in the agent configuration UI -- would silently go stale every time
-a tool is added, renamed, or removed, and would not cover user-authored tools at all.
+A tool's category, risk, and whether it only reads are properties of the tool, so they
+are declared where it is defined rather than in a lookup table somewhere else. A
+separate mapping -- in the registry, or worse in the agent configuration UI -- would
+silently go stale every time a tool is added, renamed, or removed, and would not cover
+user-authored tools at all.
+
+``read_only`` marks a tool that observes without changing anything, which is what lets
+the engine run several of them at once; leaving it unset is always the safe answer,
+since the cost is only that the calls run one after another.
 
 Built-in tools carry the metadata as function attributes set by :func:`tool_metadata`.
 Custom tools in ``data/tools/<name>/tool.py`` declare module-level ``CATEGORY`` and
-``RISK`` strings; they cannot import from Kayak because they also run standalone during
-verification and inside the sandbox container.
+``RISK`` strings and an optional ``READ_ONLY`` boolean; they cannot import from Kayak
+because they also run standalone during verification and inside the sandbox container.
 """
 
 from dataclasses import dataclass

@@ -234,6 +234,42 @@ async def _execute_single_tool(
     return str(result_output), is_error
 
 
+def _is_parallelizable(tc: Dict[str, Any], session: _SessionContext) -> bool:
+    """Whether a call can safely run alongside others.
+
+    A tool qualifies only if it declares itself read-only and the agent auto-approves
+    it: anything that mutates state could race with its neighbours, and anything the
+    user has to approve has to be asked about one call at a time.
+    """
+    fn_name = tc["function"]["name"]
+    return (
+        resolve_tool_permission(session.agent_config, fn_name)
+        == ToolPermission.AUTO_APPROVE
+        and tool_registry.is_read_only(fn_name)
+    )
+
+
+def _group_tool_calls(
+    tool_calls: List[Dict[str, Any]], session: _SessionContext
+) -> List[List[Dict[str, Any]]]:
+    """Splits one turn's calls into batches that may run together.
+
+    Adjacent parallelizable calls share a batch; every other call gets a batch of its
+    own. Only adjacent ones are merged, so `read, read, write, read` still runs the
+    write after the first two reads and the last read after the write.
+    """
+    groups: List[List[Dict[str, Any]]] = []
+    previous_was_parallelizable = False
+    for tc in tool_calls:
+        parallelizable = _is_parallelizable(tc, session)
+        if parallelizable and previous_was_parallelizable:
+            groups[-1].append(tc)
+        else:
+            groups.append([tc])
+        previous_was_parallelizable = parallelizable
+    return groups
+
+
 async def _record_tool_result(
     conversation_id: str,
     call_id: str,
@@ -454,6 +490,46 @@ class AgentEngine:
             tool_calls=tool_calls or None,
         )
 
+    async def _run_parallel_group(
+        self,
+        group: List[Dict[str, Any]],
+        session: _SessionContext,
+        executed_ids: Set[str],
+    ) -> AsyncGenerator[AgentEvent, None]:
+        """Runs a batch of read-only, auto-approved calls at the same time.
+
+        Every call in the batch is announced before any of them runs, so the client
+        shows them working side by side, and results are emitted in the order the
+        model asked for them rather than the order they happened to finish.
+        """
+        for tc in group:
+            yield events.tool_call_executing(
+                tc["id"], tc["function"]["name"], tc["function"]["arguments"]
+            )
+
+        limit = asyncio.Semaphore(settings.AGENT_MAX_CONCURRENT_TOOLS)
+
+        async def _run_single(tool_call: Dict[str, Any]) -> Tuple[str, bool]:
+            async with limit:
+                try:
+                    return await _execute_single_tool(tool_call, session)
+                except Exception as e:
+                    # One tool blowing up must not discard the results of the
+                    # siblings it was gathered with.
+                    name = tool_call["function"]["name"]
+                    return f"Error executing tool '{name}': {str(e)}", True
+
+        results = await asyncio.gather(*[_run_single(tc) for tc in group])
+
+        for tc, (output, is_error) in zip(group, results):
+            call_id = tc["id"]
+            fn_name = tc["function"]["name"]
+            yield events.tool_call_result(call_id, fn_name, output, is_error=is_error)
+            await _record_tool_result(
+                session.conversation_id, call_id, fn_name, output
+            )
+            executed_ids.add(call_id)
+
     async def _run_tool_calls(
         self,
         tool_calls: List[Dict[str, Any]],
@@ -462,47 +538,20 @@ class AgentEngine:
     ) -> AsyncGenerator[AgentEvent, None]:
         """Executes each requested tool call, enforcing agent permissions along the way.
 
-        If all requested tools are read-only (have no side effects) and auto-approved,
-        they are executed concurrently via asyncio.gather to minimize turn latency.
-        Otherwise, tools are executed sequentially to avoid race conditions.
+        Consecutive calls that are read-only and auto-approved run together; anything
+        that can change state, or that needs the user to approve it first, runs on its
+        own and in the order the model asked for it. Grouping only adjacent calls is
+        what keeps a read that the model put after a write from overtaking it.
         """
-        can_run_concurrently = len(tool_calls) > 1 and all(
-            resolve_tool_permission(session.agent_config, tc["function"]["name"])
-            == ToolPermission.AUTO_APPROVE
-            and tool_registry.is_read_only(tc["function"]["name"])
-            for tc in tool_calls
-        )
+        for group in _group_tool_calls(tool_calls, session):
+            if len(group) > 1:
+                async for event in self._run_parallel_group(
+                    group, session, executed_ids
+                ):
+                    yield event
+                continue
 
-        if can_run_concurrently:
-            for tc in tool_calls:
-                call_id = tc["id"]
-                fn_name = tc["function"]["name"]
-                raw_args = tc["function"]["arguments"]
-                yield events.tool_call_executing(call_id, fn_name, raw_args)
-
-            async def _run_single(
-                tool_call: Dict[str, Any]
-            ) -> Tuple[str, str, str, bool]:
-                call_id = tool_call["id"]
-                fn_name = tool_call["function"]["name"]
-                output, is_error = await _execute_single_tool(tool_call, session)
-                return call_id, fn_name, output, is_error
-
-            results = await asyncio.gather(
-                *[_run_single(tc) for tc in tool_calls]
-            )
-
-            for call_id, fn_name, output, is_error in results:
-                yield events.tool_call_result(
-                    call_id, fn_name, output, is_error=is_error
-                )
-                await _record_tool_result(
-                    session.conversation_id, call_id, fn_name, output
-                )
-                executed_ids.add(call_id)
-            return
-
-        for tc in tool_calls:
+            tc = group[0]
             call_id = tc["id"]
             fn_name = tc["function"]["name"]
             raw_args = tc["function"]["arguments"]
