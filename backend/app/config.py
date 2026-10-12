@@ -3,7 +3,7 @@ import logging
 import os
 from pathlib import Path
 import tempfile
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from backend.app.providers import PROVIDERS
 
@@ -26,14 +26,19 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 for directory in [DATA_DIR, AGENTS_DIR, SKILLS_DIR, TOOLS_DIR, WORKSPACES_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
-# Keys that are persisted to/from settings.json. Only credentials: everything else is
-# deployment configuration, which belongs to the environment rather than to a form.
+# Keys that are persisted to/from settings.json: what a user sets on the Settings page.
+# Everything else is deployment configuration, which belongs to the environment rather
+# than to a form.
 #
 # settings.json is also their *only* source. Kayak is meant to be installed and opened,
 # not configured beforehand, so a credential is something you type into the Settings
 # page once the app is already running -- never something the user has to place in the
 # environment before it will start.
-_PERSISTABLE_KEYS = [provider.api_key_setting for provider in PROVIDERS]
+_CREDENTIAL_KEYS = [provider.api_key_setting for provider in PROVIDERS]
+#: How much each sandbox may use. None means the recommendation computed from Docker
+#: Desktop's resources, which is also what a new install starts with.
+_ALLOCATION_KEYS = ["SANDBOX_MEMORY_GB", "SANDBOX_CPUS"]
+_PERSISTABLE_KEYS = _CREDENTIAL_KEYS + _ALLOCATION_KEYS
 
 
 #: Owner read/write only. Anything wider exposes provider keys to every account on
@@ -154,6 +159,9 @@ class Settings:
         self.ANTHROPIC_API_KEY: str = ""
         self.HUGGINGFACE_API_KEY: str = ""
 
+        self.SANDBOX_MEMORY_GB: Optional[float] = None
+        self.SANDBOX_CPUS: Optional[float] = None
+
         self.RUNNING_IN_CONTAINER: bool = running_in_container()
         # Each local model server needs a port of its own, and falls back to the
         # neighbouring ones when its port is taken.
@@ -176,14 +184,22 @@ class Settings:
         self.load_from_file()
 
     def load_from_file(self) -> None:
-        """Loads persistent user credentials and endpoints from data/settings.json."""
+        """Loads what the user set on the Settings page from data/settings.json."""
         if not self.SETTINGS_FILE.exists():
             return
         try:
             data = json.loads(self.SETTINGS_FILE.read_text(encoding="utf-8"))
             for key in _PERSISTABLE_KEYS:
-                if key in data:
-                    setattr(self, key, data[key])
+                if key not in data:
+                    continue
+                value = data[key]
+                # A hand-edited allocation that is not a positive number falls back
+                # to the recommendation rather than breaking every sandbox start.
+                if key in _ALLOCATION_KEYS and not (
+                    isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+                ):
+                    value = None
+                setattr(self, key, value)
         except Exception:
             # Losing this file silently makes a fully configured install look blank,
             # so it is worth a real log line rather than a print to stdout.
@@ -198,13 +214,15 @@ class Settings:
         process died mid-write.
 
         Args:
-            updates: Dictionary of setting keys and their new values.
+            updates: Setting keys and their new values. A credential set to None is
+                left alone; an allocation set to None goes back to the recommendation.
         """
         current = {key: getattr(self, key) for key in _PERSISTABLE_KEYS}
         for key, value in updates.items():
-            if value is not None and key in current:
-                current[key] = value
-                setattr(self, key, value)
+            if key not in current or (value is None and key in _CREDENTIAL_KEYS):
+                continue
+            current[key] = value
+            setattr(self, key, value)
 
         _write_private_json(self.SETTINGS_FILE, current)
 

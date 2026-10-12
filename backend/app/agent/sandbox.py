@@ -70,6 +70,71 @@ BACKGROUND_TASK_MARKER = "KAYAK_TASK_ID"
 #: and the ones from the previous run still need stopping.
 SANDBOX_NAME_PREFIX = "kayak-sandbox-"
 
+#: Share of Docker Desktop's memory a sandbox may use unless the user chose
+#: otherwise. Not all of it: a sandbox runs per conversation, often next to a
+#: model server, and one runaway process must not take the rest down with it.
+RECOMMENDED_MEMORY_SHARE = 0.5
+
+#: CPU quotas are expressed per period; Docker's default period is 100ms.
+_CPU_PERIOD = 100_000
+
+_GIB = 1024 ** 3
+
+
+@dataclass(frozen=True)
+class Allocation:
+    """How much memory and CPU one sandbox may use."""
+    memory_gb: float
+    cpus: float
+
+
+def recommended_allocation(
+    total_memory_bytes: Optional[int], total_cpus: Optional[int]
+) -> Optional[Allocation]:
+    """What a sandbox gets by default: a share of Docker's memory and every core.
+
+    Computed from the machine rather than fixed, so a Mac given more to Docker
+    gives its agents more. None when Docker will not say what it has.
+    """
+    if not total_memory_bytes or not total_cpus:
+        return None
+    memory_gb = max(1, int(total_memory_bytes / _GIB * RECOMMENDED_MEMORY_SHARE))
+    return Allocation(memory_gb=memory_gb, cpus=total_cpus)
+
+
+def resolve_allocation(
+    memory_gb: Optional[float],
+    cpus: Optional[float],
+    total_memory_bytes: Optional[int],
+    total_cpus: Optional[int],
+) -> Optional[Allocation]:
+    """The user's choice where they made one, the recommendation otherwise.
+
+    A choice larger than Docker's VM -- made before its memory was lowered in
+    Docker Desktop, say -- is clamped to what the VM has rather than refused.
+    """
+    recommended = recommended_allocation(total_memory_bytes, total_cpus)
+    if recommended is None:
+        return None
+    total_gb = total_memory_bytes / _GIB
+    return Allocation(
+        memory_gb=min(memory_gb, total_gb) if memory_gb else recommended.memory_gb,
+        cpus=min(cpus, total_cpus) if cpus else recommended.cpus,
+    )
+
+
+def _limits(allocation: Allocation) -> Dict[str, Any]:
+    """Docker's run/update arguments for an allocation."""
+    memory = int(allocation.memory_gb * _GIB)
+    return {
+        "mem_limit": memory,
+        # Docker refuses a memory limit above the swap limit, so the two move
+        # together; twice the memory is what Docker itself defaults to.
+        "memswap_limit": memory * 2,
+        "cpu_period": _CPU_PERIOD,
+        "cpu_quota": int(allocation.cpus * _CPU_PERIOD),
+    }
+
 
 def _shell_quote(text: str) -> str:
     """Single-quotes a string for safe embedding in a POSIX shell command."""
@@ -332,6 +397,13 @@ class SandboxManager:
             raise RuntimeError("Docker is not running. Start Docker Desktop and try again.")
         return self._client
 
+    def client(self) -> Optional[docker.DockerClient]:
+        """The Docker client, or None while Docker is not running."""
+        try:
+            return self._require_client()
+        except RuntimeError:
+            return None
+
     def _ensure_image(self, client: docker.DockerClient) -> str:
         """Returns the sandbox image, pulling it first if this Mac does not have it."""
         image = settings.DOCKER_SANDBOX_IMAGE
@@ -341,6 +413,32 @@ class SandboxManager:
             logger.info("Pulling the sandbox image %s", image)
             client.images.pull(image)
         return image
+
+    def _allocation(self, client: docker.DockerClient) -> Optional[Allocation]:
+        """The allocation new and revived sandboxes get, as of right now."""
+        total_memory, total_cpus = docker_host.vm_resources(client)
+        return resolve_allocation(
+            settings.SANDBOX_MEMORY_GB, settings.SANDBOX_CPUS, total_memory, total_cpus
+        )
+
+    def _apply_allocation(self, client: docker.DockerClient, container: Any) -> None:
+        """Brings an existing sandbox's limits in line with the current setting.
+
+        Docker changes a container's limits in place, running or not, so a change
+        made in Settings reaches every conversation the next time it runs rather
+        than only conversations started afterwards.
+        """
+        allocation = self._allocation(client)
+        if allocation is None:
+            return
+        wanted = _limits(allocation)
+        host = container.attrs.get("HostConfig", {})
+        if host.get("Memory") == wanted["mem_limit"] and host.get("CpuQuota") == wanted["cpu_quota"]:
+            return
+        try:
+            container.update(**wanted)
+        except Exception as error:
+            logger.warning("Could not apply the sandbox allocation to %s: %s", container.name, error)
 
     async def prepare(self) -> None:
         """Pulls the sandbox image ahead of the first conversation, if it is missing."""
@@ -412,10 +510,12 @@ class SandboxManager:
                 existing = None
 
             if existing is not None:
+                self._apply_allocation(client, existing)
                 if existing.status != "running":
                     existing.start()
                 return existing.id
 
+            allocation = self._allocation(client)
             container = client.containers.run(
                 image=self._ensure_image(client),
                 name=container_name,
@@ -424,9 +524,8 @@ class SandboxManager:
                 working_dir="/workspace",
                 volumes=volumes_map,
                 network_mode="bridge",
-                mem_limit="2g",
-                cpu_quota=100000,  # 1 CPU
                 remove=False,
+                **(_limits(allocation) if allocation else {}),
             )
             return container.id
 
@@ -446,10 +545,12 @@ class SandboxManager:
         """
 
         def _start() -> bool:
+            client = self._require_client()
             try:
-                container = self._require_client().containers.get(container_id)
+                container = client.containers.get(container_id)
             except NotFound:
                 return False
+            self._apply_allocation(client, container)
             if container.status != "running":
                 container.start()
             return True

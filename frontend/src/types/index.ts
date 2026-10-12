@@ -235,21 +235,38 @@ export interface SecurityPosture {
   warning?: string | null;
 }
 
+/** How much each conversation's sandbox may use. Null follows the recommendation. */
+export interface SandboxAllocation {
+  memory_gb: number | null;
+  cpus: number | null;
+}
+
+export interface SandboxSettings extends SandboxAllocation {
+  /** Computed from what Docker Desktop has; null while Docker is not running. */
+  recommended_memory_gb: number | null;
+  recommended_cpus: number | null;
+  /** What Docker Desktop's VM has; 0 while Docker is not running. */
+  total_memory_gb: number;
+  total_cpus: number;
+}
+
 export interface AppSettings {
   providers: ProviderCredential[];
   security: SecurityPosture;
+  sandbox: SandboxSettings;
 }
 
 /**
- * Only the credentials being changed are sent; anything omitted is left alone.
- * Endpoints, model choices and execution limits come from the environment and are
- * deliberately not writable here.
+ * Only what is being changed is sent; anything omitted is left alone. Endpoints,
+ * model choices and execution limits come from the environment and are deliberately
+ * not writable here.
  */
 export interface SettingsUpdate {
   OPENAI_API_KEY?: string;
   GEMINI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   HUGGINGFACE_API_KEY?: string;
+  sandbox?: SandboxAllocation;
 }
 
 export type VLLMServerState =

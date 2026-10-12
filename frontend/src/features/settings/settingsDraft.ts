@@ -1,4 +1,4 @@
-import { AppSettings, ProviderCredential, SettingsUpdate } from '../../types';
+import { AppSettings, ProviderCredential, SandboxAllocation, SettingsUpdate } from '../../types';
 
 /**
  * The edits a user has made to the stored credentials but not yet saved.
@@ -21,6 +21,8 @@ export type CredentialEdit =
 export interface SettingsDraft {
   /** Keyed by the provider's `setting_key`. */
   credentials: Record<string, CredentialEdit>;
+  /** The sandbox allocation as it would be saved; null follows the recommendation. */
+  sandbox: SandboxAllocation;
 }
 
 /** Builds a draft that matches the saved state exactly. */
@@ -29,7 +31,15 @@ export function draftFromSettings(settings: AppSettings): SettingsDraft {
   for (const provider of settings.providers) {
     credentials[provider.setting_key] = { kind: 'unchanged' };
   }
-  return { credentials };
+  return {
+    credentials,
+    sandbox: { memory_gb: settings.sandbox.memory_gb, cpus: settings.sandbox.cpus },
+  };
+}
+
+/** Reports whether the drafted sandbox allocation differs from the saved one. */
+export function isSandboxDirty(draft: SandboxAllocation, saved: SandboxAllocation): boolean {
+  return draft.memory_gb !== saved.memory_gb || draft.cpus !== saved.cpus;
 }
 
 /** Reports whether a credential edit would change what is stored. */
@@ -45,13 +55,16 @@ export function isCredentialDirty(
 
 /** Reports whether the draft differs from what is saved. */
 export function isDraftDirty(draft: SettingsDraft, settings: AppSettings): boolean {
-  return settings.providers.some((provider) =>
-    isCredentialDirty(draft.credentials[provider.setting_key], provider)
+  return (
+    isSandboxDirty(draft.sandbox, settings.sandbox) ||
+    settings.providers.some((provider) =>
+      isCredentialDirty(draft.credentials[provider.setting_key], provider)
+    )
   );
 }
 
 /**
- * Reduces a draft to the credentials that actually changed.
+ * Reduces a draft to what actually changed.
  *
  * Sending only what changed is what makes "leave the input empty to keep the existing
  * key" work: an untouched credential is simply absent from the payload, so there is no
@@ -69,6 +82,10 @@ export function buildSettingsUpdate(
     // Narrowed by isCredentialDirty: 'unchanged' never reaches here.
     const value = edit!.kind === 'clear' ? '' : (edit as { value: string }).value.trim();
     (update as Record<string, string>)[provider.setting_key] = value;
+  }
+
+  if (isSandboxDirty(draft.sandbox, settings.sandbox)) {
+    update.sandbox = { ...draft.sandbox };
   }
 
   return update;

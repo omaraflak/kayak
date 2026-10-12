@@ -1223,21 +1223,8 @@ class ServerManager:
         """
         if not self._docker_available or not self._client:
             return None, None
-
-        def _read() -> Tuple[Optional[int], Optional[int]]:
-            try:
-                info = self._client.info()
-                total = info.get("MemTotal")
-                cpus = info.get("NCPU")
-                return (
-                    int(total) if total else None,
-                    int(cpus) if cpus else None,
-                )
-            except Exception:
-                return None, None
-
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _read)
+        return await loop.run_in_executor(None, docker_host.vm_resources, self._client)
 
     async def _docker_memory_bytes(self) -> Optional[int]:
         """Returns the memory Docker reports for its VM, or None if unavailable."""

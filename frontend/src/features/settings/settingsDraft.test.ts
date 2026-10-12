@@ -33,6 +33,14 @@ function settingsWith(providers: ProviderCredential[]): AppSettings {
   return {
     providers,
     security: { auth_required: false, host: '127.0.0.1', is_loopback: true, warning: null },
+    sandbox: {
+      memory_gb: null,
+      cpus: null,
+      recommended_memory_gb: 4,
+      recommended_cpus: 8,
+      total_memory_gb: 8,
+      total_cpus: 8,
+    },
   };
 }
 
@@ -144,5 +152,35 @@ describe('describeCredential', () => {
   it('previews a pending replacement', () => {
     expect(describeCredential(provider({ is_set: true }), { kind: 'replace', value: 'sk-x' }))
       .toBe('Will be replaced on save');
+  });
+});
+
+describe('the sandbox allocation', () => {
+  it('starts clean, following the recommendation', () => {
+    const settings = settingsWith([provider()]);
+    const draft = draftFromSettings(settings);
+
+    expect(isDraftDirty(draft, settings)).toBe(false);
+    expect(buildSettingsUpdate(draft, settings)).toEqual({});
+  });
+
+  it('sends a chosen allocation, and nothing about untouched credentials', () => {
+    const settings = settingsWith([provider({ is_set: true, preview: '••••••••9876' })]);
+    const draft = { ...draftFromSettings(settings), sandbox: { memory_gb: 6, cpus: null } };
+
+    expect(isDraftDirty(draft, settings)).toBe(true);
+    expect(buildSettingsUpdate(draft, settings)).toEqual({
+      sandbox: { memory_gb: 6, cpus: null },
+    });
+  });
+
+  it('can go back to the recommendation', () => {
+    const settings = settingsWith([provider()]);
+    settings.sandbox.memory_gb = 6;
+    const draft = { ...draftFromSettings(settings), sandbox: { memory_gb: null, cpus: null } };
+
+    expect(buildSettingsUpdate(draft, settings)).toEqual({
+      sandbox: { memory_gb: null, cpus: null },
+    });
   });
 });

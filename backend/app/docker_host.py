@@ -10,7 +10,7 @@ from functools import lru_cache
 import os
 from pathlib import Path
 import socket
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import docker
 
@@ -29,6 +29,22 @@ def connect() -> Optional[docker.DockerClient]:
         return client
     except Exception:
         return None
+
+
+def vm_resources(client: Optional[docker.DockerClient]) -> Tuple[Optional[int], Optional[int]]:
+    """Memory in bytes and CPU cores of Docker Desktop's VM, or Nones.
+
+    These are what bounds every container, and they are set in Docker Desktop
+    independently of the Mac's own hardware.
+    """
+    if client is None:
+        return None, None
+    try:
+        info = client.info()
+    except Exception:
+        return None, None
+    memory, cpus = info.get("MemTotal"), info.get("NCPU")
+    return (int(memory) if memory else None, int(cpus) if cpus else None)
 
 
 def _own_container() -> Optional[Any]:

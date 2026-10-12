@@ -1,10 +1,12 @@
+import asyncio
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, ConfigDict, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from backend.app import docker_host, support
+from backend.app.agent.sandbox import recommended_allocation, sandbox_manager
 from backend.app.config import settings
 from backend.app.providers import PROVIDERS
 
@@ -22,16 +24,25 @@ _SECRET_KEYS = tuple(provider.api_key_setting for provider in PROVIDERS)
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
-#: Payload for updating stored provider credentials, one optional field per provider.
+class SandboxAllocation(BaseModel):
+    """How much each sandbox may use. None means the computed recommendation."""
+    model_config = ConfigDict(extra="forbid")
+
+    memory_gb: Optional[float] = Field(None, gt=0)
+    cpus: Optional[float] = Field(None, gt=0)
+
+
+#: Payload for what the Settings page saves: one optional field per provider
+#: credential, and the sandbox allocation.
 #:
-#: Credentials are the only thing this endpoint writes. Endpoints, model choices and
-#: execution limits are deployment configuration and come from the environment, so
-#: they cannot be changed by anyone who can reach the UI. Unknown fields are rejected
-#: rather than ignored, so an attempt to set one fails loudly instead of appearing to
-#: succeed.
+#: Endpoints, model choices and execution limits are deployment configuration and come
+#: from the environment, so they cannot be changed by anyone who can reach the UI.
+#: Unknown fields are rejected rather than ignored, so an attempt to set one fails
+#: loudly instead of appearing to succeed.
 UpdateSettingsRequest = create_model(
     "UpdateSettingsRequest",
     __config__=ConfigDict(extra="forbid"),
+    sandbox=(Optional[SandboxAllocation], None),
     **{key: (Optional[str], None) for key in _SECRET_KEYS},
 )
 
@@ -62,10 +73,24 @@ class SecurityPosture(BaseModel):
     warning: Optional[str] = None
 
 
+class SandboxSettings(SandboxAllocation):
+    """The sandbox allocation, with what Docker has and what Kayak recommends.
+
+    Totals and recommendations are zero and None while Docker is not running.
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    recommended_memory_gb: Optional[float] = None
+    recommended_cpus: Optional[float] = None
+    total_memory_gb: float = 0
+    total_cpus: int = 0
+
+
 class PublicSettings(BaseModel):
     """Everything the settings page renders, with credentials masked."""
     providers: List[ProviderCredential]
     security: SecurityPosture
+    sandbox: SandboxSettings
 
 
 def mask_secret(value: str) -> str:
@@ -123,7 +148,24 @@ def _security_posture() -> SecurityPosture:
     )
 
 
-def _public_settings() -> PublicSettings:
+async def _sandbox_settings() -> SandboxSettings:
+    """The stored sandbox allocation, alongside what Docker Desktop's VM has."""
+    loop = asyncio.get_running_loop()
+    total_memory, total_cpus = await loop.run_in_executor(
+        None, lambda: docker_host.vm_resources(sandbox_manager.client())
+    )
+    recommended = recommended_allocation(total_memory, total_cpus)
+    return SandboxSettings(
+        memory_gb=settings.SANDBOX_MEMORY_GB,
+        cpus=settings.SANDBOX_CPUS,
+        recommended_memory_gb=recommended.memory_gb if recommended else None,
+        recommended_cpus=recommended.cpus if recommended else None,
+        total_memory_gb=round(total_memory / 1024 ** 3, 1) if total_memory else 0,
+        total_cpus=total_cpus or 0,
+    )
+
+
+async def _public_settings() -> PublicSettings:
     """Builds the settings payload exposed to the UI, with credentials masked."""
     credentials = []
     for provider in PROVIDERS:
@@ -141,18 +183,22 @@ def _public_settings() -> PublicSettings:
             )
         )
 
-    return PublicSettings(providers=credentials, security=_security_posture())
+    return PublicSettings(
+        providers=credentials,
+        security=_security_posture(),
+        sandbox=await _sandbox_settings(),
+    )
 
 
 @router.get("", response_model=PublicSettings)
 async def get_settings() -> PublicSettings:
     """Retrieves current platform settings, with API keys masked."""
-    return _public_settings()
+    return await _public_settings()
 
 
 @router.post("", response_model=Dict[str, object])
 async def update_settings(request: UpdateSettingsRequest) -> Dict[str, object]:
-    """Saves updated platform credentials to persistent config file.
+    """Saves credentials and the sandbox allocation to the persistent config file.
 
     Values still holding their masked preview are treated as unchanged, so saving an
     unrelated setting cannot overwrite a live key with its own mask.
@@ -163,13 +209,18 @@ async def update_settings(request: UpdateSettingsRequest) -> Dict[str, object]:
     Returns:
         Status response containing the updated (masked) settings.
     """
+    submitted = request.model_dump(exclude_unset=True)
+    sandbox = submitted.pop("sandbox", None)
     updates = {
         key: value
-        for key, value in request.model_dump(exclude_unset=True).items()
+        for key, value in submitted.items()
         if not (key in _SECRET_KEYS and isinstance(value, str) and is_masked(value))
     }
+    if sandbox is not None:
+        updates["SANDBOX_MEMORY_GB"] = sandbox.get("memory_gb")
+        updates["SANDBOX_CPUS"] = sandbox.get("cpus")
     settings.save_settings(updates)
-    return {"status": "saved", "settings": _public_settings()}
+    return {"status": "saved", "settings": await _public_settings()}
 
 
 class InstalledVersions(BaseModel):

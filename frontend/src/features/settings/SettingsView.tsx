@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { AppSettings, ProviderCredential } from '../../types';
+import { AppSettings, ProviderCredential, SandboxAllocation, SandboxSettings } from '../../types';
 import { AboutFooter } from './AboutFooter';
 import { api, errorMessage } from '../../api/client';
 import { useDialog } from '../../context/DialogContext';
@@ -15,6 +15,7 @@ import {
 } from './settingsDraft';
 import {
   Settings as SettingsIcon,
+  Container,
   Key,
   CheckCircle2,
   Save,
@@ -89,6 +90,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => 
     setDraft((prev) =>
       prev ? { ...prev, credentials: { ...prev.credentials, [settingKey]: edit } } : prev
     );
+  };
+
+  const updateSandbox = (sandbox: SandboxAllocation) => {
+    setDraft((prev) => (prev ? { ...prev, sandbox } : prev));
   };
 
   const handleSave = async (event?: React.FormEvent) => {
@@ -181,7 +186,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => 
               )}
             </h1>
             <p className="text-xs text-md-on-surface-variant">
-              Appearance and the API credentials Kayak uses to reach model providers.
+              Appearance, model provider credentials, and what each agent sandbox may use.
             </p>
           </div>
         </div>
@@ -262,6 +267,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => 
           </div>
         </Section>
 
+        {/* ------------------------------------------------------------- Sandboxes */}
+        <Section
+          icon={<Container className="w-4 h-4 text-md-primary" />}
+          title="Agent sandboxes"
+          subtitle="How much of Docker Desktop each conversation's container may use. A change reaches a conversation the next time it runs."
+          action={
+            // Always laid out, and only shown when there is something to reset:
+            // appearing on the first slider move pushed the sliders down mid-drag.
+            <button
+              type="button"
+              onClick={() => updateSandbox({ memory_gb: null, cpus: null })}
+              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-md-outline-variant text-[11px] font-semibold text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors cursor-pointer ${
+                draft.sandbox.memory_gb === null && draft.sandbox.cpus === null ? 'invisible' : ''
+              }`}
+            >
+              <Undo2 className="w-3 h-3" /> Use recommended
+            </button>
+          }
+        >
+          <SandboxControls sandbox={settings.sandbox} draft={draft.sandbox} onChange={updateSandbox} />
+        </Section>
+
         <AboutFooter />
       </div>
     </div>
@@ -296,6 +323,88 @@ const Section: React.FC<{
     </div>
     {children}
   </section>
+);
+
+/**
+ * Memory and CPU sliders for the sandbox allocation, bounded by what Docker has.
+ *
+ * An untouched slider shows the recommendation and saves nothing, so a Mac given more
+ * to Docker later gives its sandboxes more without anyone revisiting this page.
+ */
+const SandboxControls: React.FC<{
+  sandbox: SandboxSettings;
+  draft: SandboxAllocation;
+  onChange: (next: SandboxAllocation) => void;
+}> = ({ sandbox, draft, onChange }) => {
+  if (!sandbox.total_memory_gb || !sandbox.total_cpus) {
+    return (
+      <p className="text-[11px] text-md-on-surface-variant leading-relaxed">
+        Start Docker Desktop to choose how much each sandbox may use. Until you do, a
+        sandbox gets half of Docker&apos;s memory and every core.
+      </p>
+    );
+  }
+
+  const maxMemory = Math.max(1, Math.floor(sandbox.total_memory_gb));
+  const memory = Math.min(draft.memory_gb ?? sandbox.recommended_memory_gb ?? 1, maxMemory);
+  const cpus = Math.min(draft.cpus ?? sandbox.recommended_cpus ?? 1, sandbox.total_cpus);
+
+  return (
+    <div className="space-y-5">
+      <RangeField
+        label={`Memory — ${memory} GB${draft.memory_gb === null ? ' (recommended)' : ''}`}
+        hint="A command that needs more is stopped with an out-of-memory error. Docker Desktop's own total is set in its Settings > Resources."
+        min={1}
+        max={maxMemory}
+        value={memory}
+        onChange={(value) => onChange({ ...draft, memory_gb: value })}
+        minLabel="1 GB"
+        maxLabel={`${maxMemory} GB available to Docker`}
+      />
+      <RangeField
+        label={`CPU — ${cpus} core${cpus === 1 ? '' : 's'}${draft.cpus === null ? ' (recommended)' : ''}`}
+        hint="Cores one conversation's commands may use at once. Fewer keeps the Mac responsive while an agent builds or runs tests."
+        min={1}
+        max={sandbox.total_cpus}
+        value={cpus}
+        onChange={(value) => onChange({ ...draft, cpus: value })}
+        minLabel="1 core"
+        maxLabel={`${sandbox.total_cpus} cores available`}
+      />
+    </div>
+  );
+};
+
+const RangeField: React.FC<{
+  label: string;
+  hint: string;
+  min: number;
+  max: number;
+  value: number;
+  onChange: (value: number) => void;
+  minLabel: string;
+  maxLabel: string;
+}> = ({ label, hint, min, max, value, onChange, minLabel, maxLabel }) => (
+  <div className="space-y-1.5">
+    <label className="text-[11px] font-bold uppercase tracking-wider text-md-on-surface block">
+      {label}
+    </label>
+    <p className="text-[11px] text-md-on-surface-variant leading-relaxed">{hint}</p>
+    <input
+      type="range"
+      min={min}
+      max={max}
+      step={1}
+      value={value}
+      onChange={(event) => onChange(Number.parseInt(event.target.value, 10))}
+      disabled={max <= min}
+      className="w-full accent-md-primary cursor-pointer disabled:opacity-50"
+    />
+    <div className="flex items-center justify-between text-[10px] text-md-on-surface-variant font-mono">
+      <span>{minLabel}</span>
+      <span>{maxLabel}</span>
+    </div>
+  </div>
 );
 
 /**
