@@ -70,9 +70,3 @@ async def create_session(payload: SessionRequest, response: Response) -> Dict[st
     )
     return {"status": "authenticated"}
 
-
-@router.delete("/session")
-async def destroy_session(response: Response) -> Dict[str, str]:
-    """Clears the session cookie."""
-    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
-    return {"status": "signed_out"}

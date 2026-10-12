@@ -1,16 +1,14 @@
+import logging
 from pathlib import Path
-import re
 import shutil
 from typing import Dict, List, Optional, Tuple
 import yaml
 from backend.app.config import settings
 from backend.app.fs_cache import DirectorySignature, directory_signature
+from backend.app.identifiers import clean_identifier
 from backend.app.models import Skill
 
-
-def _clean_skill_name(name: str) -> str:
-    """Sanitizes a skill name into a clean directory identifier."""
-    return re.sub(r"[^a-zA-Z0-9_-]", "_", name.lower().strip())
+logger = logging.getLogger(__name__)
 
 
 def _extract_frontmatter_and_instructions(
@@ -74,8 +72,8 @@ def _parse_skill_folder(folder: Path) -> Optional[Skill]:
             instructions=instructions,
             helper_files=helpers,
         )
-    except Exception as e:
-        print(f"Error loading skill '{folder.name}': {e}")
+    except Exception:
+        logger.exception("Could not load skill from %s", folder.name)
         return None
 
 
@@ -129,14 +127,18 @@ class SkillRegistry:
     def save_skill(
         self, name: str, description: str, instructions: str
     ) -> Skill:
-        clean_name = _clean_skill_name(name)
+        clean_name = clean_identifier(name)
         folder = settings.SKILLS_DIR / clean_name
         folder.mkdir(parents=True, exist_ok=True)
 
-        content = (
-            f"---\nname: {clean_name}\ndescription: {description}\n---\n\n"
-            f"{instructions}\n"
+        # Dumped rather than formatted: a description such as "Use when: ..." is
+        # not valid YAML written bare, and the skill would no longer parse.
+        frontmatter = yaml.safe_dump(
+            {"name": clean_name, "description": description},
+            sort_keys=False,
+            allow_unicode=True,
         )
+        content = f"---\n{frontmatter}---\n\n{instructions}\n"
         (folder / "SKILL.md").write_text(content, encoding="utf-8")
 
         skill = Skill(
@@ -150,7 +152,7 @@ class SkillRegistry:
         return skill
 
     def delete_skill(self, name: str) -> bool:
-        clean_name = _clean_skill_name(name)
+        clean_name = clean_identifier(name)
         folder = settings.SKILLS_DIR / clean_name
         if folder.exists():
             shutil.rmtree(folder, ignore_errors=True)

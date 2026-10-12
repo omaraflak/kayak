@@ -13,9 +13,12 @@ this backend, including community forks and future versions.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from audio_server.backends.base import SpeechBackend, Voice
+
+if TYPE_CHECKING:
+    import numpy as np
 
 logger = logging.getLogger(__name__)
 

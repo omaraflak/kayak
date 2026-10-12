@@ -1,8 +1,8 @@
 """Metal inference, driven through the launcher.
 
-Metal has no passthrough into Docker, so a Metal server cannot be a container
-the way the CUDA and CPU deployments are. It has to be a native macOS process,
-and the only part of Kayak running on the host is the desktop launcher. Kayak
+Docker Desktop has no GPU passthrough, so a Metal server cannot be a container
+the way the CPU deployments are. It has to be a native macOS process, and the
+only part of Kayak running on the Mac itself is the desktop launcher. Kayak
 therefore does not start anything here: it writes the state it wants into the
 data directory it already shares with the launcher, and reads back what the
 launcher made true.

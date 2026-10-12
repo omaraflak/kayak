@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 

@@ -1,8 +1,8 @@
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
-export type ConversationStatus = 'active' | 'archived' | 'running';
+export type ConversationStatus = 'active' | 'running';
 
-export type TaskType = 'shell_command' | 'subagent' | 'custom';
+export type TaskType = 'shell_command' | 'subagent';
 
 export type TaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
@@ -53,7 +53,6 @@ export interface Conversation {
   id: string;
   title: string;
   agent_id: string;
-  isolated_container: boolean;
   container_id: string | null;
   status: ConversationStatus;
   /** Set on sub-agent sessions; these are deleted with their parent. */
@@ -158,7 +157,6 @@ export interface BackgroundTask {
   name: string;
   command?: string;
   status: TaskStatus;
-  pid?: number;
   exit_code?: number;
   stdout: string;
   stderr: string;
@@ -182,8 +180,6 @@ export interface ModelItem {
   provider: string;
   description: string;
   context_window?: string | null;
-  is_available: boolean;
-  is_running_locally?: boolean;
 }
 
 export interface ProviderModels {
@@ -315,13 +311,11 @@ export interface VLLMDeploymentProgress {
 
 export interface VLLMDeployRequest {
   model_id: string;
-  gpu_memory_utilization?: number;
   max_model_len?: number | null;
-  enforce_eager?: boolean;
   dtype?: string;
   /** Executes modelling code published in the model repository. Off by default. */
   trust_remote_code?: boolean;
-  /** CPU deployments only: memory reserved for the KV cache, in GiB. */
+  /** Memory reserved for the KV cache, in GiB. */
   cpu_kvcache_space_gb?: number | null;
   /** RAM ceiling for the container, in GiB. Unset = all the memory Docker has. */
   memory_limit_gb?: number | null;
@@ -334,22 +328,18 @@ export interface VLLMDeployRequest {
   force_restart?: boolean;
 }
 
-export interface GPUDevice {
-  name: string;
-  total_memory_mb: number;
-}
-
+/**
+ * What Docker Desktop can give a model container on this Mac. Containers always run
+ * on the CPU; the Apple GPU is reached through the launcher (see MetalStatus).
+ */
 export interface HostCapability {
   docker_available: boolean;
-  gpus: GPUDevice[];
-  total_vram_mb: number;
-  /** Memory Docker reports for its host — what actually bounds a CPU deployment. */
+  /** Memory Docker Desktop's VM has — what actually bounds a container. */
   total_memory_mb: number;
-  /** CPU cores Docker reports for its host. */
+  /** CPU cores Docker Desktop's VM has. */
   total_cpus: number;
-  /** KV cache size a CPU deployment would use by default, in GiB. */
+  /** KV cache size a deployment would use by default, in GiB. */
   default_cpu_kvcache_gb: number;
-  accelerator: 'cuda' | 'cpu';
   image_present?: boolean | null;
 }
 
@@ -467,7 +457,6 @@ export interface AudioJob {
   text: string;
   voice?: string | null;
   speed: number;
-  response_format: string;
   /** Name of the uploaded recording, for a transcription. */
   source_filename?: string | null;
   language?: string | null;
@@ -488,7 +477,6 @@ export interface SpeechRequest {
   text: string;
   voice?: string | null;
   speed?: number;
-  response_format?: string;
 }
 
 /**

@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Optional
 from backend.app.agents.manager import agent_manager, allowed_subagent_ids
 from backend.app.memories.store import memory_store
@@ -8,7 +7,6 @@ from backend.app.skills.registry import skill_registry
 
 def build_system_prompt(
     agent_config: AgentConfig,
-    workspace_dir: Optional[Path] = None,
     container_id: Optional[str] = None,
 ) -> str:
     """Constructs the comprehensive system prompt for the agent turn."""
@@ -24,26 +22,18 @@ def build_system_prompt(
     allowed_tools = set(agent_config.allowed_tools)
     parts.append("\n## Environment Context")
     if container_id:
-        parts.append(
-            f"- Sandbox: Isolated Docker Container `{container_id[:12]}`"
-        )
-        parts.append(
-            "- Workspace: Mounted at `/workspace` with full root shell execution permissions."
-        )
-        parts.append(
-            "- Files the user uploads are in the workspace root. Look there first"
-            + (" (`list_directory` or `find_files`)." if "find_files" in allowed_tools else ".")
-        )
-        parts.append(
-            "- Missing Python packages: install with `pip install <packages>` (one call,"
-            " all packages). Do not use apt-get; it is slow enough to time out."
-        )
-    else:
-        ws_str = str(workspace_dir.resolve()) if workspace_dir else "Local"
-        parts.append(f"- Workspace Directory: `{ws_str}`")
-        parts.append(
-            "- Mode: Host execution mode. Relative file paths are resolved relative to this workspace directory."
-        )
+        parts.append(f"- Sandbox: Isolated Docker Container `{container_id[:12]}`")
+    parts.append(
+        "- Workspace: Mounted at `/workspace` with full root shell execution permissions."
+    )
+    parts.append(
+        "- Files the user uploads are in the workspace root. Look there first"
+        + (" (`list_directory` or `find_files`)." if "find_files" in allowed_tools else ".")
+    )
+    parts.append(
+        "- Missing Python packages: install with `pip install <packages>` (one call,"
+        " all packages). Do not use apt-get; it is slow enough to time out."
+    )
     if "run_command" in allowed_tools:
         parts.append(
             "- Every `run_command` call is a fresh shell, but the working directory"

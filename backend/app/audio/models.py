@@ -61,7 +61,6 @@ class AudioJob(BaseModel):
     text: str = ""
     voice: Optional[str] = None
     speed: float = 1.0
-    response_format: str = "wav"
     #: Name of the uploaded recording, for a transcription.
     source_filename: Optional[str] = None
     language: Optional[str] = None
@@ -84,7 +83,6 @@ class SpeechRequest(BaseModel):
     text: str = Field(..., min_length=1)
     voice: Optional[str] = None
     speed: float = Field(1.0, gt=0.25, le=4.0)
-    response_format: str = "wav"
 
 
 class MessageSpeech(BaseModel):

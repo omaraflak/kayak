@@ -58,6 +58,12 @@ slower. Releases that do not touch either reuse the cached layers.
 Launchers track `latest`, so pushing the tag is what offers the update to everyone. They
 notice within six hours, or immediately on their next start.
 
+Nothing pulls the audio image ahead of time. Kayak pulls it the first time a speech or
+transcription model starts, and pulls `latest` again whenever the copy on the Mac was
+built for a different release than the running server, comparing the image's
+`org.opencontainers.image.version` label with its own version. The workflow stamps both
+from the same tag, which is what keeps them in step.
+
 Progress is at https://github.com/omaraflak/kayak/actions. The first run takes a while
 because nothing is cached yet; later runs reuse layers.
 

@@ -142,7 +142,6 @@ async def spawn_subagent(
     child_conv = await create_conversation(
         title=title,
         agent_id=agent_id,
-        isolated_container=bool(container_id),
         # Persisted rather than set in memory: a child whose container is only known
         # to the running task loses its sandbox the moment it is reopened or resumed.
         container_id=container_id,

@@ -20,8 +20,8 @@ from pydantic import BaseModel
 from backend.app.agent.sandbox import sandbox_manager
 from backend.app.config import settings
 from backend.app.database import get_conversation
-from backend.app.models import Conversation
 from backend.app.routes.auth import SESSION_COOKIE_NAME, TOKEN_HEADER_NAME
+from backend.app.routes.conversations import load_conversation
 from backend.app.agent.turns import SANDBOX_UNAVAILABLE_DETAIL, ensure_sandbox
 from backend.app.tools.builtins.file_tools import (
     PathOutsideWorkspaceError,
@@ -62,7 +62,7 @@ def safe_upload_path(raw: str) -> PurePosixPath:
     Raises:
         ValueError: If the path is absolute, empty, or contains '..'.
     """
-    path = PurePosixPath(raw.replace("\\", "/"))
+    path = PurePosixPath(raw)
     parts = [part for part in path.parts if part not in (".", "")]
     if path.is_absolute() or not parts or any(part == ".." for part in parts):
         raise ValueError(f"Unsafe upload path: '{raw}'")
@@ -82,14 +82,6 @@ def preview_disposition(filename: str) -> tuple[str, bool]:
     return media_type, inline
 
 
-async def _load_conversation(conversation_id: str) -> Conversation:
-    """Fetches the conversation or raises 404."""
-    conversation = await get_conversation(conversation_id)
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    return conversation
-
-
 def _resolve_or_400(conversation_id: str, path: str) -> Path:
     """Resolves a workspace-relative path, translating escapes into a 400."""
     workspace = settings.WORKSPACES_DIR / conversation_id
@@ -104,7 +96,7 @@ async def list_workspace_directory(
     conversation_id: str, path: str = "."
 ) -> DirectoryListing:
     """Lists one directory of the conversation's workspace."""
-    await _load_conversation(conversation_id)
+    await load_conversation(conversation_id)
     target = _resolve_or_400(conversation_id, path)
 
     if not target.exists():
@@ -135,7 +127,7 @@ async def list_workspace_directory(
 @router.get("/fs/file")
 async def read_workspace_file(conversation_id: str, path: str) -> FileResponse:
     """Serves one workspace file for preview or download."""
-    await _load_conversation(conversation_id)
+    await load_conversation(conversation_id)
     target = _resolve_or_400(conversation_id, path)
 
     if not target.exists() or target.is_dir():
@@ -164,7 +156,7 @@ async def upload_workspace_files(
     uploads use this to preserve their structure. The workspace is mounted in the
     container, so the files are visible to the agent immediately.
     """
-    await _load_conversation(conversation_id)
+    await load_conversation(conversation_id)
 
     saved = 0
     for upload in files:

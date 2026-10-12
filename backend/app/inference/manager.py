@@ -4,16 +4,14 @@ import re
 import time
 import uuid
 from pathlib import Path
-import shutil
 import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 import docker
 from docker.errors import APIError, NotFound, ImageNotFound
 import httpx
+from backend.app import docker_host
 from backend.app.config import settings
-from backend.app.docker_utils import DockerPathResolver
 from backend.app.inference import metal
-from backend.app.inference.hardware import daemon_offers_gpu, probe_host_capability
 from backend.app.inference.models import (
     HostCapability,
     Modality,
@@ -207,14 +205,8 @@ class ServerManager:
         )
 
     def _init_docker(self) -> None:
-        try:
-            self._client = docker.from_env()
-            self._client.ping()
-            self._docker_available = True
-            DockerPathResolver.initialize(self._client)
-        except Exception:
-            self._client = None
-            self._docker_available = False
+        self._client = docker_host.connect()
+        self._docker_available = self._client is not None
 
     async def _ensure_docker(self) -> bool:
         """Re-probes the Docker daemon whenever it was last seen unavailable.
@@ -245,26 +237,16 @@ class ServerManager:
         """The OpenAI-compatible base URL for a server published on `port`."""
         return self._runtime.api_base(port)
 
-    def _get_endpoint_urls(self, port: Optional[int] = None) -> List[str]:
-        """Returns the ordered list of health endpoint URLs to probe.
+    def _health_url(self, port: Optional[int] = None) -> str:
+        """The URL that proves the server is up, on the port it actually publishes.
 
-        Probes the port the current deployment actually publishes, which may
-        differ from the configured default when that port was taken.
+        That port may differ from the configured default when the default was taken.
         """
         port = port or self._status.port or self._runtime.default_port
         path = self._runtime.health_path()
         # The api base already carries the /v1 prefix that the health path repeats.
-        api_base = self._api_base_for_port(port).rstrip("/")
         suffix = path[len("/v1"):] if path.startswith("/v1") else path
-        urls = [
-            f"http://host.docker.internal:{port}{path}",
-            f"{api_base}{suffix}",
-            f"http://localhost:{port}{path}",
-            f"http://127.0.0.1:{port}{path}",
-        ]
-        # Deduplicated, order preserved: the api-base entry usually repeats one
-        # of the fixed hosts.
-        return list(dict.fromkeys(urls))
+        return self._api_base_for_port(port).rstrip("/") + suffix
 
     def _container_host_port(self, container: Any) -> Optional[int]:
         """The host port a discovered container actually publishes, if readable."""
@@ -368,7 +350,7 @@ class ServerManager:
                 self._update_status(
                     state=ServerState.ERROR,
                     message=f"Cannot deploy {request.model_id}: MLX models require Apple Silicon and the Kayak desktop launcher.",
-                    error="Metal inference is not supported on this machine.",
+                    error="Metal inference needs the Kayak launcher on an Apple Silicon Mac.",
                 )
                 return self.get_status()
 
@@ -398,7 +380,7 @@ class ServerManager:
                 state=ServerState.STARTING_CONTAINER,
                 message=f"Starting Metal server for {request.model_id}...",
                 port=metal_status.port or self._runtime.default_port,
-                endpoint=self._runtime.api_base(self._runtime.default_port),
+                endpoint=self._api_base_for_port(metal_status.port or self._runtime.default_port),
             )
             self._active_request = request
             self._broadcast({"type": "status", "data": self._status.model_dump()})
@@ -429,8 +411,8 @@ class ServerManager:
         if not await self._ensure_docker():
             self._update_status(
                 state=ServerState.ERROR,
-                message="Docker is not available on this system.",
-                error="Docker daemon unreachable",
+                message="Docker is not running.",
+                error="Start Docker Desktop, then try again.",
             )
             return self.get_status()
 
@@ -516,7 +498,7 @@ class ServerManager:
 
                 if metal_status.state == "ready":
                     self._status.port = metal_status.port or self._runtime.default_port
-                    self._status.endpoint = self._runtime.api_base(self._runtime.default_port)
+                    self._status.endpoint = self._api_base_for_port(self._status.port)
                     self._update_status(
                         state=ServerState.READY,
                         message=f"Metal server is healthy and serving {model_id}",
@@ -566,11 +548,9 @@ class ServerManager:
 
             # 1. Ask the runtime what to run. Everything model- and backend-specific
             # is decided here and nowhere else in this method.
-            has_gpu = await self._gpu_available()
             spec = await self._runtime.container_spec(
                 request,
                 SpecContext(
-                    has_gpu=has_gpu,
                     docker_memory_bytes=await self._docker_memory_bytes(),
                     hf_token=settings.HUGGINGFACE_API_KEY or None,
                 ),
@@ -584,18 +564,19 @@ class ServerManager:
             )
             self._add_log(f"Checking for image {image_name}...")
 
-            def _pull_if_needed() -> bool:
+            def _local_image() -> Optional[Any]:
                 try:
-                    self._client.images.get(image_name)
-                    return True
-                except (ImageNotFound, NotFound):
-                    return False
+                    return self._client.images.get(image_name)
                 except Exception:
-                    return False
+                    return None
 
-            has_image = await loop.run_in_executor(None, _pull_if_needed)
-            if not has_image:
-                self._add_log(f"Image {image_name} not found locally. Initiating pull from Docker Hub...")
+            local_image = await loop.run_in_executor(None, _local_image)
+            stale = local_image is not None and self._is_from_another_release(local_image)
+            if local_image is None or stale:
+                if stale:
+                    self._add_log(f"Updating {image_name} to match this version of Kayak...")
+                else:
+                    self._add_log(f"Image {image_name} not found locally. Initiating pull from Docker Hub...")
                 self._update_status(
                     state=ServerState.PULLING_IMAGE,
                     message=f"Pulling {image_name} from Docker Hub...",
@@ -617,10 +598,19 @@ class ServerManager:
                         if msg:
                             loop.call_soon_threadsafe(self._add_log, msg)
 
-                await loop.run_in_executor(None, _stream_pull)
-                if self._superseded(generation):
-                    return
-                self._add_log(f"✓ Image {image_name} successfully pulled.")
+                try:
+                    await loop.run_in_executor(None, _stream_pull)
+                except Exception as error:
+                    # Offline, most likely. An older image still serves.
+                    if not stale:
+                        raise
+                    self._add_log(f"ℹ Could not update {image_name} ({error}); using the one already here.")
+                else:
+                    if self._superseded(generation):
+                        return
+                    self._add_log(f"✓ Image {image_name} successfully pulled.")
+                    if stale:
+                        await loop.run_in_executor(None, self._remove_image, local_image.id)
 
             # 3. Report what the runtime decided, so its choices are visible in the
             # log rather than implicit in the container's arguments.
@@ -655,12 +645,8 @@ class ServerManager:
                 if self._superseded(generation):
                     return None
 
-                hf_cache_src = DockerPathResolver.resolve_volume_source(
-                    hf_cache_dir,
-                    fallback_named_volume="kayak-huggingface-cache",
-                )
                 volumes = {
-                    hf_cache_src: {
+                    docker_host.host_path(hf_cache_dir): {
                         "bind": "/root/.cache/huggingface",
                         "mode": "rw",
                     }
@@ -778,13 +764,28 @@ class ServerManager:
                 error=str(error),
             )
 
+    def _is_from_another_release(self, image: Any) -> bool:
+        """Whether a Kayak-published image was built for a different Kayak release."""
+        if not self._runtime.released_with_kayak or settings.VERSION == "dev":
+            return False
+        version = (image.labels or {}).get("org.opencontainers.image.version")
+        return bool(version) and version != settings.VERSION
+
+    def _remove_image(self, image_id: str) -> None:
+        """Deletes an image a pull has superseded, so updates do not pile up gigabytes."""
+        try:
+            self._client.images.remove(image_id)
+        except Exception:
+            # Still in use, or already gone; either way there is nothing to reclaim.
+            pass
+
     async def _redeploy_retry(self, retry: DeployRequest) -> None:
         """Runs a runtime's self-healing retry, reporting what it changed."""
         try:
             await self.deploy_model(retry)
             if retry.max_model_len is not None:
                 self._add_log(
-                    f"ℹ The model's default context does not fit in this machine's memory; "
+                    f"ℹ The model's default context does not fit in the container's memory; "
                     f"restarted automatically with a {retry.max_model_len}-token context."
                 )
         except Exception:
@@ -858,9 +859,8 @@ class ServerManager:
             detail = (
                 "The container was killed for exceeding the memory Docker makes "
                 "available, which on Docker Desktop is set independently of the "
-                "machine's RAM. Raise it in Docker Desktop under Settings > Resources "
-                "> Memory, or try a smaller model, a lower --max-model-len, or a lower "
-                "GPU memory fraction."
+                "Mac's RAM. Raise it in Docker Desktop under Settings > Resources "
+                "> Memory, or try a smaller model or a shorter context length."
             )
         elif exit_code:
             # The tail of a crashing vLLM is shutdown noise; the sentence that names
@@ -886,11 +886,9 @@ class ServerManager:
         """Whether a health response says the requested model is being served.
 
         A 200 alone is not proof of readiness: during a backend switch the previous
-        server — a Metal process winding down, or an older container — can still be
-        answering on the same port, so a deployment used to report READY the moment
-        anything at all responded, serving the wrong model. Now that a second server
-        runs alongside on a neighbouring port, answering the wrong one is easier
-        still, so the runtime decides what counts as its own model.
+        server -- a Metal process winding down, or an older container -- can still be
+        answering on the same port, and another modality's server runs on the port
+        next door. The runtime decides what counts as its own model.
         """
         return self._runtime.serves_model(payload, model_id)
 
@@ -925,22 +923,21 @@ class ServerManager:
                 ):
                     return
 
-                for url in self._get_endpoint_urls(port):
-                    try:
-                        res = await client.get(url)
-                        if res.status_code == 200 and self._endpoint_serves_model(
-                            res.json(), model_id
-                        ):
-                            if self._superseded(generation):
-                                return
-                            self._update_status(
-                                state=ServerState.READY,
-                                message=f"{self._runtime.server_label} is serving {model_id} on port {port}",
-                                exit_code=None,
-                            )
+                try:
+                    res = await client.get(self._health_url(port))
+                    if res.status_code == 200 and self._endpoint_serves_model(
+                        res.json(), model_id
+                    ):
+                        if self._superseded(generation):
                             return
-                    except Exception:
-                        pass
+                        self._update_status(
+                            state=ServerState.READY,
+                            message=f"{self._runtime.server_label} is serving {model_id} on port {port}",
+                            exit_code=None,
+                        )
+                        return
+                except Exception:
+                    pass
 
                 # A crashed container will never answer, so waiting out the full
                 # deadline would report a timeout for a failure that already happened.
@@ -1060,7 +1057,7 @@ class ServerManager:
                     self._status.model_id = metal_status.model
                     self._status.message = f"Metal server is healthy and serving {metal_status.model}"
                     self._status.port = metal_status.port or self._runtime.default_port
-                    self._status.endpoint = self._runtime.api_base(self._runtime.default_port)
+                    self._status.endpoint = self._api_base_for_port(self._status.port)
                     self._status.container_id = None
                     self._status.error = None
                     self._broadcast({"type": "status", "data": self._status.model_dump()})
@@ -1072,7 +1069,7 @@ class ServerManager:
                     self._status.model_id = metal_status.model
                     self._status.message = f"Metal server is {metal_status.state} for {metal_status.model}..."
                     self._status.port = metal_status.port or self._runtime.default_port
-                    self._status.endpoint = self._runtime.api_base(self._runtime.default_port)
+                    self._status.endpoint = self._api_base_for_port(self._status.port)
                     self._status.container_id = None
                     self._status.error = None
                     self._broadcast({"type": "status", "data": self._status.model_dump()})
@@ -1131,15 +1128,13 @@ class ServerManager:
         served_models: List[Dict[str, Any]] = []
         is_endpoint_alive = False
         async with httpx.AsyncClient(timeout=1.5) as client:
-            for url in self._get_endpoint_urls(active_port):
-                try:
-                    resp = await client.get(url)
-                    if resp.status_code == 200:
-                        served_models = resp.json().get("data", [])
-                        is_endpoint_alive = True
-                        break
-                except Exception:
-                    continue
+            try:
+                resp = await client.get(self._health_url(active_port))
+                if resp.status_code == 200:
+                    served_models = resp.json().get("data", [])
+                    is_endpoint_alive = True
+            except Exception:
+                pass
 
         if is_endpoint_alive:
             # Model ID from served models or fallback
@@ -1223,8 +1218,8 @@ class ServerManager:
     async def _docker_resources(self) -> Tuple[Optional[int], Optional[int]]:
         """Returns (memory bytes, CPU count) as Docker reports them, or Nones.
 
-        On Docker Desktop these are the VM's allocation rather than the laptop's
-        hardware, which is exactly what bounds a container.
+        These are Docker Desktop's VM allocation rather than the Mac's hardware,
+        which is exactly what bounds a container.
         """
         if not self._docker_available or not self._client:
             return None, None
@@ -1244,63 +1239,35 @@ class ServerManager:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _read)
 
-    async def _docker_info(self) -> Optional[Dict[str, Any]]:
-        """The Docker daemon's own description of itself, or None."""
-        if not self._docker_available or not self._client:
-            return None
-
-        def _read() -> Optional[Dict[str, Any]]:
-            try:
-                return self._client.info()
-            except Exception:
-                return None
-
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _read)
-
-    async def _gpu_available(self) -> bool:
-        """Whether a container started here can be given a GPU.
-
-        Asked of the daemon rather than of this process. Kayak normally runs in a
-        container with no NVIDIA tools and no device access, so `nvidia-smi` on its
-        own PATH was absent on every machine that ships this way -- and a
-        workstation with a GPU quietly got the CPU image. The local binary is still
-        consulted, for a Kayak run directly on the host.
-        """
-        if daemon_offers_gpu(await self._docker_info()):
-            return True
-        return bool(shutil.which("nvidia-smi"))
-
     async def _docker_memory_bytes(self) -> Optional[int]:
-        """Returns the memory Docker reports for its host, or None if unavailable."""
+        """Returns the memory Docker reports for its VM, or None if unavailable."""
         memory, _cpus = await self._docker_resources()
         return memory
 
     async def get_host_capability(self) -> HostCapability:
-        """Reports GPU inventory, Docker availability, and whether the image is pulled."""
+        """Reports what Docker can give this runtime's container, and whether its image is pulled."""
         image_present: Optional[bool] = None
 
         if await self._ensure_docker():
             def _has_image() -> Optional[bool]:
-                for image_name in self._runtime.candidate_images():
-                    try:
-                        self._client.images.get(image_name)
-                        return True
-                    except (ImageNotFound, NotFound):
-                        continue
-                    except Exception:
-                        return None
-                return False
+                try:
+                    self._client.images.get(self._runtime.image)
+                    return True
+                except (ImageNotFound, NotFound):
+                    return False
+                except Exception:
+                    return None
 
             loop = asyncio.get_running_loop()
             image_present = await loop.run_in_executor(None, _has_image)
 
         total_memory, total_cpus = await self._docker_resources()
-        capability = await probe_host_capability(
-            self._docker_available, image_present, await self._docker_info()
+        capability = HostCapability(
+            docker_available=self._docker_available,
+            total_memory_mb=int(total_memory / (1024 ** 2)) if total_memory else 0,
+            total_cpus=total_cpus or 0,
+            image_present=image_present,
         )
-        capability.total_memory_mb = int(total_memory / (1024 ** 2)) if total_memory else 0
-        capability.total_cpus = total_cpus or 0
         self._runtime.augment_capability(capability, total_memory)
         return capability
 
@@ -1342,8 +1309,7 @@ class ServerManager:
         could re-adopt it instead of paying for the model load again. That trade is
         wrong for the app people actually run: closing the desktop app removes the
         Kayak container, and a speech or text server was left behind holding several
-        gigabytes of memory -- and the GPU, where there is one -- with nothing left
-        alive to talk to it, until the user went looking for it in Docker by hand.
+        gigabytes of memory with nothing left alive to talk to it, until the user went looking for it in Docker by hand.
         Loading the model again on the next launch is the cheaper mistake.
 
         No lock is taken. A deployment that is wedged holding the control lock must

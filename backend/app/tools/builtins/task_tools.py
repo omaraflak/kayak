@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Optional
 from backend.app.agent.task_manager import task_manager
 from backend.app.database import get_task
@@ -14,8 +13,6 @@ def _format_task_status(task: BackgroundTask) -> str:
         f"Type: {task.task_type.value if hasattr(task.task_type, 'value') else task.task_type}",
         f"Status: {task.status.value if hasattr(task.status, 'value') else task.status}",
     ]
-    if task.pid:
-        output.append(f"PID: {task.pid}")
     if task.exit_code is not None:
         output.append(f"Exit Code: {task.exit_code}")
 
@@ -34,7 +31,6 @@ async def start_background_task(
     command: str,
     name: str,
     conversation_id: Optional[str] = None,
-    workspace_dir: Optional[Path] = None,
     container_id: Optional[str] = None,
 ) -> str:
     """Starts a long-running shell command or process in the background.
@@ -43,14 +39,13 @@ async def start_background_task(
         command: The shell command to run in the background.
         name: A descriptive label for the task (e.g. 'dev-server', 'build-job').
     """
-    if not conversation_id:
-        return "Error: No active conversation context found."
+    if not conversation_id or not container_id:
+        return "Error: No container is available for this conversation."
 
     task = await task_manager.start_shell_task(
         conversation_id=conversation_id,
         name=name,
         command=command,
-        workspace_dir=workspace_dir,
         container_id=container_id,
     )
     return (
@@ -71,20 +66,6 @@ async def get_task_status(task_id: str) -> str:
         return f"Error: Task with ID '{task_id}' not found."
 
     return _format_task_status(task)
-
-
-@tool_metadata(category=ToolCategory.EXECUTION, risk=ToolRisk.MODERATE)
-async def send_task_input(task_id: str, input_text: str) -> str:
-    """Sends text input to standard input (stdin) of a running background task.
-
-    Args:
-        task_id: The ID of the running task.
-        input_text: The string to send to stdin.
-    """
-    success = await task_manager.send_input(task_id, input_text)
-    if success:
-        return f"Sent input to task '{task_id}'."
-    return f"Failed to send input. Task '{task_id}' may not be running or accepting stdin."
 
 
 @tool_metadata(category=ToolCategory.EXECUTION, risk=ToolRisk.MODERATE)

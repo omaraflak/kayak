@@ -7,10 +7,14 @@ while a single agent waits on a build or a test run.
 """
 
 import asyncio
+from dataclasses import dataclass
 from functools import partial
+import io
 import json
+import logging
 from pathlib import Path
 import queue
+import tarfile
 import threading
 import time
 from typing import (
@@ -25,21 +29,25 @@ from typing import (
     Tuple,
     TypeVar,
 )
+import uuid
 import docker
-from docker.errors import NotFound
+from docker.errors import ImageNotFound, NotFound
 from backend.app.agent.python_repl import (
     PYTHON_REPL_DRIVER,
     demux_docker_frames,
     format_execution_result,
     scan_for_response,
 )
+from backend.app import docker_host
 from backend.app.config import settings
-from backend.app.docker_utils import DockerPathResolver
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-# Exit status used by `timeout --signal=KILL` when it terminates the child.
-_TIMEOUT_EXIT_CODE = 137
+#: Exit status of a process killed with SIGKILL: by `timeout --signal=KILL` when it
+#: runs out of time, or by the kernel when the container runs out of memory.
+_KILLED_EXIT_CODE = 137
 
 #: Interactive shell setup for the user-facing terminal: a colored prompt and
 #: color-enabled core utilities, which the slim images do not configure.
@@ -68,6 +76,38 @@ def _shell_quote(text: str) -> str:
     return "'" + text.replace("'", "'\\''") + "'"
 
 
+def _raw_socket(hijacked: Any) -> Any:
+    """The socket behind a hijacked `docker exec`; docker-py wraps it in a SocketIO."""
+    return hijacked._sock if hasattr(hijacked, "_sock") else hijacked
+
+
+def _close_socket(sock: Any) -> None:
+    """Tears a socket down, which also unblocks any thread parked reading it."""
+    try:
+        sock.shutdown(2)  # SHUT_RDWR
+    except OSError:
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
+def _killed_message(exit_code: int, started: float, timeout: int) -> Optional[str]:
+    """Explains a SIGKILL: a timeout if the time ran out, otherwise memory."""
+    if exit_code != _KILLED_EXIT_CODE:
+        return None
+    if time.monotonic() - started >= timeout:
+        return (
+            f"Error: Timed out after {timeout} seconds and was killed. Use"
+            " start_background_task for long-running work."
+        )
+    return (
+        "Error: The process was killed, most likely for running out of memory in the"
+        " sandbox."
+    )
+
+
 class ExecChunk:
     """One piece of output from a streaming exec."""
 
@@ -79,77 +119,69 @@ class ExecChunk:
 
 
 def _build_volume_mounts(workspace_dir: Path) -> Dict[str, Dict[str, str]]:
-    """Constructs the container volume mounts dictionary using the DockerPathResolver.
+    """The sandbox's volume mounts: the conversation's workspace, at `/workspace`.
 
-    Only the conversation's own workspace is mounted -- nothing else. The whole
-    platform data directory used to be exposed read-only at `/data`, which let
-    every agent read every other conversation's files, the conversation
-    database, and settings.json with its plaintext provider API keys. Nothing
-    in the sandbox execution path ever needed that mount.
+    Only the conversation's own workspace is mounted -- nothing else, so an agent
+    cannot read other conversations' files, the database, or settings.json with
+    its plaintext provider API keys.
     """
-    workspace_src = DockerPathResolver.resolve_volume_source(workspace_dir)
     return {
-        workspace_src: {
+        docker_host.host_path(workspace_dir): {
             "bind": "/workspace",
             "mode": "rw",
         },
     }
 
 
-def has_forbidden_data_mount(container: Any) -> bool:
-    """Detects the legacy `/data` mount on a container built before its removal.
-
-    Containers are long-lived and reused across app restarts, so without this
-    check an already-created sandbox would keep leaking other conversations'
-    files (and the API keys) until it happened to be deleted.
-    """
-    return any(
-        mount.get("Destination") == "/data"
-        for mount in container.attrs.get("Mounts", [])
-    )
-
-
 def _build_custom_tool_runner_script(
-    tool_name: str, tool_code: str, arguments: Dict[str, Any]
+    entrypoint: str, tool_code: str, arguments: Dict[str, Any]
 ) -> str:
-    """Builds a self-contained Python script to execute a custom tool inside the sandbox."""
+    """Builds a self-contained script that calls a custom tool's entrypoint once."""
     return f"""
-import inspect
-import json
-import sys
-
-# Define tool implementation
 {tool_code}
 
 
-def _resolve_entrypoint():
-    named = globals().get('execute') or globals().get('main') or globals().get({tool_name!r})
-    if callable(named):
-        return named
-    # Fall back to the first function *defined in this script*. Filtering on the
-    # defining module matters: a bare "first callable" scan picks up imported names
-    # such as Path or datetime and calls those instead of the tool.
-    for value in globals().values():
-        if inspect.isfunction(value) and value.__module__ == '__main__' and not value.__name__.startswith('_'):
-            return value
-    return None
-
-
-args = json.loads({json.dumps(arguments)!r})
-fn = _resolve_entrypoint()
-
-if not fn:
-    print("Error: No callable entrypoint found for tool {tool_name!r}.")
-    sys.exit(1)
+import asyncio as _kayak_asyncio
+import inspect as _kayak_inspect
+import json as _kayak_json
+import sys as _kayak_sys
 
 try:
-    result = fn(**args)
-    if result is not None:
-        print(str(result))
-except Exception as e:
-    print(f"Error: {{e}}")
-    sys.exit(1)
+    _kayak_result = {entrypoint}(**_kayak_json.loads({json.dumps(arguments)!r}))
+    if _kayak_inspect.iscoroutine(_kayak_result):
+        _kayak_result = _kayak_asyncio.run(_kayak_result)
+    if _kayak_result is not None:
+        print(_kayak_result)
+except Exception as _kayak_error:
+    print(f"Error: {{_kayak_error}}")
+    _kayak_sys.exit(1)
 """
+
+
+def _tar(files: Dict[str, str], directory: str) -> bytes:
+    """Packs text files into a tar archive under one directory, for put_archive."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        folder = tarfile.TarInfo(directory)
+        folder.type = tarfile.DIRTYPE
+        folder.mode = 0o755
+        archive.addfile(folder)
+        for name, text in files.items():
+            data = text.encode("utf-8")
+            info = tarfile.TarInfo(f"{directory}/{name}")
+            info.size = len(data)
+            info.mode = 0o644
+            archive.addfile(info, io.BytesIO(data))
+    return buffer.getvalue()
+
+
+@dataclass
+class IsolatedRun:
+    """How a command in a throwaway container ended."""
+    #: None when it ran out of time and was killed.
+    exit_code: Optional[int]
+    stdout: str
+    stderr: str
 
 
 class SandboxShell:
@@ -162,9 +194,7 @@ class SandboxShell:
     def __init__(self, client: docker.DockerClient, exec_id: str, raw_socket: Any):
         self._client = client
         self._exec_id = exec_id
-        # docker-py hands back a SocketIO wrapper; the underlying socket is what
-        # supports both directions of the conversation.
-        self._sock = raw_socket._sock if hasattr(raw_socket, "_sock") else raw_socket
+        self._sock = _raw_socket(raw_socket)
 
     def read(self, max_bytes: int = 4096) -> bytes:
         """Reads terminal output; empty bytes means the shell exited."""
@@ -187,14 +217,7 @@ class SandboxShell:
 
     def close(self) -> None:
         """Tears the socket down, which also unblocks any pending read."""
-        try:
-            self._sock.shutdown(2)  # SHUT_RDWR
-        except OSError:
-            pass
-        try:
-            self._sock.close()
-        except OSError:
-            pass
+        _close_socket(self._sock)
 
 
 class PythonSession:
@@ -205,7 +228,7 @@ class PythonSession:
     """
 
     def __init__(self, raw_socket: Any):
-        self._sock = raw_socket._sock if hasattr(raw_socket, "_sock") else raw_socket
+        self._sock = _raw_socket(raw_socket)
         self._raw = b""
         self._text = ""
         self.dead = False
@@ -257,14 +280,7 @@ class PythonSession:
             self._text += payload.decode("utf-8", errors="replace")
 
     def close(self) -> None:
-        try:
-            self._sock.shutdown(2)  # SHUT_RDWR
-        except OSError:
-            pass
-        try:
-            self._sock.close()
-        except OSError:
-            pass
+        _close_socket(self._sock)
         self.dead = True
 
 
@@ -297,30 +313,41 @@ class SandboxManager:
         return lock
 
     def _init_client(self):
-        try:
-            self._client = docker.from_env()
-            self._client.ping()
-            self._docker_available = True
-            DockerPathResolver.initialize(self._client)
-        except Exception:
-            self._client = None
-            self._docker_available = False
-
-    @property
-    def is_available(self) -> bool:
-        return self._docker_available
+        self._client = docker_host.connect()
+        self._docker_available = self._client is not None
 
     async def _run_blocking(self, func: Callable[[], T]) -> T:
         """Runs a blocking docker SDK call on the default thread pool."""
         return await asyncio.get_running_loop().run_in_executor(None, func)
 
     def _require_client(self) -> docker.DockerClient:
-        """Returns the Docker client or explains why sandboxing is unavailable."""
+        """Returns the Docker client, reconnecting if Docker was down until now.
+
+        Docker Desktop is often started after Kayak; a client probed once at import
+        would report it unavailable until Kayak itself was restarted.
+        """
         if not self._docker_available or not self._client:
-            raise RuntimeError(
-                "Docker is not available or Docker socket is not mounted."
-            )
+            self._init_client()
+        if not self._client:
+            raise RuntimeError("Docker is not running. Start Docker Desktop and try again.")
         return self._client
+
+    def _ensure_image(self, client: docker.DockerClient) -> str:
+        """Returns the sandbox image, pulling it first if this Mac does not have it."""
+        image = settings.DOCKER_SANDBOX_IMAGE
+        try:
+            client.images.get(image)
+        except ImageNotFound:
+            logger.info("Pulling the sandbox image %s", image)
+            client.images.pull(image)
+        return image
+
+    async def prepare(self) -> None:
+        """Pulls the sandbox image ahead of the first conversation, if it is missing."""
+        try:
+            await self._run_blocking(lambda: self._ensure_image(self._require_client()))
+        except Exception as error:
+            logger.warning("Could not prepare the sandbox image: %s", error)
 
     def _get_running_container_sync(self, container_id: str) -> Any:
         """Retrieves a Docker container and ensures it is in the running state."""
@@ -331,23 +358,36 @@ class SandboxManager:
         return container
 
     @staticmethod
-    def _wrap_with_timeout(cmd: List[str], timeout: Optional[int]) -> List[str]:
+    def _wrap_with_timeout(cmd: List[str], timeout: int) -> List[str]:
         """Prefixes a command with `timeout` so a hung process dies inside the container.
 
         Cancelling the Python-side wait would only abandon the worker thread; the
         process in the container has to be killed where it runs.
         """
-        if not timeout or timeout <= 0:
-            return cmd
         return ["timeout", "--signal=KILL", str(int(timeout))] + cmd
 
-    @staticmethod
-    def _decode_exec_output(exec_result: Any) -> tuple[str, str, int]:
-        """Normalizes a demuxed exec result into (stdout, stderr, exit_code)."""
-        stdout_bytes, stderr_bytes = exec_result.output
-        stdout_str = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
-        stderr_str = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
-        return stdout_str, stderr_str, exec_result.exit_code
+    async def _exec(
+        self, container_id: str, cmd: List[str], timeout: int
+    ) -> Tuple[str, str, int, float]:
+        """Runs a command to completion: (stdout, stderr, exit code, start time)."""
+
+        def _run() -> Tuple[str, str, int, float]:
+            container = self._get_running_container_sync(container_id)
+            started = time.monotonic()
+            result = container.exec_run(
+                cmd=self._wrap_with_timeout(cmd, timeout),
+                workdir="/workspace",
+                demux=True,
+            )
+            stdout, stderr = result.output
+            return (
+                stdout.decode("utf-8", errors="replace") if stdout else "",
+                stderr.decode("utf-8", errors="replace") if stderr else "",
+                result.exit_code,
+                started,
+            )
+
+        return await self._run_blocking(_run)
 
     async def create_sandbox(
         self, conversation_id: str, workspace_dir: Path
@@ -356,44 +396,28 @@ class SandboxManager:
 
         Args:
             conversation_id: Conversation identifier.
-            workspace_dir: Host directory for conversation workspace.
+            workspace_dir: Directory holding the conversation's workspace.
 
         Returns:
             str: Container ID.
         """
-        client = self._require_client()
         container_name = f"{SANDBOX_NAME_PREFIX}{conversation_id[:8]}"
         volumes_map = _build_volume_mounts(workspace_dir)
 
         def _create() -> str:
+            client = self._require_client()
             try:
                 existing = client.containers.get(container_name)
             except NotFound:
                 existing = None
 
             if existing is not None:
-                if has_forbidden_data_mount(existing):
-                    # A container from before the /data mount was removed keeps
-                    # leaking until replaced; its workspace lives on the host,
-                    # so recreating loses nothing the conversation relies on.
-                    try:
-                        existing.stop(timeout=2)
-                        existing.remove(v=True, force=True)
-                    except Exception:
-                        pass
-                else:
-                    if existing.status != "running":
-                        existing.start()
-                    return existing.id
-
-            image_name = settings.DOCKER_SANDBOX_IMAGE
-            try:
-                client.images.get(image_name)
-            except Exception:
-                image_name = "python:3.11-slim"
+                if existing.status != "running":
+                    existing.start()
+                return existing.id
 
             container = client.containers.run(
-                image=image_name,
+                image=self._ensure_image(client),
                 name=container_name,
                 command="tail -f /dev/null",  # Keep container alive
                 detach=True,
@@ -420,24 +444,11 @@ class SandboxManager:
         Returns:
             bool: True if the container exists and is now running.
         """
-        if not self._docker_available or not self._client:
-            return False
-        client = self._client
 
         def _start() -> bool:
             try:
-                container = client.containers.get(container_id)
+                container = self._require_client().containers.get(container_id)
             except NotFound:
-                return False
-            if has_forbidden_data_mount(container):
-                # Not revivable: this container predates the removal of the
-                # /data mount and would keep exposing other conversations'
-                # files. Reporting False makes the caller create a clean one.
-                try:
-                    container.stop(timeout=2)
-                    container.remove(v=True, force=True)
-                except Exception:
-                    pass
                 return False
             if container.status != "running":
                 container.start()
@@ -451,78 +462,86 @@ class SandboxManager:
             self._owned_containers.add(container_id)
         return running
 
-    async def exec_command(
-        self, container_id: str, command: str, timeout: Optional[int] = 60
-    ) -> str:
-        """Executes a command inside the container and returns its combined output."""
-        effective_timeout = timeout or settings.SANDBOX_TIMEOUT_SECONDS
-
-        def _exec() -> tuple[str, str, int]:
-            container = self._get_running_container_sync(container_id)
-            exec_result = container.exec_run(
-                cmd=self._wrap_with_timeout(
-                    ["/bin/bash", "-c", command], effective_timeout
-                ),
-                workdir="/workspace",
-                demux=True,
-            )
-            return self._decode_exec_output(exec_result)
-
-        stdout_str, stderr_str, exit_code = await self._run_blocking(_exec)
-
-        if exit_code == _TIMEOUT_EXIT_CODE:
-            return (
-                f"Error: Command timed out after {effective_timeout} seconds and was"
-                " killed. Use start_background_task for long-running work."
-            )
+    async def exec_command(self, container_id: str, command: str, timeout: int) -> str:
+        """Executes a shell command inside the container and returns its combined output."""
+        stdout, stderr, exit_code, started = await self._exec(
+            container_id, ["/bin/bash", "-c", command], timeout
+        )
+        killed = _killed_message(exit_code, started, timeout)
+        if killed:
+            return killed
 
         output = []
-        if stdout_str:
-            output.append(stdout_str)
-        if stderr_str:
-            output.append(f"STDERR:\n{stderr_str}")
+        if stdout:
+            output.append(stdout)
+        if stderr:
+            output.append(f"STDERR:\n{stderr}")
         if exit_code != 0:
             output.append(f"\n[Exit code: {exit_code}]")
 
         return "\n".join(output) if output else "Command executed with no output."
 
-    async def exec_python(
-        self, container_id: str, python_code: str, timeout: Optional[int] = 60
-    ) -> str:
-        """Executes Python code directly inside the container."""
-        effective_timeout = timeout or settings.SANDBOX_TIMEOUT_SECONDS
-
-        def _exec() -> tuple[str, str, int]:
-            container = self._get_running_container_sync(container_id)
-            exec_result = container.exec_run(
-                cmd=self._wrap_with_timeout(
-                    ["python3", "-c", python_code], effective_timeout
-                ),
-                workdir="/workspace",
-                demux=True,
-            )
-            return self._decode_exec_output(exec_result)
-
-        stdout_str, stderr_str, exit_code = await self._run_blocking(_exec)
-
-        if exit_code == _TIMEOUT_EXIT_CODE:
-            return f"Error: Execution timed out after {effective_timeout} seconds."
-        if exit_code != 0 and stderr_str:
-            return f"Error ({exit_code}):\n{stderr_str}"
-        return stdout_str or stderr_str or "Execution completed with no output."
+    async def _exec_python(self, container_id: str, python_code: str, timeout: int) -> str:
+        """Executes a Python script inside the container."""
+        stdout, stderr, exit_code, started = await self._exec(
+            container_id, ["python3", "-c", python_code], timeout
+        )
+        killed = _killed_message(exit_code, started, timeout)
+        if killed:
+            return killed
+        if exit_code != 0 and stderr:
+            return f"Error ({exit_code}):\n{stderr}"
+        return stdout or stderr or "Execution completed with no output."
 
     async def exec_custom_tool(
         self,
         container_id: str,
-        tool_name: str,
+        entrypoint: str,
         tool_code: str,
         arguments: Dict[str, Any],
+        timeout: int = 60,
     ) -> str:
-        """Executes custom tool python code inside the container sandbox."""
-        runner_script = _build_custom_tool_runner_script(
-            tool_name=tool_name, tool_code=tool_code, arguments=arguments
-        )
-        return await self.exec_python(container_id, runner_script)
+        """Calls a custom tool's entrypoint inside the conversation's container."""
+        runner_script = _build_custom_tool_runner_script(entrypoint, tool_code, arguments)
+        return await self._exec_python(container_id, runner_script, timeout)
+
+    async def run_isolated(
+        self, files: Dict[str, str], command: List[str], timeout: int
+    ) -> IsolatedRun:
+        """Runs a command in a fresh container from the sandbox image, then removes it.
+
+        Used to test code before it is trusted anywhere: the files are copied in
+        rather than mounted, and the command runs with them as its working directory.
+        """
+
+        def _run() -> IsolatedRun:
+            client = self._require_client()
+            container = client.containers.create(
+                image=self._ensure_image(client),
+                # Named like every sandbox, so a shutdown mid-run stops it too.
+                name=f"{SANDBOX_NAME_PREFIX}isolated-{uuid.uuid4().hex[:8]}",
+                command=command,
+                working_dir="/isolated",
+                detach=True,
+            )
+            try:
+                container.put_archive("/", _tar(files, "isolated"))
+                container.start()
+                try:
+                    exit_code: Optional[int] = container.wait(timeout=timeout).get("StatusCode")
+                except Exception:
+                    # The wait timed out; the code is still running.
+                    container.kill()
+                    exit_code = None
+                return IsolatedRun(
+                    exit_code=exit_code,
+                    stdout=container.logs(stdout=True, stderr=False).decode("utf-8", "replace"),
+                    stderr=container.logs(stdout=False, stderr=True).decode("utf-8", "replace"),
+                )
+            finally:
+                container.remove(force=True)
+
+        return await self._run_blocking(_run)
 
     def _start_marked_exec(self, container_id: str, command: str, task_id: str) -> str:
         """Creates an exec for a long-running command, tagged so it can be killed later."""
@@ -763,22 +782,6 @@ class SandboxManager:
 
         await self._run_blocking(_remove)
         self._owned_containers.discard(container_id)
-
-    async def stop_sandbox(self, container_id: str) -> None:
-        """Stops the container without destroying it, keeping its filesystem."""
-        self._discard_python_session(container_id)
-        if not self._docker_available or not self._client:
-            return
-
-        client = self._client
-
-        def _stop() -> None:
-            try:
-                client.containers.get(container_id).stop(timeout=2)
-            except Exception:
-                pass
-
-        await self._run_blocking(_stop)
 
     async def shutdown_all(self) -> None:
         """Stops every sandbox, without destroying any of them.

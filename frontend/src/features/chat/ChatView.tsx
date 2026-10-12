@@ -2,13 +2,14 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Conversation, AgentConfig } from '../../types';
 import { api } from '../../api/client';
 import { ChatPane } from './ChatPane';
+import { isSendShortcut } from './sendShortcut';
 import { AutoGrowTextarea } from '../../ui/AutoGrowTextarea';
 import { KayakMark } from '../../ui/KayakMark';
 import { WorkspacePanel, WorkspaceTab } from '../workspace/WorkspacePanel';
 import { runningTaskCount } from '../workspace/conversationTasks';
-import { useVLLMStatus, VLLM_LOADING_STATES } from '../../context/VLLMStatusContext';
+import { useVLLMStatus } from '../../context/VLLMStatusContext';
 import { useConversationTasks } from '../../hooks/useConversationTasks';
-import { parseVllmModelId, useVllmModel } from '../../hooks/useVllmModel';
+import { localModelState, parseVllmModelId, useVllmModel } from '../../hooks/useVllmModel';
 import {
   Bot,
   Check,
@@ -124,14 +125,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
     (agent: AgentConfig): { color: 'green' | 'yellow' | 'red'; label: string; spinning: boolean; canStart: boolean } | null => {
       const modelId = parseVllmModelId(agent.model);
       if (!modelId) return null; // cloud model — no badge
-      if (!vllmStatus) return { color: 'red', label: 'Not Running', spinning: false, canStart: true };
-
-      const isThisModel = vllmStatus.model_id === modelId;
-
-      if (vllmStatus.state === 'ready' && isThisModel) {
+      const state = localModelState(vllmStatus, modelId);
+      if (state === 'ready') {
         return { color: 'green', label: 'Ready', spinning: false, canStart: false };
       }
-      if (VLLM_LOADING_STATES.includes(vllmStatus.state) && isThisModel) {
+      if (state === 'loading') {
         return { color: 'yellow', label: 'Loading...', spinning: true, canStart: false };
       }
       return { color: 'red', label: 'Not Running', spinning: false, canStart: true };
@@ -378,7 +376,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 value={draftInput}
                 onChange={setDraftInput}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
+                  if (isSendShortcut(event)) {
                     event.preventDefault();
                     handleDraftSend();
                   }
@@ -474,8 +472,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
             <ChatPane
               conversationId={conversationId}
-              showHeader={false}
-              agentId={conversation?.agent_id || 'general'}
               agentName={activeAgent?.name || 'Kayak Agent'}
               agentModel={activeAgent?.model}
               placeholder="Ask anything, execute code, run tasks, type LaTeX formulas... (Enter to send)"

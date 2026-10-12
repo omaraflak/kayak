@@ -15,7 +15,7 @@ from backend.app.inference import registry
 from backend.app.inference.manager import ServerManager, StatusBroadcaster
 from backend.app.inference.models import DeployRequest, Modality, ServerState
 from backend.app.inference.runtimes import SpecContext
-from backend.app.inference.audio_runtimes import SpeechRuntime
+from backend.app.inference.audio_runtimes import SpeechRuntime, TranscriptionRuntime
 from backend.app.inference.vllm_runtime import VLLMRuntime
 
 
@@ -160,7 +160,7 @@ class TestSpeechContainerSpec:
         return asyncio.run(
             SpeechRuntime().container_spec(
                 DeployRequest(model_id="hexgrad/Kokoro-82M"),
-                SpecContext(has_gpu=False, docker_memory_bytes=None, hf_token=None),
+                SpecContext(docker_memory_bytes=None, hf_token=None),
             )
         )
 
@@ -172,7 +172,7 @@ class TestSpeechContainerSpec:
 
     def test_no_text_generation_flags_leak_in(self, spec):
         # A speech model has no KV cache, context window or tool-call parser.
-        for flag in ("--max-model-len", "--tool-call-parser", "--gpu-memory-utilization"):
+        for flag in ("--max-model-len", "--tool-call-parser"):
             assert flag not in spec.command
         assert "VLLM_CPU_KVCACHE_SPACE" not in spec.environment
 
@@ -182,7 +182,38 @@ class TestSpeechContainerSpec:
         with_token = asyncio.run(
             SpeechRuntime().container_spec(
                 DeployRequest(model_id="hexgrad/Kokoro-82M"),
-                SpecContext(has_gpu=False, docker_memory_bytes=None, hf_token="hf_abc"),
+                SpecContext(docker_memory_bytes=None, hf_token="hf_abc"),
             )
         )
         assert with_token.environment["HF_TOKEN"] == "hf_abc"
+
+
+class TestTranscriptionRuntime:
+    @pytest.fixture
+    def spec(self):
+        return asyncio.run(
+            TranscriptionRuntime().container_spec(
+                DeployRequest(model_id="openai/whisper-small"),
+                SpecContext(docker_memory_bytes=None, hf_token=None),
+            )
+        )
+
+    def test_the_server_is_told_which_direction_to_run(self, spec):
+        assert spec.command[spec.command.index("--modality") + 1] == "transcription"
+
+    def test_it_shares_the_image_with_speech(self, spec):
+        # One image, told at start what it is: they share torch and transformers
+        # entirely, and a second image would double a two gigabyte download.
+        speech_spec = asyncio.run(
+            SpeechRuntime().container_spec(
+                DeployRequest(model_id="hexgrad/Kokoro-82M"),
+                SpecContext(docker_memory_bytes=None, hf_token=None),
+            )
+        )
+        assert spec.image == speech_spec.image
+
+    def test_it_claims_speech_recognition_repositories(self):
+        runtime = TranscriptionRuntime()
+
+        assert runtime.can_serve("openai/whisper-large-v3", library_name="transformers")
+        assert runtime.pipeline_tags == ("automatic-speech-recognition",)

@@ -18,8 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# The CPU wheel index keeps the image around 2 GB instead of roughly 8 GB of CUDA
-# runtime that a machine without an NVIDIA GPU can never use. Installed first, and
+# The CPU wheel index keeps the image around 2 GB: the default x86_64 wheel bundles
+# roughly 6 GB of CUDA runtime, which Docker on a Mac can never use. Installed first, and
 # on its own layer, so the much smaller requirements below can change without
 # re-downloading it.
 RUN pip install --no-cache-dir \

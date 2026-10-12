@@ -19,13 +19,13 @@ import hashlib
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import httpx
-
+from backend.app.audio import server
 from backend.app.config import settings
+from backend.app.inference.models import Modality
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +35,6 @@ TTL_SECONDS = 24 * 60 * 60
 
 #: How often expired entries are swept off disk.
 SWEEP_INTERVAL_SECONDS = 60 * 60
-
-PROGRESS_POLL_SECONDS = 0.6
 
 
 @dataclass
@@ -210,32 +208,18 @@ class SpeechCache:
                 self._persist(entry)
 
     async def _synthesise(self, entry: SpeechEntry) -> None:
-        from backend.app.audio.routes import (
-            REQUEST_TIMEOUT_SECONDS,
-            server_base,
-            upstream_detail,
-        )
-        from backend.app.inference.models import Modality
-
         text, voice = self._texts.get(entry.message_id, ("", None))
-        base = server_base(Modality.SPEECH)
 
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            request = asyncio.create_task(
-                client.post(
-                    f"{base}/audio/speech",
-                    json={"input": text, "voice": voice, "response_format": "wav"},
-                )
-            )
-            watcher = asyncio.create_task(self._watch(client, base, entry, request))
-            try:
-                response = await request
-            finally:
-                watcher.cancel()
+        def report(done: int, total: int) -> None:
+            entry.chunks_done, entry.chunks_total = done, total
+
+        response = await server.post(
+            Modality.SPEECH, "/audio/speech", report, json={"input": text, "voice": voice}
+        )
 
         if response.status_code != 200:
             entry.state = "failed"
-            entry.error = upstream_detail(response, "Synthesis failed")
+            entry.error = server.upstream_detail(response, "Synthesis failed")
             self._persist(entry)
             return
 
@@ -245,20 +229,6 @@ class SpeechCache:
             entry.chunks_done = entry.chunks_total
         self._persist(entry)
         self._texts.pop(entry.message_id, None)
-
-    async def _watch(self, client, base: str, entry: SpeechEntry, request) -> None:
-        while not request.done():
-            await asyncio.sleep(PROGRESS_POLL_SECONDS)
-            try:
-                reading = await client.get(f"{base}/audio/progress", timeout=5.0)
-                if reading.status_code != 200:
-                    continue
-                payload = reading.json()
-            except Exception:
-                continue
-            if payload.get("active"):
-                entry.chunks_total = payload.get("chunks_total", 0)
-                entry.chunks_done = payload.get("chunks_done", 0)
 
     async def _sweep_forever(self) -> None:
         while True:

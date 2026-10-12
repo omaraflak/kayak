@@ -98,7 +98,6 @@ class TestVllmApiBaseFollowsTheServer:
                 endpoint="http://localhost:8002/v1",
             ),
         )
-        monkeypatch.delenv("VLLM_API_BASE", raising=False)
 
         kwargs = llm._build_llm_kwargs("vllm/Org/Model", messages=[])
 
@@ -106,15 +105,14 @@ class TestVllmApiBaseFollowsTheServer:
 
     def test_without_a_ready_server_the_configured_base_stands(self, monkeypatch):
         from backend.app import llm
-        from backend.app.config import settings
+        from backend.app.config import local_api_base, settings
         from backend.app.inference import metal
         from backend.app.inference.registry import text_manager as vllm_manager
         from backend.app.inference.models import MetalStatus, DeploymentProgress
 
         monkeypatch.setattr(metal, "read_status", lambda: MetalStatus())
         monkeypatch.setattr(vllm_manager, "get_status", lambda: DeploymentProgress())
-        monkeypatch.delenv("VLLM_API_BASE", raising=False)
 
         kwargs = llm._build_llm_kwargs("vllm/Org/Model", messages=[])
 
-        assert kwargs["api_base"] == settings.VLLM_API_BASE
+        assert kwargs["api_base"] == local_api_base(settings.VLLM_PORT)

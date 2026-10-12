@@ -1,22 +1,21 @@
 import React, { useMemo, useState } from 'react';
-import { HostCapability, VLLMDeployRequest } from '../../types';
+import { HostCapability, Modality, VLLMDeployRequest } from '../../types';
 import { estimateModelSize, judgeFit, maxWorkingMemoryGB } from './modelSizing';
 import { AlertTriangle, Cpu, Rocket, ShieldAlert, X, Zap } from 'lucide-react';
 
 /**
  * Confirms and configures a local deployment.
  *
- * The deploy API has always accepted a context length, a memory fraction and a dtype,
- * but no caller exposed them -- so the one thing a user needs after an out-of-memory
- * failure, namely the ability to ask for less, was unreachable. It also stands between
- * the user and two irreversible-feeling side effects: a very large download, and
- * replacing whatever model is currently serving.
+ * Offers what the runtime honours -- context length, KV cache, precision, and the
+ * container's memory and cores -- so that after an out-of-memory failure a user can
+ * ask for less. It also stands between the user and two irreversible-feeling side
+ * effects: a very large download, and replacing whatever model is currently serving.
  */
 
 const DTYPE_OPTIONS = [
-  { value: 'auto', label: 'Auto', hint: "Use the checkpoint's own precision." },
-  { value: 'bfloat16', label: 'bfloat16', hint: 'Wide range, the usual choice on modern GPUs.' },
-  { value: 'float16', label: 'float16', hint: 'For accelerators without bfloat16 support.' },
+  { value: 'auto', label: 'Auto', hint: 'bfloat16, which the CPU runtime uses unless told otherwise.' },
+  { value: 'bfloat16', label: 'bfloat16', hint: 'Half the memory of full precision.' },
+  { value: 'float32', label: 'float32', hint: 'Full precision, at twice the memory of bfloat16.' },
 ];
 
 const CONTEXT_PRESETS = [
@@ -31,6 +30,8 @@ const CONTEXT_PRESETS = [
 
 interface VLLMLaunchDialogProps {
   modelId: string;
+  /** Which local server this starts. Only text generation has a GPU alternative. */
+  modality: Modality;
   /**
    * Settings the target runtime actually honours, from its descriptor.
    *
@@ -50,6 +51,7 @@ interface VLLMLaunchDialogProps {
 
 export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
   modelId,
+  modality,
   tunableFields,
   capability,
   replacingModelId,
@@ -59,7 +61,6 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
 }) => {
   const [maxModelLen, setMaxModelLen] = useState<number | null>(null);
   const [dtype, setDtype] = useState('auto');
-  const [gpuMemory, setGpuMemory] = useState(0.9);
   const [trustRemoteCode, setTrustRemoteCode] = useState(false);
   /**
    * Whether the target runtime honours a setting.
@@ -68,17 +69,10 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
    * before other runtimes existed.
    */
   const offers = (field: string): boolean => !tunableFields || tunableFields.includes(field);
-  const [enforceEager, setEnforceEager] = useState(false);
 
-  // The accelerator the server reports, not the VRAM figure: the cards are only
-  // countable from a process that can see them, while what decides the image is
-  // whether the daemon can give a container one at all.
-  const hasGPU = capability?.accelerator === 'cuda';
-  const availableGB = (capability?.total_vram_mb ?? 0) / 1024;
   const systemMemoryGB = (capability?.total_memory_mb ?? 0) / 1024;
   const totalCpus = capability?.total_cpus ?? 0;
   const estimate = useMemo(() => estimateModelSize(modelId), [modelId]);
-  const fit = judgeFit(estimate, availableGB);
 
   // Container-level allocation. Everything Docker has is the recommended default
   // for model serving; lowering either protects the rest of the machine.
@@ -90,6 +84,9 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
     maxContainerMemoryGB
   );
   const effectiveContainerCpus = Math.min(containerCpus ?? totalCpus, Math.max(totalCpus, 1));
+  // Judged against the container's allocation, so lowering it warns before the
+  // start fails rather than after.
+  const fit = judgeFit(estimate, systemMemoryGB > 0 ? effectiveContainerMemoryGB : 0);
 
   // Sized from the container's allocation by the server; adjustable here because it
   // is the setting that decides whether a CPU deployment starts at all.
@@ -112,10 +109,8 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
       model_id: modelId,
       max_model_len: maxModelLen,
       dtype,
-      gpu_memory_utilization: gpuMemory,
-      enforce_eager: enforceEager,
       trust_remote_code: trustRemoteCode,
-      cpu_kvcache_space_gb: hasGPU ? null : effectiveKvCacheGB,
+      cpu_kvcache_space_gb: offers('cpu_kvcache_space_gb') ? effectiveKvCacheGB : null,
       // "All of it" is expressed as no limit at all, so a machine whose Docker
       // allocation grows later is not silently pinned to today's figure.
       memory_limit_gb:
@@ -165,31 +160,31 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
               </Notice>
             )}
 
-            {!hasGPU && (
-              <Notice tone="warning" icon={<Cpu className="w-3.5 h-3.5" />}>
-                No GPU detected, so this runs on the CPU image. Expect generation measured in
-                seconds per token — usable for small models, painful for anything else.
+            {modality === 'text' && (
+              <Notice tone="neutral" icon={<Cpu className="w-3.5 h-3.5" />}>
+                Runs on the CPU inside Docker, which is slow for anything but small models.
+                On an Apple Silicon Mac, MLX models run on the GPU instead.
               </Notice>
             )}
 
             {fit === 'too-large' && estimate && (
               <Notice tone="danger" icon={<AlertTriangle className="w-3.5 h-3.5" />}>
-                This model needs roughly {estimate.requiredGB} GB but this machine has{' '}
-                {availableGB.toFixed(0)} GB of VRAM. It will most likely fail to load — try a
-                smaller context length, a quantized build, or a smaller model.
+                This model needs roughly {estimate.requiredGB} GB but the container has{' '}
+                {effectiveContainerMemoryGB} GB. It will most likely fail to load — try a
+                quantized build or a smaller model, or give Docker Desktop more memory.
               </Notice>
             )}
 
             {fit === 'tight' && estimate && (
               <Notice tone="warning" icon={<AlertTriangle className="w-3.5 h-3.5" />}>
-                About {estimate.requiredGB} GB needed against {availableGB.toFixed(0)} GB available.
-                It may load, but lowering the context length gives it room.
+                About {estimate.requiredGB} GB needed against {effectiveContainerMemoryGB} GB
+                available. It may load, but a shorter context length gives it room.
               </Notice>
             )}
 
             {!isCached && (
               <Notice tone="neutral" icon={<Zap className="w-3.5 h-3.5" />}>
-                These weights are not on this machine yet
+                These weights are not on this Mac yet
                 {estimate ? `, so roughly ${estimate.weightsGB} GB will be downloaded` : ''}. The
                 first start takes as long as the download does.
               </Notice>
@@ -297,22 +292,7 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
             </Field>
           )}
 
-          {offers('gpu_memory_utilization') && hasGPU ? (
-            <Field
-              label={`GPU memory fraction — ${Math.round(gpuMemory * 100)}%`}
-              hint="How much of the card vLLM reserves. Lower it to leave room for anything else using the GPU."
-            >
-              <input
-                type="range"
-                min={0.3}
-                max={0.98}
-                step={0.01}
-                value={gpuMemory}
-                onChange={(event) => setGpuMemory(Number.parseFloat(event.target.value))}
-                className="w-full accent-md-primary cursor-pointer"
-              />
-            </Field>
-          ) : offers('cpu_kvcache_space_gb') ? (
+          {offers('cpu_kvcache_space_gb') && (
             <Field
               label={`Conversation memory — ${effectiveKvCacheGB} GB`}
               hint={
@@ -343,18 +323,9 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
                 </span>
               </div>
             </Field>
-          ) : null}
+          )}
 
           <div className="space-y-2.5 pt-1">
-            {offers('enforce_eager') && (
-              <Toggle
-                checked={enforceEager}
-                onChange={setEnforceEager}
-                label="Disable CUDA graphs"
-                hint="Slower, but uses noticeably less memory. Worth trying after a failed load."
-              />
-            )}
-
             {offers('trust_remote_code') && (
               <Toggle
                 checked={trustRemoteCode}

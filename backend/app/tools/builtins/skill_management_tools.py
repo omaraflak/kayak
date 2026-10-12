@@ -17,10 +17,7 @@ def create_or_update_skill(name: str, description: str, instructions: str) -> st
         description=description,
         instructions=instructions,
     )
-    return (
-        f"Skill '{skill.name}' was successfully saved and registered to"
-        " data/skills/{skill.name}/SKILL.md!"
-    )
+    return f"Skill '{skill.name}' was saved to data/skills/{skill.name}/SKILL.md."
 
 
 @tool_metadata(category=ToolCategory.KNOWLEDGE, risk=ToolRisk.LOW, read_only=True)

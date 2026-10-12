@@ -5,6 +5,8 @@ from pathlib import Path
 import tempfile
 from typing import Any, Dict
 
+from backend.app.providers import PROVIDERS
+
 logger = logging.getLogger(__name__)
 
 # Base Paths
@@ -31,12 +33,7 @@ for directory in [DATA_DIR, AGENTS_DIR, SKILLS_DIR, TOOLS_DIR, WORKSPACES_DIR]:
 # not configured beforehand, so a credential is something you type into the Settings
 # page once the app is already running -- never something the user has to place in the
 # environment before it will start.
-_PERSISTABLE_KEYS = [
-    "OPENAI_API_KEY",
-    "GEMINI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "HUGGINGFACE_API_KEY",
-]
+_PERSISTABLE_KEYS = [provider.api_key_setting for provider in PROVIDERS]
 
 
 #: Owner read/write only. Anything wider exposes provider keys to every account on
@@ -49,39 +46,23 @@ def _split_csv(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def running_in_container(
-    dockerenv: Path = Path("/.dockerenv"),
-    cgroup: Path = Path("/proc/1/cgroup"),
-) -> bool:
-    """Reports whether this process is itself running inside a container.
+def running_in_container(dockerenv: Path = Path("/.dockerenv")) -> bool:
+    """Reports whether this process runs in a container rather than on the Mac itself.
 
     Args:
         dockerenv: Marker file Docker places in every container.
-        cgroup: Init process control groups, which name the container runtime.
-
-    Returns:
-        bool: True when running inside a container.
     """
-    if dockerenv.exists():
-        return True
-    try:
-        return any(
-            marker in cgroup.read_text()
-            for marker in ("docker", "containerd", "kubepods")
-        )
-    except OSError:
-        return False
+    return dockerenv.exists()
 
 
-def default_vllm_api_base(port: int, in_container: bool) -> str:
-    """Chooses where to reach the vLLM server by default.
+def local_api_base(port: int) -> str:
+    """The OpenAI-compatible base URL of a model server published on a Mac port.
 
-    The server always publishes to a port on the host. How that is addressed depends on
-    which side of the container boundary the caller sits on: `host.docker.internal`
-    resolves only from inside a container, so using it unconditionally left a Kayak run
-    directly on the host unable to reach a model it had just started.
+    `host.docker.internal` is how a container reaches the Mac on Docker Desktop;
+    it does not resolve on the Mac itself, where the published port is simply
+    localhost.
     """
-    host = "host.docker.internal" if in_container else "localhost"
+    host = "host.docker.internal" if settings.RUNNING_IN_CONTAINER else "localhost"
     return f"http://{host}:{port}/v1"
 
 
@@ -113,17 +94,16 @@ def _write_private_json(path: Path, payload: Dict[str, Any]) -> None:
 class Settings:
 
     def __init__(self):
-        # Server. Kayak grants agents shell and filesystem access, so it binds to
-        # loopback unless explicitly told otherwise; the container image overrides
-        # this to 0.0.0.0 because Docker isolates the network itself.
         # Stamped into the image at build time by the release workflow. A
         # container cannot read the version label of the image it is running
         # from, so the value has to be baked in rather than looked up.
         self.VERSION: str = os.getenv("KAYAK_VERSION", "dev")
 
+        # Kayak grants agents shell and filesystem access, so it binds to loopback
+        # unless told otherwise; the image overrides this to 0.0.0.0 because
+        # Docker isolates the container's network itself.
         self.HOST: str = os.getenv("KAYAK_HOST", "127.0.0.1")
         self.PORT: int = int(os.getenv("KAYAK_PORT", "8000"))
-        self.DEBUG: bool = os.getenv("KAYAK_DEBUG", "false").lower() == "true"
 
         # Shared secret required on every /api request when set. Left empty the
         # server is unauthenticated, which is only safe on a loopback bind.
@@ -174,14 +154,10 @@ class Settings:
         self.ANTHROPIC_API_KEY: str = ""
         self.HUGGINGFACE_API_KEY: str = ""
 
-        self.VLLM_PORT: int = int(os.getenv("KAYAK_VLLM_PORT", "8001"))
         self.RUNNING_IN_CONTAINER: bool = running_in_container()
-        self.VLLM_API_BASE: str = os.getenv(
-            "VLLM_API_BASE",
-            default_vllm_api_base(self.VLLM_PORT, self.RUNNING_IN_CONTAINER),
-        )
-        # Audio servers run alongside the text one, so each needs a port of its own.
-        # All of them fall back to neighbouring ports when theirs is taken.
+        # Each local model server needs a port of its own, and falls back to the
+        # neighbouring ones when its port is taken.
+        self.VLLM_PORT: int = int(os.getenv("KAYAK_VLLM_PORT", "8001"))
         self.TTS_PORT: int = int(os.getenv("KAYAK_TTS_PORT", "8011"))
         self.STT_PORT: int = int(os.getenv("KAYAK_STT_PORT", "8021"))
         #: Image serving both speech synthesis and transcription -- one runtime, told
@@ -191,15 +167,10 @@ class Settings:
             "KAYAK_AUDIO_IMAGE", "omaraflak/kayak-audio:latest"
         )
 
-        # Docker Sandbox Configuration
+        #: Image every conversation's container runs. Pulled on first use when this
+        #: Mac does not have it; the launcher pulls it ahead of time.
         self.DOCKER_SANDBOX_IMAGE: str = os.getenv(
-            "KAYAK_SANDBOX_IMAGE", "kayak-sandbox:latest"
-        )
-        self.DOCKER_SOCKET_PATH: str = os.getenv(
-            "DOCKER_SOCKET_PATH", "/var/run/docker.sock"
-        )
-        self.SANDBOX_TIMEOUT_SECONDS: int = int(
-            os.getenv("SANDBOX_TIMEOUT_SECONDS", "3600")
+            "KAYAK_SANDBOX_IMAGE", "omaraflak/kayak-sandbox:latest"
         )
 
         self.load_from_file()

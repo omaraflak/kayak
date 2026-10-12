@@ -54,6 +54,16 @@ class UnreachableClient:
 
 
 @pytest.fixture
+def deploy_env(tmp_path, monkeypatch):
+    """Lets a deployment run against a fake client without touching the real data dir."""
+    from backend.app.inference import manager as manager_module
+
+    monkeypatch.setattr(manager_module.settings, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(manager_module.docker_host, "host_path", lambda path: str(path))
+    return manager_module
+
+
+@pytest.fixture
 def manager(monkeypatch) -> ServerManager:
     """A manager with Docker stubbed out and no live endpoint."""
     monkeypatch.setattr("backend.app.inference.manager.httpx.AsyncClient", UnreachableClient)
@@ -95,7 +105,7 @@ class TestCrashedContainerIsReported:
         assert status.state == ServerState.ERROR
         # The remedy belongs in the message; the exit code alone explains nothing.
         assert "memory" in (status.error or "").lower()
-        assert "max-model-len" in (status.error or "")
+        assert "context length" in (status.error or "")
 
     def test_a_running_container_still_reports_as_initializing(self, manager):
         manager._client = FakeDockerClient(FakeContainer("running"))
@@ -751,26 +761,14 @@ class TestContainerResourceLimits:
                     outer.run_kwargs = kwargs
                     raise RuntimeError("stop here: the container itself is not under test")
 
-            class Info:
-                pass
-
             self.images = Images()
             self.containers = Containers()
 
         def info(self):
             return {"MemTotal": 32 * 1024 ** 3, "NCPU": 16}
 
-    def test_memory_and_cpu_limits_are_applied_to_the_container(self, manager, tmp_path, monkeypatch):
-        from backend.app.inference import manager as manager_module
+    def test_memory_and_cpu_limits_are_applied_to_the_container(self, manager, tmp_path, deploy_env):
         from backend.app.inference.models import DeployRequest
-
-        monkeypatch.setattr(manager_module.settings, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(manager_module.shutil, "which", lambda _name: None)  # CPU path
-        monkeypatch.setattr(
-            manager_module.DockerPathResolver,
-            "resolve_volume_source",
-            staticmethod(lambda path, fallback_named_volume=None: str(path)),
-        )
 
         docker_client = self.RecordingDocker()
         manager._client = docker_client
@@ -791,17 +789,8 @@ class TestContainerResourceLimits:
         # The KV cache is sized from the 12 GiB allocation, not the 32 GiB machine.
         assert docker_client.run_kwargs["environment"]["VLLM_CPU_KVCACHE_SPACE"] == "3"
 
-    def test_without_limits_the_container_is_unbounded(self, manager, tmp_path, monkeypatch):
-        from backend.app.inference import manager as manager_module
+    def test_without_limits_the_container_is_unbounded(self, manager, tmp_path, deploy_env):
         from backend.app.inference.models import DeployRequest
-
-        monkeypatch.setattr(manager_module.settings, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(manager_module.shutil, "which", lambda _name: None)
-        monkeypatch.setattr(
-            manager_module.DockerPathResolver,
-            "resolve_volume_source",
-            staticmethod(lambda path, fallback_named_volume=None: str(path)),
-        )
 
         docker_client = self.RecordingDocker()
         manager._client = docker_client
@@ -858,19 +847,6 @@ class TestPortFallback:
         def info(self):
             return {"MemTotal": 16 * 1024 ** 3, "NCPU": 8}
 
-    @pytest.fixture
-    def deploy_env(self, manager, tmp_path, monkeypatch):
-        from backend.app.inference import manager as manager_module
-
-        monkeypatch.setattr(manager_module.settings, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(manager_module.shutil, "which", lambda _name: None)
-        monkeypatch.setattr(
-            manager_module.DockerPathResolver,
-            "resolve_volume_source",
-            staticmethod(lambda path, fallback_named_volume=None: str(path)),
-        )
-        return manager_module
-
     def test_a_taken_port_falls_through_to_the_next_free_one(self, manager, tmp_path, deploy_env):
         from backend.app.inference.models import DeployRequest
 
@@ -904,17 +880,15 @@ class TestPortFallback:
         assert "No free port" in (manager.get_status().error or "")
 
     def test_api_base_follows_the_chosen_port(self, manager):
-        from backend.app.config import settings
+        from backend.app.config import local_api_base, settings
 
-        assert manager._api_base_for_port(settings.VLLM_PORT) == settings.VLLM_API_BASE
+        assert manager._api_base_for_port(settings.VLLM_PORT) == local_api_base(settings.VLLM_PORT)
         other = manager._api_base_for_port(settings.VLLM_PORT + 1)
         assert str(settings.VLLM_PORT + 1) in other
         assert other.endswith("/v1")
 
-    def test_probe_urls_target_the_active_port(self, manager):
-        urls = manager._get_endpoint_urls(9107)
-        assert urls, "expected probe URLs"
-        assert all(":9107/" in url for url in urls)
+    def test_the_health_probe_targets_the_active_port(self, manager):
+        assert ":9107/v1/models" in manager._health_url(9107)
 
     def test_reads_the_published_port_from_a_discovered_container(self, manager):
         container = FakeContainer("running")

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BackgroundTask } from '../../types';
 import {
-  acceptsInput,
   orderTasks,
   runningTaskCount,
   subagentConversationId,
@@ -69,22 +68,6 @@ describe('orderTasks', () => {
     orderTasks(input);
 
     expect(input.map((entry) => entry.id)).toEqual(['done', 'live']);
-  });
-});
-
-describe('acceptsInput', () => {
-  it('allows stdin on a running shell process', () => {
-    expect(acceptsInput(task({ task_type: 'shell_command', status: 'running' }))).toBe(true);
-  });
-
-  it('refuses a finished process', () => {
-    expect(acceptsInput(task({ task_type: 'shell_command', status: 'completed' }))).toBe(false);
-  });
-
-  it('refuses a sub-agent', () => {
-    // A sub-agent takes its instructions from the agent that spawned it; there is no
-    // channel for the user to steer it mid-run.
-    expect(acceptsInput(task({ task_type: 'subagent', status: 'running' }))).toBe(false);
   });
 });
 

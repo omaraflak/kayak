@@ -26,9 +26,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import httpx
-
-from backend.app.audio import store
+from backend.app.audio import server, store
 from backend.app.audio.models import (
     AudioJob,
     AudioKind,
@@ -36,12 +34,9 @@ from backend.app.audio.models import (
     JobState,
     SpeechRequest,
 )
+from backend.app.inference.models import Modality
 
 logger = logging.getLogger(__name__)
-
-#: How often the worker asks the audio server how far it has got. Chunks take
-#: seconds, so this is frequent enough to move a ring and cheap enough to ignore.
-PROGRESS_POLL_SECONDS = 0.75
 
 #: Finished jobs kept for the page to show. Older ones fall off; their clips and
 #: transcripts remain in the store, which is the durable record.
@@ -152,27 +147,14 @@ class JobQueue(ABC):
     async def _process(self, job: AudioJob) -> None:
         """Does the work and records the result on the job."""
 
-    async def _watch_progress(
-        self,
-        client: httpx.AsyncClient,
-        base: str,
-        job: AudioJob,
-        request: asyncio.Task,
-    ) -> None:
+    @staticmethod
+    def _progress(job: AudioJob) -> server.ProgressCallback:
         """Copies the server's chunk counter onto the job while it works."""
-        while not request.done():
-            await asyncio.sleep(PROGRESS_POLL_SECONDS)
-            try:
-                response = await client.get(f"{base}/audio/progress", timeout=5.0)
-                if response.status_code != 200:
-                    continue
-                payload = response.json()
-            except Exception:
-                # The server is busy; a missed poll is not a failure.
-                continue
-            if payload.get("active"):
-                job.chunks_total = payload.get("chunks_total", 0)
-                job.chunks_done = payload.get("chunks_done", 0)
+
+        def report(done: int, total: int) -> None:
+            job.chunks_done, job.chunks_total = done, total
+
+        return report
 
     def _complete(self, job: AudioJob, item_id: str) -> None:
         job.item_id = item_id
@@ -199,7 +181,6 @@ class SynthesisQueue(JobQueue):
                 text=request.text,
                 voice=request.voice,
                 speed=request.speed,
-                response_format=request.response_format,
                 model_id=model_id,
                 state=JobState.QUEUED,
                 created_at=time.time(),
@@ -207,51 +188,28 @@ class SynthesisQueue(JobQueue):
         )
 
     async def _process(self, job: AudioJob) -> None:
-        # Imported here rather than at module scope: the routes module imports this
-        # one, and the dependency the other way would be a cycle.
-        from backend.app.audio.routes import (
-            REQUEST_TIMEOUT_SECONDS,
-            server_base,
-            upstream_detail,
-            wav_duration,
+        response = await server.post(
+            Modality.SPEECH,
+            "/audio/speech",
+            self._progress(job),
+            json={"input": job.text, "voice": job.voice, "speed": job.speed},
         )
-        from backend.app.inference.models import Modality
-
-        base = server_base(Modality.SPEECH)
-
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            request = asyncio.create_task(
-                client.post(
-                    f"{base}/audio/speech",
-                    json={
-                        "input": job.text,
-                        "voice": job.voice,
-                        "speed": job.speed,
-                        "response_format": job.response_format,
-                    },
-                )
-            )
-            watcher = asyncio.create_task(self._watch_progress(client, base, job, request))
-            try:
-                response = await request
-            finally:
-                watcher.cancel()
 
         if response.status_code != 200:
             job.state = JobState.FAILED
-            job.error = upstream_detail(response, "Synthesis failed")
+            job.error = server.upstream_detail(response, "Synthesis failed")
             job.finished_at = time.time()
             return
 
         audio = response.content
         item = store.save_audio(
             data=audio,
-            suffix=job.response_format,
+            suffix="wav",
             kind=AudioKind.CLIP,
             model_id=job.model_id,
             text=job.text,
             voice=job.voice,
-            duration_seconds=wav_duration(audio),
+            duration_seconds=server.wav_duration(audio),
         )
         self._complete(job, item.id)
 
@@ -304,38 +262,21 @@ class TranscriptionQueue(JobQueue):
             path.unlink(missing_ok=True)
 
     async def _process(self, job: AudioJob) -> None:
-        from backend.app.audio.routes import (
-            REQUEST_TIMEOUT_SECONDS,
-            server_base,
-            upstream_detail,
-        )
-        from backend.app.inference.models import Modality
-
         path = self._uploads.get(job.id)
         if path is None or not path.is_file():
             raise FileNotFoundError("The uploaded recording is no longer available.")
 
-        base = server_base(Modality.TRANSCRIPTION)
-        payload = path.read_bytes()
-        data = {"language": job.language} if job.language else None
-
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            request = asyncio.create_task(
-                client.post(
-                    f"{base}/audio/transcriptions",
-                    files={"file": (job.source_filename or "recording.wav", payload)},
-                    data=data,
-                )
-            )
-            watcher = asyncio.create_task(self._watch_progress(client, base, job, request))
-            try:
-                response = await request
-            finally:
-                watcher.cancel()
+        response = await server.post(
+            Modality.TRANSCRIPTION,
+            "/audio/transcriptions",
+            self._progress(job),
+            files={"file": (job.source_filename or "recording.wav", path.read_bytes())},
+            data={"language": job.language} if job.language else None,
+        )
 
         if response.status_code != 200:
             job.state = JobState.FAILED
-            job.error = upstream_detail(response, "Transcription failed")
+            job.error = server.upstream_detail(response, "Transcription failed")
             job.finished_at = time.time()
             return
 

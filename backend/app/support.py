@@ -16,6 +16,7 @@ import logging
 import platform
 from typing import Deque, List, Optional
 
+from backend.app import docker_host
 from backend.app.config import settings
 from backend.app.inference import metal
 
@@ -100,10 +101,11 @@ def _docker_environment() -> str:
     like the app refusing to update. It is invisible from anywhere else in
     Kayak, so it is worth stating here.
     """
+    client = docker_host.connect()
+    if client is None:
+        return "unavailable"
     try:
-        import docker as docker_sdk
-
-        info = docker_sdk.from_env().info()
+        info = client.info()
     except Exception as error:  # noqa: BLE001 - any failure is just "unavailable"
         return f"unavailable ({error})"
 
@@ -157,7 +159,7 @@ def build_bundle() -> str:
             "Kayak support bundle",
             "\n",
             _section("Versions", header),
-            _section("GPU inference", metal_lines),
+            _section("Metal inference", metal_lines),
             _section("Docker", _docker_environment()),
             _section("Launcher log", "\n".join(_launcher_log())),
             _section("Kayak server log", "\n".join(recent_logs())),

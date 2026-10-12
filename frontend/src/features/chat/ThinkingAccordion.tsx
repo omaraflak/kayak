@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, ChevronUp, Brain, Loader2, Sparkles } from 'lucide-react';
+import { ChevronDown, ChevronUp, Brain, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -54,7 +54,7 @@ export const ThinkingAccordion: React.FC<ThinkingAccordionProps> = ({
     code({ children, ...props }: CodeProps) {
       const codeStr = String(children).replace(/\n$/, '');
       return (
-        <code className="px-1 py-0.2 rounded bg-md-surface-container-high text-md-on-surface font-mono text-[11px] border border-md-outline-variant" {...props}>
+        <code className="px-1 py-px rounded bg-md-surface-container-high text-md-on-surface font-mono text-[11px] border border-md-outline-variant" {...props}>
           {codeStr}
         </code>
       );
@@ -84,7 +84,7 @@ export const ThinkingAccordion: React.FC<ThinkingAccordionProps> = ({
         </div>
 
         {isThinking && (
-          <span className="inline-flex items-center gap-1 text-[10px] text-md-on-tertiary-container font-medium bg-md-tertiary-container border border-md-outline-variant px-1.5 py-0.2 rounded-full animate-pulse">
+          <span className="inline-flex items-center gap-1 text-[10px] text-md-on-tertiary-container font-medium bg-md-tertiary-container border border-md-outline-variant px-1.5 py-px rounded-full animate-pulse">
             <span>reasoning</span>
           </span>
         )}

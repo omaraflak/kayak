@@ -9,6 +9,8 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
+        // The container terminal is a WebSocket under /api.
+        ws: true,
       },
     },
   },

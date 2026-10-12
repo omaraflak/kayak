@@ -34,13 +34,6 @@ export function orderTasks(tasks: ReadonlyArray<BackgroundTask>): BackgroundTask
   });
 }
 
-/** Whether this task's live output can be typed into. */
-export function acceptsInput(task: BackgroundTask): boolean {
-  // Only a shell process has a stdin. A sub-agent is driven by the agent that
-  // spawned it, and there is no channel for anyone else to send it instructions.
-  return task.task_type === 'shell_command' && isRunning(task);
-}
-
 /** The conversation a sub-agent task's transcript lives in, if it has one. */
 export function subagentConversationId(task: BackgroundTask): string | null {
   if (task.task_type !== 'subagent') return null;

@@ -97,11 +97,3 @@ class TestBroadcasting:
 
         # A reconnecting client is caught up from the snapshot, not the events.
         assert tracker.running_ids() == ["a"]
-
-
-class TestReset:
-    def test_reset_clears_everything(self):
-        tracker = ActivityTracker()
-        tracker.set_running("a")
-        tracker.reset()
-        assert tracker.running_ids() == []

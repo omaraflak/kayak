@@ -2,11 +2,8 @@ from typing import Optional
 from backend.app.agent.history import truncate_tool_result
 from backend.app.agent.sandbox import sandbox_manager
 from backend.app.models import ToolCategory, ToolRisk
+from backend.app.tools.builtins.command_tools import clamp_timeout
 from backend.app.tools.metadata import tool_metadata
-
-# Bounded like run_command: a stuck computation must not wedge the whole turn.
-MAX_PYTHON_TIMEOUT_SECONDS = 600
-DEFAULT_PYTHON_TIMEOUT_SECONDS = 60
 
 
 @tool_metadata(category=ToolCategory.EXECUTION, risk=ToolRisk.HIGH)
@@ -32,11 +29,8 @@ async def run_python(
             " session cannot start."
         )
 
-    if not timeout or timeout <= 0:
-        timeout = DEFAULT_PYTHON_TIMEOUT_SECONDS
-    timeout = min(int(timeout), MAX_PYTHON_TIMEOUT_SECONDS)
-
+    # Bounded like run_command: a stuck computation must not wedge the whole turn.
     result = await sandbox_manager.run_python_code(
-        container_id=container_id, code=code, timeout=timeout
+        container_id=container_id, code=code, timeout=clamp_timeout(timeout)
     )
     return truncate_tool_result(result)

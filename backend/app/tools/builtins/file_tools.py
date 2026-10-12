@@ -1,16 +1,19 @@
 """Workspace file operations, confined to the conversation's workspace root.
 
+The workspace is bind-mounted into the conversation's container at `/workspace`, so
+these tools read and write the same files the agent's shell sees, directly on disk
+and without a round trip through the container.
+
 Every path an agent supplies is untrusted: it can arrive from the model's own
-reasoning or, indirectly, from content the agent fetched off the web. Both the host
-and sandbox implementations therefore resolve symlinks and reject anything landing
-outside the workspace, rather than trusting a relative-looking path to stay put.
+reasoning or, indirectly, from content the agent fetched off the web. Paths are
+therefore resolved, symlinks included, and anything landing outside the workspace is
+refused rather than trusting a relative-looking path to stay put.
 """
 
 import fnmatch
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import List, Optional
-from backend.app.agent.sandbox import sandbox_manager
 from backend.app.models import ToolCategory, ToolRisk
 from backend.app.tools.metadata import tool_metadata
 
@@ -27,8 +30,11 @@ class PathOutsideWorkspaceError(ValueError):
     """Raised when a requested path resolves outside the workspace root."""
 
 
-def resolve_workspace_path(path_str: str, workspace_dir: Optional[Path]) -> Path:
+def resolve_workspace_path(path_str: str, workspace_dir: Path) -> Path:
     """Resolves a path against the workspace root and refuses to leave it.
+
+    Absolute paths are read as the agent sees them, inside its container, where the
+    workspace is `/workspace`.
 
     Args:
         path_str: Relative or absolute path supplied by the agent.
@@ -40,42 +46,27 @@ def resolve_workspace_path(path_str: str, workspace_dir: Optional[Path]) -> Path
     Raises:
         PathOutsideWorkspaceError: If the path escapes the workspace root.
     """
-    base = (workspace_dir if workspace_dir else Path.cwd()).resolve()
-    target = Path(path_str)
-    if not target.is_absolute():
-        target = base / target
+    base = workspace_dir.resolve()
+    target = PurePosixPath(path_str)
+    if target.is_absolute():
+        try:
+            target = target.relative_to(SANDBOX_WORKSPACE_ROOT)
+        except ValueError:
+            raise PathOutsideWorkspaceError(
+                f"Error: Path '{path_str}' is outside the workspace"
+                f" '{SANDBOX_WORKSPACE_ROOT}'. Access denied."
+            )
 
     # resolve() collapses '..' and follows symlinks, so a link planted inside the
     # workspace cannot be used as a way out of it.
-    resolved = target.resolve()
+    resolved = (base / target).resolve()
 
     if resolved != base and base not in resolved.parents:
         raise PathOutsideWorkspaceError(
-            f"Error: Path '{path_str}' resolves outside the workspace root"
-            f" '{base}'. Access denied."
+            f"Error: Path '{path_str}' resolves outside the workspace"
+            f" '{SANDBOX_WORKSPACE_ROOT}'. Access denied."
         )
     return resolved
-
-
-# Mirrors resolve_workspace_path() for code executed inside the sandbox container,
-# where the workspace is always mounted at /workspace.
-_SANDBOX_PRELUDE = f"""
-import sys
-from pathlib import Path
-
-WORKSPACE_ROOT = Path({SANDBOX_WORKSPACE_ROOT!r}).resolve()
-
-
-def _confine(path_str):
-    target = Path(path_str)
-    if not target.is_absolute():
-        target = WORKSPACE_ROOT / target
-    resolved = target.resolve()
-    if resolved != WORKSPACE_ROOT and WORKSPACE_ROOT not in resolved.parents:
-        print(f"Error: Path '{{path_str}}' resolves outside the workspace root. Access denied.")
-        sys.exit(0)
-    return resolved
-"""
 
 
 def _format_file_lines(
@@ -158,8 +149,8 @@ def iter_matching_files(root: Path, pattern: str) -> List[str]:
 async def find_files(
     pattern: str,
     path: Optional[str] = ".",
-    workspace_dir: Optional[Path] = None,
-    container_id: Optional[str] = None,
+    *,
+    workspace_dir: Path,
 ) -> str:
     """Recursively finds workspace files whose names match a glob pattern, ignoring case.
 
@@ -194,8 +185,8 @@ async def read_file(
     path: str,
     start_line: Optional[int] = None,
     end_line: Optional[int] = None,
-    workspace_dir: Optional[Path] = None,
-    container_id: Optional[str] = None,
+    *,
+    workspace_dir: Path,
 ) -> str:
     """Reads the content of a file, optionally slicing specific lines (1-indexed).
 
@@ -204,43 +195,6 @@ async def read_file(
         start_line: Optional starting line number (1-indexed, inclusive).
         end_line: Optional ending line number (1-indexed, inclusive).
     """
-    if container_id:
-        script = _SANDBOX_PRELUDE + f"""
-path_str = {path!r}
-target = _confine(path_str)
-
-if not target.exists():
-    print(f"Error: File '{{path_str}}' does not exist.")
-    sys.exit(0)
-if target.is_dir():
-    print(f"Error: '{{path_str}}' is a directory, not a file.")
-    sys.exit(0)
-
-try:
-    content = target.read_text(encoding="utf-8", errors="replace")
-    lines = content.splitlines(keepends=True)
-    start_line = {start_line!r}
-    end_line = {end_line!r}
-    max_lines = {MAX_FILE_LINES}
-    max_chars = {MAX_FILE_CHARS}
-    if start_line is not None or end_line is not None:
-        s = max(1, start_line) if start_line else 1
-        e = min(len(lines), end_line) if end_line else len(lines)
-        body = "".join([f"{{i + s:4d}} | {{line}}" for i, line in enumerate(lines[s - 1:e])])
-    elif len(lines) <= max_lines:
-        body = "".join([f"{{i + 1:4d}} | {{line}}" for i, line in enumerate(lines)])
-    else:
-        body = f"File has {{len(lines)}} lines. Showing first {{max_lines}} lines:\\n" + "".join(
-            [f"{{i + 1:4d}} | {{line}}" for i, line in enumerate(lines[:max_lines])]
-        )
-    if len(body) > max_chars:
-        body = body[:max_chars] + f"\\n... [truncated at {{max_chars}} characters; read a specific line range to see more]"
-    print(body, end="")
-except Exception as e:
-    print(f"Error reading file '{{path_str}}': {{str(e)}}")
-"""
-        return await sandbox_manager.exec_python(container_id, script)
-
     try:
         file_path = resolve_workspace_path(path, workspace_dir)
     except PathOutsideWorkspaceError as e:
@@ -263,8 +217,8 @@ except Exception as e:
 async def write_file(
     path: str,
     content: str,
-    workspace_dir: Optional[Path] = None,
-    container_id: Optional[str] = None,
+    *,
+    workspace_dir: Path,
 ) -> str:
     """Creates a new file or overwrites an existing file with the provided content.
 
@@ -272,21 +226,6 @@ async def write_file(
         path: Path where the file should be saved, relative to the workspace root.
         content: Exact text content to write into the file.
     """
-    if container_id:
-        script = _SANDBOX_PRELUDE + f"""
-path_str = {path!r}
-content = {content!r}
-target = _confine(path_str)
-
-try:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8")
-    print(f"Successfully wrote {{len(content)}} characters to '{{path_str}}'.")
-except Exception as e:
-    print(f"Error writing to file '{{path_str}}': {{str(e)}}")
-"""
-        return await sandbox_manager.exec_python(container_id, script)
-
     try:
         file_path = resolve_workspace_path(path, workspace_dir)
     except PathOutsideWorkspaceError as e:
@@ -305,8 +244,8 @@ async def edit_file(
     path: str,
     target: str,
     replacement: str,
-    workspace_dir: Optional[Path] = None,
-    container_id: Optional[str] = None,
+    *,
+    workspace_dir: Path,
 ) -> str:
     """Edits an existing file by replacing an exact occurrence of target text with replacement text.
 
@@ -315,34 +254,6 @@ async def edit_file(
         target: The exact text sequence currently in the file to be replaced.
         replacement: The new replacement text.
     """
-    if container_id:
-        script = _SANDBOX_PRELUDE + f"""
-path_str = {path!r}
-target_str = {target!r}
-replacement_str = {replacement!r}
-target_path = _confine(path_str)
-
-if not target_path.exists():
-    print(f"Error: File '{{path_str}}' does not exist.")
-    sys.exit(0)
-
-try:
-    content = target_path.read_text(encoding="utf-8")
-    count = content.count(target_str)
-    if count == 0:
-        print(f"Error: Target text not found in '{{path_str}}'. Make sure whitespace and indentation match exactly.")
-        sys.exit(0)
-    if count > 1:
-        print(f"Error: Target text occurs {{count}} times in '{{path_str}}'. Please provide more surrounding context to ensure a unique match.")
-        sys.exit(0)
-
-    target_path.write_text(content.replace(target_str, replacement_str, 1), encoding="utf-8")
-    print(f"Successfully updated '{{path_str}}'.")
-except Exception as e:
-    print(f"Error editing file '{{path_str}}': {{str(e)}}")
-"""
-        return await sandbox_manager.exec_python(container_id, script)
-
     try:
         file_path = resolve_workspace_path(path, workspace_dir)
     except PathOutsideWorkspaceError as e:
@@ -368,45 +279,14 @@ except Exception as e:
 @tool_metadata(category=ToolCategory.FILESYSTEM, risk=ToolRisk.LOW, read_only=True)
 async def list_directory(
     path: Optional[str] = ".",
-    workspace_dir: Optional[Path] = None,
-    container_id: Optional[str] = None,
+    *,
+    workspace_dir: Path,
 ) -> str:
     """Lists files and directories in the specified path.
 
     Args:
         path: Directory path to list, relative to the workspace root.
     """
-    if container_id:
-        script = _SANDBOX_PRELUDE + f"""
-path_str = {(path or ".")!r}
-target = _confine(path_str)
-
-if not target.exists():
-    print(f"Error: Directory '{{path_str}}' does not exist.")
-    sys.exit(0)
-if not target.is_dir():
-    print(f"Error: '{{path_str}}' is a file, not a directory.")
-    sys.exit(0)
-
-try:
-    items = sorted(target.iterdir())
-    max_entries = {MAX_DIR_ENTRIES}
-    output = []
-    for item in items[:max_entries]:
-        prefix = "[DIR] " if item.is_dir() else "[FILE]"
-        try:
-            size = f" ({{item.stat().st_size}} bytes)" if not item.is_dir() else ""
-        except OSError:
-            size = ""
-        output.append(f"{{prefix}} {{item.name}}{{size}}")
-    if len(items) > max_entries:
-        output.append(f"... [{{len(items) - max_entries}} more entries omitted]")
-    print("\\n".join(output) if output else f"Directory '{{path_str}}' is empty.")
-except Exception as e:
-    print(f"Error listing directory '{{path_str}}': {{str(e)}}")
-"""
-        return await sandbox_manager.exec_python(container_id, script)
-
     try:
         dir_path = resolve_workspace_path(path or ".", workspace_dir)
     except PathOutsideWorkspaceError as e:

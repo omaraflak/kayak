@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 from typing import Dict, List
 
@@ -7,6 +6,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from backend.app import sse
 from backend.app.config import settings
 from backend.app.inference import metal, registry
 from backend.app.inference.cache import CachePathError
@@ -14,7 +14,6 @@ from backend.app.inference.models import (
     DeployRequest,
     DeploymentProgress,
     HostCapability,
-    MetalStartRequest,
     MetalStatus,
     Modality,
     ModelCacheInfo,
@@ -98,58 +97,13 @@ async def get_all_status() -> Dict[str, DeploymentProgress]:
 
 @router.get("/hardware", response_model=HostCapability)
 async def get_host_capability() -> HostCapability:
-    """Reports what this machine can serve: Docker, accelerators, and image state."""
+    """Reports what Docker can give a model container, and whether vLLM is pulled."""
     return await registry.text_manager.get_host_capability()
 
 
 @router.get("/metal", response_model=MetalStatus)
 async def get_metal_status() -> MetalStatus:
     """Reports Metal inference as the desktop launcher currently sees it."""
-    return metal.read_status()
-
-
-@router.post("/metal/start", response_model=MetalStatus)
-async def start_metal(request: MetalStartRequest) -> MetalStatus:
-    """Asks the launcher to serve a text model on the host GPU.
-
-    Kayak cannot start this itself: Metal is unreachable from inside a
-    container, so the request is recorded for the launcher to act on. The reply
-    is the state at the moment of asking, not the result -- the caller polls
-    ``GET /metal`` to watch it come up.
-    """
-    model_id = request.model_id.strip()
-    status = metal.read_status()
-
-    if not status.supported:
-        logger.warning(
-            "Metal start refused for %s: the launcher reports it unsupported (detail: %s)",
-            model_id,
-            status.detail or "none",
-        )
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Metal inference needs the Kayak launcher running on an Apple Silicon Mac."
-            ),
-        )
-    if not metal.is_mlx_model(model_id):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Metal serves MLX models only. Choose a repository published under "
-                "mlx-community."
-            ),
-        )
-
-    logger.info("Asking the launcher to serve %s on the GPU", model_id)
-    await registry.text_manager.deploy_model(DeployRequest(model_id=model_id))
-    return metal.read_status()
-
-
-@router.post("/metal/stop", response_model=MetalStatus)
-async def stop_metal() -> MetalStatus:
-    """Asks the launcher to stop the Metal server."""
-    await registry.text_manager.stop_server()
     return metal.read_status()
 
 
@@ -191,10 +145,9 @@ async def delete_cached_model(repo_id: str) -> Dict[str, object]:
     return {"status": "deleted", "repo_id": repo_id, "freed_bytes": freed}
 
 
-# Modality-scoped routes are declared last on purpose. FastAPI matches in
-# declaration order, and `/{modality}/stop` would otherwise swallow
-# `/metal/stop` -- matching the shape, then rejecting "metal" as an unknown
-# modality instead of ever reaching the Metal route.
+# Modality-scoped routes are declared last on purpose: FastAPI matches in
+# declaration order, and `/{modality}/status` would otherwise swallow the fixed
+# routes above.
 @router.get("/{modality}/status", response_model=DeploymentProgress)
 async def get_status(modality: Modality) -> DeploymentProgress:
     """Fetches one server's lifecycle state, health, and logs tail."""
@@ -252,24 +205,14 @@ async def stream_events() -> StreamingResponse:
     """
     queue = registry.subscribe()
 
-    async def event_generator():
+    async def frames():
         try:
             while True:
                 data = await queue.get()
-                event_type = data.get("type", "update")
-                payload = json.dumps(data)
-                yield f"event: {event_type}\ndata: {payload}\n\n"
+                yield sse.frame(data, event=data.get("type", "update"))
         except asyncio.CancelledError:
             pass
         finally:
             registry.unsubscribe(queue)
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return sse.response(frames())

@@ -8,6 +8,8 @@ a real shell here, so what passes is the exact behaviour in the container.
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from backend.app.tools.builtins.command_tools import (
     CWD_SENTINEL,
     extract_cwd,
@@ -68,35 +70,82 @@ class TestExtractCwd:
         assert cwd == "/workspace/deep"
 
 
+class FakeSandbox:
+    """Runs commands in a local shell, with a temporary directory as /workspace."""
+
+    def __init__(self, workspace: Path):
+        self.workspace = str(workspace)
+
+    async def exec_command(self, container_id: str, command: str, timeout: int) -> str:
+        result = subprocess.run(
+            ["/bin/bash", "-c", command.replace("/workspace", self.workspace)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        output = result.stdout + (f"STDERR:\n{result.stderr}" if result.stderr else "")
+        if result.returncode:
+            output += f"\n[Exit code: {result.returncode}]"
+        return output.replace(self.workspace, "/workspace")
+
+
 class TestRunCommandPersistence:
+    @pytest.fixture(autouse=True)
+    def sandbox(self, tmp_path: Path, monkeypatch):
+        from backend.app.tools.builtins import command_tools
+
+        monkeypatch.setattr(command_tools, "sandbox_manager", FakeSandbox(tmp_path))
+
     async def test_cd_carries_into_the_next_call(self, tmp_path: Path):
         (tmp_path / "project").mkdir()
         first = await run_command(
             "cd project && touch marker.txt",
-            workspace_dir=tmp_path,
+            container_id="c",
             conversation_id="cwd-test-1",
         )
         assert not first.startswith("Error")
 
-        second = await run_command(
-            "pwd && ls", workspace_dir=tmp_path, conversation_id="cwd-test-1"
-        )
-        assert str(tmp_path / "project") in second
+        second = await run_command("pwd && ls", container_id="c", conversation_id="cwd-test-1")
+        assert "/workspace/project" in second
         assert "marker.txt" in second
 
     async def test_conversations_do_not_share_a_directory(self, tmp_path: Path):
         (tmp_path / "a").mkdir()
-        await run_command("cd a", workspace_dir=tmp_path, conversation_id="cwd-test-2")
-        other = await run_command(
-            "pwd", workspace_dir=tmp_path, conversation_id="cwd-test-3"
-        )
-        assert str(tmp_path) in other
-        assert str(tmp_path / "a") not in other
+        await run_command("cd a", container_id="c", conversation_id="cwd-test-2")
+        other = await run_command("pwd", container_id="c", conversation_id="cwd-test-3")
+        assert "/workspace" in other
+        assert "/workspace/a" not in other
 
     async def test_a_failing_command_still_reports_its_exit_code(self, tmp_path: Path):
         result = await run_command(
-            "ls /definitely-not-here",
-            workspace_dir=tmp_path,
-            conversation_id="cwd-test-4",
+            "ls /definitely-not-here", container_id="c", conversation_id="cwd-test-4"
         )
         assert "[Exit code:" in result
+
+    async def test_without_a_container_nothing_runs(self):
+        result = await run_command("echo hi", conversation_id="cwd-test-5")
+        assert result.startswith("Error:")
+
+
+class TestTimeouts:
+    def test_a_numeric_string_is_accepted(self):
+        from backend.app.tools.builtins.command_tools import clamp_timeout
+
+        assert clamp_timeout("120") == 120
+
+    def test_nonsense_falls_back_to_the_default(self):
+        from backend.app.tools.builtins.command_tools import (
+            DEFAULT_COMMAND_TIMEOUT_SECONDS,
+            clamp_timeout,
+        )
+
+        for value in (None, 0, -5, "soon", [1]):
+            assert clamp_timeout(value) == DEFAULT_COMMAND_TIMEOUT_SECONDS
+
+    def test_the_ceiling_holds(self):
+        from backend.app.tools.builtins.command_tools import (
+            MAX_COMMAND_TIMEOUT_SECONDS,
+            clamp_timeout,
+        )
+
+        assert clamp_timeout(10_000) == MAX_COMMAND_TIMEOUT_SECONDS

@@ -1,20 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { ProviderModels, HuggingFaceModelSearchResult, MetalStatus } from '../../types';
+import { ProviderModels, MetalStatus } from '../../types';
 import { api } from '../../api/client';
-import { useVLLMStatus, VLLM_LOADING_STATES } from '../../context/VLLMStatusContext';
-import { VLLMDeploymentModal } from './VLLMDeploymentModal';
+import { activeModelOf, isLoadingState, useVLLMStatus } from '../../context/VLLMStatusContext';
 import { HuggingFaceCatalog } from './HuggingFaceCatalog';
 import { isMlxModel } from './metalModels';
-import {
-  X,
-  Search,
-  Check,
-  Cpu,
-  AlertCircle,
-  CheckCircle2,
-  Loader2,
-  Rocket,
-} from 'lucide-react';
+import { X, Search, Check, Cpu, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
+
+/** The tab for open-weights models, alongside one tab per cloud provider. */
+const HUB_TAB = { id: 'huggingface', name: 'Hugging Face Hub', icon: '🤗' };
 
 interface ModelSelectorModalProps {
   isOpen: boolean;
@@ -39,25 +32,17 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
 
   // Staged candidate model (pending user confirmation)
   const [candidateModel, setCandidateModel] = useState<string>(selectedModel);
-  const [candidateHfModel, setCandidateHfModel] = useState<HuggingFaceModelSearchResult | null>(null);
   const [candidateHfMode, setCandidateHfMode] = useState<'hf' | 'vllm' | null>(null);
   const [metalStatus, setMetalStatus] = useState<MetalStatus | null>(null);
-
-  // vLLM Deployment Modal State
-  const [isVLLMDeployModalOpen, setIsVLLMDeployModalOpen] = useState<boolean>(false);
-  const [vllmDeployTarget, setVllmDeployTarget] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setCandidateModel(selectedModel);
       loadModelProviders();
 
-      // Set active tab based on selected model
-      if (selectedModel.startsWith('gemini/')) setActiveTab('gemini');
-      else if (selectedModel.startsWith('openai/')) setActiveTab('openai');
-      else if (selectedModel.startsWith('anthropic/')) setActiveTab('anthropic');
-      else if (selectedModel.startsWith('ollama/')) setActiveTab('ollama');
-      else if (selectedModel.startsWith('huggingface/') || selectedModel.startsWith('hf/') || selectedModel.startsWith('vllm/')) setActiveTab('huggingface');
+      // Open on the tab of the provider the selected model belongs to.
+      const prefix = selectedModel.split('/', 1)[0];
+      setActiveTab(['huggingface', 'hf', 'vllm'].includes(prefix) ? HUB_TAB.id : prefix || 'gemini');
     }
   }, [isOpen, selectedModel]);
 
@@ -92,10 +77,12 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
   });
 
   const providerTabs = [
-    { id: 'gemini', name: 'Google', icon: '✨' },
-    { id: 'openai', name: 'OpenAI', icon: '🧠' },
-    { id: 'anthropic', name: 'Anthropic', icon: '⚡' },
-    { id: 'huggingface', name: 'Hugging Face Hub', icon: '🤗' },
+    ...providers.map((provider) => ({
+      id: provider.provider_id,
+      name: provider.provider_name,
+      icon: provider.icon,
+    })),
+    HUB_TAB,
   ];
 
   const handleConfirmSelection = () => {
@@ -152,7 +139,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                 >
                   <span className="text-sm">{tab.icon}</span>
                   <span>{tab.name}</span>
-                  {tab.id !== 'huggingface' && (
+                  {tab.id !== HUB_TAB.id && (
                     <span
                       className={`w-2 h-2 rounded-full ${
                         isConfigured ? 'bg-emerald-500' : 'bg-md-outline-variant'
@@ -166,7 +153,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
           </div>
 
           {/* Provider Status / Warning Banner */}
-          {activeTab !== 'huggingface' && currentProvider && (
+          {activeTab !== HUB_TAB.id && currentProvider && (
             <div className="px-6 py-2.5 bg-md-surface-container border-b border-md-outline-variant flex items-center justify-between text-xs shrink-0 transition-colors">
               <div className="flex items-center space-x-2">
                 {currentProvider.is_configured ? (
@@ -181,27 +168,13 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
             </div>
           )}
 
-          {/* Hugging Face Tab Active vLLM Container Banner */}
-          {activeTab === 'huggingface' && vllmStatus?.state === 'ready' && (
-            <div className="px-6 py-2.5 bg-emerald-100 dark:bg-emerald-950/80 border-b border-emerald-300 dark:border-emerald-800/80 flex items-center justify-between text-xs shrink-0 transition-colors">
-              <div className="flex items-center space-x-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-700 dark:text-emerald-300 stroke-[2.5]" />
-                <span className="font-medium text-emerald-950 dark:text-emerald-100">
-                  Local vLLM Container Active: <code className="font-mono font-bold">{vllmStatus.model_id}</code> (Port {vllmStatus.port || 8001})
-                </span>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setVllmDeployTarget(vllmStatus.model_id || null);
-                  setIsVLLMDeployModalOpen(true);
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-200 dark:bg-emerald-900/90 border border-emerald-400 dark:border-emerald-700 text-emerald-950 dark:text-emerald-100 hover:opacity-90 transition-opacity cursor-pointer"
-              >
-                <Rocket className="w-3.5 h-3.5" />
-                <span>Manage Server & Logs</span>
-              </button>
+          {/* Which local model is serving, if any */}
+          {activeTab === HUB_TAB.id && vllmStatus?.state === 'ready' && (
+            <div className="px-6 py-2.5 bg-emerald-100 dark:bg-emerald-950/80 border-b border-emerald-300 dark:border-emerald-800/80 flex items-center space-x-2 text-xs shrink-0 transition-colors">
+              <CheckCircle2 className="w-4 h-4 text-emerald-700 dark:text-emerald-300 stroke-[2.5]" />
+              <span className="font-medium text-emerald-950 dark:text-emerald-100">
+                Serving locally: <code className="font-mono font-bold">{vllmStatus.model_id}</code>
+              </span>
             </div>
           )}
 
@@ -212,8 +185,8 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                 <Loader2 className="w-6 h-6 animate-spin text-md-primary" />
                 <span>Probing available models and local servers...</span>
               </div>
-            ) : activeTab !== 'huggingface' ? (
-              /* Tabs 1-4: Structured Providers (Gemini, OpenAI, Anthropic, Ollama) */
+            ) : activeTab !== HUB_TAB.id ? (
+              /* Cloud providers' curated models */
               <div className="space-y-4">
                 {/* Search Bar for provider models */}
                 <div className="relative">
@@ -236,7 +209,6 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                         key={model.id}
                         onClick={() => {
                           setCandidateModel(model.id);
-                          setCandidateHfModel(null);
                           setCandidateHfMode(null);
                         }}
                         className={`p-4 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
@@ -248,16 +220,9 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                         <div>
                           <div className="flex items-center justify-between mb-1.5">
                             <span className="font-bold text-xs text-md-on-surface">{model.name}</span>
-                            {model.is_running_locally ? (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-800/80 font-semibold">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                Local
-                              </span>
-                            ) : (
-                              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-md-surface-container-high text-md-on-surface-variant border border-md-outline-variant">
-                                {model.context_window || 'Cloud'}
-                              </span>
-                            )}
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-md-surface-container-high text-md-on-surface-variant border border-md-outline-variant">
+                              {model.context_window || 'Cloud'}
+                            </span>
                           </div>
 
                           <p className="text-[11px] text-md-on-surface-variant line-clamp-2 leading-relaxed">
@@ -287,31 +252,19 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                 </div>
               </div>
             ) : (
-              /* Tab 5: Hugging Face Live Hub Search & Loader */
+              /* Open-weights models from the Hugging Face Hub */
               <HuggingFaceCatalog
                 mode="select"
                 selectedModelString={candidateModel}
                 selectedHfMode={candidateHfMode}
                 onSelectModel={(hfModel, execMode) => {
-                  if (execMode === 'hf') {
-                    setCandidateModel(hfModel.model_string_hf);
-                    setCandidateHfModel(hfModel);
-                    setCandidateHfMode('hf');
-                  } else {
-                    setCandidateModel(hfModel.model_string_vllm);
-                    setCandidateHfModel(hfModel);
-                    setCandidateHfMode('vllm');
-                  }
+                  setCandidateModel(
+                    execMode === 'hf' ? hfModel.model_string_hf : hfModel.model_string_vllm
+                  );
+                  setCandidateHfMode(execMode);
                 }}
-                // A stopped or failed server no longer serves its last model, so
-                // its id must not mark any card as active here.
-                activeVllmModelId={
-                  vllmStatus?.state === 'ready' ||
-                  VLLM_LOADING_STATES.includes(vllmStatus?.state || '')
-                    ? vllmStatus?.model_id
-                    : null
-                }
-                isVllmLoading={VLLM_LOADING_STATES.includes(vllmStatus?.state || '')}
+                activeVllmModelId={activeModelOf(vllmStatus)}
+                isVllmLoading={isLoadingState(vllmStatus?.state)}
                 metalSupported={metalStatus?.supported ?? false}
               />
             )}
@@ -327,8 +280,8 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
               {candidateHfMode === 'vllm' && (
                 <span className="text-[11px] font-semibold text-md-on-tertiary-container bg-md-tertiary-container px-2 py-0.5 rounded-lg border border-md-outline-variant">
                   {metalStatus?.supported && isMlxModel(candidateModel.replace(/^vllm\//, ''))
-                    ? '(Apple GPU Metal Deployment)'
-                    : '(vLLM Container Deployment)'}
+                    ? '(Runs on the Apple GPU)'
+                    : '(Runs on the CPU in Docker)'}
                 </span>
               )}
             </div>
@@ -356,15 +309,6 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
         </div>
       </div>
 
-      {/* vLLM Deployment Modal */}
-      <VLLMDeploymentModal
-        isOpen={isVLLMDeployModalOpen}
-        onClose={() => {
-          setIsVLLMDeployModalOpen(false);
-          loadModelProviders();
-        }}
-        targetModelId={vllmDeployTarget}
-      />
     </>
   );
 };

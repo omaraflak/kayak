@@ -1,9 +1,9 @@
 """The single path by which tool code becomes live.
 
-Activation writes Python that the server subsequently imports and executes in its own
-process, so "the tests passed" has to be an invariant of activation rather than a
-convention observed by whichever caller happens to remember it. Enforcing it in the
-UI alone left the agent's own ``activate_tool`` free to install unverified code.
+An activated tool becomes available to every agent, so "the tests passed" has to be
+an invariant of activation rather than a convention observed by whichever caller
+happens to remember it. Enforcing it in the UI alone left the agent's own
+``activate_tool`` free to install unverified code.
 """
 
 from dataclasses import dataclass
@@ -11,7 +11,8 @@ from typing import Optional
 from backend.app.config import settings
 from backend.app.models import ToolDefinition
 from backend.app.tools.registry import tool_registry
-from backend.app.tools.verifier import clean_tool_identifier, run_tool_verification
+from backend.app.identifiers import clean_identifier
+from backend.app.tools.verifier import run_tool_verification
 
 
 @dataclass
@@ -38,7 +39,7 @@ async def activate_verified_tool(
     Returns:
         ActivationResult: On failure, nothing is written to disk.
     """
-    clean_name = clean_tool_identifier(tool_name)
+    clean_name = clean_identifier(tool_name)
 
     if not tool_code.strip():
         return ActivationResult(
@@ -52,8 +53,8 @@ async def activate_verified_tool(
             success=False,
             tool_name=clean_name,
             message=(
-                "Error: A verify.py test suite is required. Tools run inside the Kayak "
-                "server process, so unverified code is never installed."
+                "Error: A verify.py test suite is required. Every agent can call an "
+                "installed tool, so unverified code is never installed."
             ),
         )
 
@@ -90,8 +91,8 @@ async def activate_verified_tool(
             tool_name=clean_name,
             message=(
                 f"Error: '{clean_name}' passed verification and was written to disk, but "
-                "could not be loaded into the registry. Check that tool.py exposes a "
-                "function named execute, main, or the tool name itself."
+                "could not be loaded into the registry. Check that tool.py defines a "
+                "public function, ideally named execute."
             ),
         )
 

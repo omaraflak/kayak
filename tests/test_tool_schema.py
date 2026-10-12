@@ -7,7 +7,7 @@ into the visible answer.
 
 from typing import List, Optional
 from backend.app.llm import ThinkingStreamParser, extract_thinking_and_content
-from backend.app.tools.registry import extract_tool_schema, parse_docstring
+from backend.app.tools.schema import extract_tool_schema, parse_docstring
 
 
 class TestParseDocstring:
@@ -149,3 +149,92 @@ class TestExtractThinkingAndContent:
 
     def test_empty_input_returns_nothing(self):
         assert extract_thinking_and_content(None) == (None, None)
+
+
+class TestOptionalParameters:
+    def test_optional_types_are_described_by_what_they_hold(self):
+        # Reported as strings, a model sent "120" for a timeout and the tool raised.
+        def sample(timeout: Optional[int] = 60, ratio: float | None = None) -> str:
+            """Waits."""
+            return ""
+
+        properties = extract_tool_schema(sample)["function"]["parameters"]["properties"]
+
+        assert properties["timeout"]["type"] == "integer"
+        assert properties["ratio"]["type"] == "number"
+
+
+class TestCustomToolsAreReadNotRun:
+    SOURCE = '''
+import os
+
+os.environ["KAYAK_TOOL_RAN"] = "yes"
+
+CATEGORY = "web"
+RISK = "low"
+READ_ONLY = True
+
+
+def _helper():
+    pass
+
+
+def execute(query: str, limit: Optional[int] = 5, *, strict: bool = False) -> str:
+    """Searches.
+
+    Args:
+        query: What to look for.
+        limit: How many results.
+    """
+    return query
+'''
+
+    def test_the_source_is_never_executed(self, monkeypatch):
+        import os
+        from backend.app.tools.schema import read_custom_tool
+
+        monkeypatch.delenv("KAYAK_TOOL_RAN", raising=False)
+        read_custom_tool("searcher", self.SOURCE)
+
+        assert "KAYAK_TOOL_RAN" not in os.environ
+
+    def test_the_schema_comes_from_the_signature_and_docstring(self):
+        from backend.app.tools.schema import read_custom_tool
+
+        tool = read_custom_tool("searcher", self.SOURCE)
+        function = tool.schema["function"]
+
+        assert tool.entrypoint == "execute"
+        assert function["name"] == "searcher"
+        assert function["description"] == "Searches."
+        assert function["parameters"]["required"] == ["query"]
+        properties = function["parameters"]["properties"]
+        assert properties["query"] == {"type": "string", "description": "What to look for."}
+        assert properties["limit"]["type"] == "integer"
+        assert properties["strict"]["type"] == "boolean"
+
+    def test_declared_classification_is_read_from_constants(self):
+        from backend.app.models import ToolCategory, ToolRisk
+        from backend.app.tools.schema import read_custom_tool
+
+        metadata = read_custom_tool("searcher", self.SOURCE).metadata
+
+        assert metadata.category == ToolCategory.WEB
+        assert metadata.risk == ToolRisk.LOW
+        assert metadata.read_only is True
+
+    def test_the_first_public_function_is_the_fallback_entrypoint(self):
+        from backend.app.tools.schema import read_custom_tool
+
+        source = "def _private():\n    pass\n\n\ndef convert(x: int) -> int:\n    return x\n"
+
+        assert read_custom_tool("anything", source).entrypoint == "convert"
+
+    def test_source_without_a_function_is_refused(self):
+        import pytest
+        from backend.app.tools.schema import ToolSourceError, read_custom_tool
+
+        with pytest.raises(ToolSourceError):
+            read_custom_tool("empty", "X = 1\n")
+        with pytest.raises(ToolSourceError):
+            read_custom_tool("broken", "def execute(:\n")

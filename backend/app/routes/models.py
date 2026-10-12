@@ -21,8 +21,6 @@ class ModelItem(BaseModel):
     provider: str
     description: str
     context_window: Optional[str] = None
-    is_available: bool = True
-    is_running_locally: bool = False
 
 
 class ProviderModels(BaseModel):
@@ -128,8 +126,6 @@ def _build_provider_response(provider: ProviderCatalogItem) -> ProviderModels:
             provider=info.id,
             description=entry.description,
             context_window=_get_context_window(entry.id, entry.default_context_window),
-            is_available=has_key,
-            is_running_locally=False,
         )
         for entry in provider.models
     ]
@@ -145,7 +141,7 @@ def _build_provider_response(provider: ProviderCatalogItem) -> ProviderModels:
 
 @router.get("", response_model=List[ProviderModels])
 async def list_available_models() -> List[ProviderModels]:
-    """Returns provider-specific curated models, active local servers, and configured API statuses."""
+    """Returns each provider's curated models and whether its API key is configured."""
     return [_build_provider_response(p) for p in _PROVIDER_CATALOG]
 
 

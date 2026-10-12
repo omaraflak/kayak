@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AudioItem, AudioJob, Modality, Voice } from '../../types';
 import { api, errorMessage } from '../../api/client';
-import { useVLLMStatus, VLLM_LOADING_STATES } from '../../context/VLLMStatusContext';
-import { formatBytes } from '../models/modelSizing';
+import { isLoadingState, useVLLMStatus } from '../../context/VLLMStatusContext';
+import { formatBytes } from '../../utils/format';
 import { ProgressRing } from '../../ui/ProgressRing';
 import {
   AudioLines,
@@ -132,7 +132,7 @@ export const AudioView: React.FC<AudioViewProps> = ({
           <div>
             <h2 className="font-bold text-sm text-md-on-surface">Audio</h2>
             <p className="text-xs text-md-on-surface-variant">
-              Turn text into speech, and recordings into text, on this machine
+              Turn text into speech, and recordings into text, on this Mac
             </p>
           </div>
         </div>
@@ -228,7 +228,7 @@ const ServerState: React.FC<{
   const { statuses } = useVLLMStatus();
   const status = statuses[modality];
   const isReady = status?.state === 'ready';
-  const isBusy = Boolean(status && VLLM_LOADING_STATES.includes(status.state));
+  const isBusy = isLoadingState(status?.state);
 
   if (isReady) {
     return (
@@ -326,12 +326,7 @@ const SynthesizePanel: React.FC<{
     if (!text.trim() || isQueueing) return;
     setIsQueueing(true);
     try {
-      await api.synthesizeSpeech({
-        text,
-        voice: voice || null,
-        speed,
-        response_format: 'wav',
-      });
+      await api.synthesizeSpeech({ text, voice: voice || null, speed });
       // Cleared so the next thing can be queued straight away, which is the
       // point of a queue: the box is free while the last one is still speaking.
       setText('');
@@ -441,7 +436,7 @@ const SynthesizePanel: React.FC<{
 
         {visibleJobs.length === 0 && clips.length === 0 ? (
           <p className="text-[11px] text-md-on-surface-variant">
-            Nothing generated yet. Clips are saved on this machine and stay here until
+            Nothing generated yet. Clips are saved on this Mac and stay here until
             you delete them.
           </p>
         ) : (

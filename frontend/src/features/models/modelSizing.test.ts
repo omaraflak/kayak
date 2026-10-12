@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   detectWeightFormat,
   estimateModelSize,
-  formatBytes,
   judgeFit,
   maxWorkingMemoryGB,
   parseParameterCount,
@@ -58,7 +57,7 @@ describe('estimateModelSize', () => {
   it('sizes an unquantized model at two bytes per parameter', () => {
     const estimate = estimateModelSize('Qwen/Qwen2.5-Coder-7B-Instruct');
     expect(estimate?.weightsGB).toBe(14);
-    // Weights alone are not the requirement: the KV cache and activations need room.
+    // Weights alone are not the requirement: the runtime and KV cache need room.
     expect(estimate?.requiredGB).toBeGreaterThan(14);
   });
 
@@ -74,26 +73,23 @@ describe('estimateModelSize', () => {
 });
 
 describe('judgeFit', () => {
-  it('flags a machine with no accelerator regardless of model size', () => {
-    // Model size is beside the point here: CPU inference is the headline.
-    expect(judgeFit(estimateModelSize('org/Model-1B'), 0)).toBe('cpu-only');
-  });
-
   it('reports a comfortable fit', () => {
-    expect(judgeFit(estimateModelSize('org/Model-7B'), 48)).toBe('fits');
+    expect(judgeFit(estimateModelSize('org/Model-1B'), 16)).toBe('fits');
   });
 
   it('reports a model that cannot fit', () => {
-    expect(judgeFit(estimateModelSize('org/Model-70B'), 24)).toBe('too-large');
+    // 14 GB of weights before the runtime has taken anything.
+    expect(judgeFit(estimateModelSize('org/Model-7B'), 16)).toBe('too-large');
   });
 
   it('warns when the model only just fits', () => {
-    const estimate = estimateModelSize('org/Model-7B'); // ~18.8 GB required
-    expect(judgeFit(estimate, 20)).toBe('tight');
+    // The machine this was measured on: Qwen3-0.6B used most of a 7.7 GB VM.
+    expect(judgeFit(estimateModelSize('Qwen/Qwen3-0.6B'), 7.7)).toBe('tight');
   });
 
-  it('says unknown when the size could not be read', () => {
+  it('says unknown when the size or the memory could not be read', () => {
     expect(judgeFit(null, 24)).toBe('unknown');
+    expect(judgeFit(estimateModelSize('org/Model-7B'), 0)).toBe('unknown');
   });
 });
 
@@ -126,35 +122,5 @@ describe('maxWorkingMemoryGB', () => {
 
     expect(ceiling).toBeGreaterThan(1);
     expect(ceiling).toBeLessThan(16);
-  });
-});
-
-describe('formatBytes', () => {
-  it('uses the unit that matches the magnitude', () => {
-    expect(formatBytes(512)).toBe('512 B');
-    expect(formatBytes(1024 * 1024 * 1.5)).toBe('1.5 MB');
-    expect(formatBytes(1024 ** 3 * 15)).toBe('15 GB');
-  });
-
-  it('treats an empty cache as zero rather than NaN', () => {
-    expect(formatBytes(0)).toBe('0 B');
-    expect(formatBytes(Number.NaN)).toBe('0 B');
-  });
-});
-
-describe('judgeFit with an accelerator whose size is unknown', () => {
-  it('does not call a model too large when the VRAM could not be read', () => {
-    // Kayak in a container cannot count the cards even when the daemon can hand
-    // one over. Treating that as "no accelerator" flagged every model as
-    // unrunnable on exactly the machines that could run them.
-    expect(judgeFit(estimateModelSize('meta-llama/Llama-3.1-70B'), 0, true)).toBe('unknown');
-  });
-
-  it('still says cpu-only when there is genuinely no accelerator', () => {
-    expect(judgeFit(estimateModelSize('meta-llama/Llama-3.1-70B'), 0, false)).toBe('cpu-only');
-  });
-
-  it('judges normally once a size is known', () => {
-    expect(judgeFit(estimateModelSize('Qwen/Qwen2.5-0.5B'), 24, true)).toBe('fits');
   });
 });

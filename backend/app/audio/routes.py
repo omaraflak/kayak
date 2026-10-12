@@ -9,16 +9,15 @@ that made it.
 """
 
 import logging
-import wave
-from io import BytesIO
 from typing import Optional
 
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse
 
-from backend.app.audio import store
 from backend.app.audio import jobs as job_queues
+from backend.app.audio import server, store
+from backend.app.audio.server import model_of, server_base
 from backend.app.audio.speech_cache import speech_cache
 from backend.app.audio.models import (
     AudioItem,
@@ -31,44 +30,15 @@ from backend.app.audio.models import (
     VoiceList,
 )
 from backend.app.audio.store import AudioStoreError
-from backend.app.inference import registry
-from backend.app.inference.models import Modality, ServerState
+from backend.app.inference.models import Modality
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/audio", tags=["audio"])
 
-#: Synthesis of a long article, or transcription of a long recording, runs for
-#: minutes on a CPU. The generous ceiling exists to catch a hung server, not to bound
-#: honest work.
-REQUEST_TIMEOUT_SECONDS = 1800.0
-
 #: Uploads are held in memory while being forwarded, so the ceiling is real. Two
 #: hours of speech comfortably fits; a video file does not, and should not.
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
-
-
-def server_base(modality: Modality) -> str:
-    """The base URL of a running audio server, or a 409 explaining what to start.
-
-    A 409 rather than a 500: nothing is broken, the user simply has not started the
-    model yet, and the message says which one.
-    """
-    manager = registry.manager_for(modality)
-    status = manager.get_status()
-    if status.state != ServerState.READY:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"No {manager.runtime.label.lower()} model is running. "
-                f"Start one from Local Models."
-            ),
-        )
-    return status.endpoint.rstrip("/")
-
-
-def _model_of(modality: Modality) -> str:
-    return registry.manager_for(modality).get_status().model_id or ""
 
 
 @router.get("/voices", response_model=VoiceList)
@@ -90,17 +60,12 @@ async def list_voices() -> VoiceList:
             payload = response.json()
     except Exception as error:
         logger.warning("Could not read voices from the speech server: %s", error)
-        return VoiceList(model_id=_model_of(Modality.SPEECH))
-
-    # Older images answered with a bare list. Reading both shapes costs three
-    # lines and means a mismatched pair degrades rather than breaks.
-    entries = payload.get("voices", []) if isinstance(payload, dict) else payload
-    default_voice = payload.get("default_voice") if isinstance(payload, dict) else None
+        return VoiceList(model_id=model_of(Modality.SPEECH))
 
     return VoiceList(
-        model_id=_model_of(Modality.SPEECH),
-        voices=[Voice(**entry) for entry in entries],
-        default_voice=default_voice,
+        model_id=model_of(Modality.SPEECH),
+        voices=[Voice(**entry) for entry in payload.get("voices", [])],
+        default_voice=payload.get("default_voice"),
     )
 
 
@@ -118,7 +83,7 @@ async def create_speech(request: SpeechRequest) -> AudioJob:
     # Checked before queueing so an unstartable job is refused now rather than
     # sitting in the queue to fail later.
     server_base(Modality.SPEECH)
-    return job_queues.synthesis_queue.submit(request, _model_of(Modality.SPEECH))
+    return job_queues.synthesis_queue.submit(request, model_of(Modality.SPEECH))
 
 
 @router.post("/messages/{message_id}/speech", response_model=MessageSpeech)
@@ -176,7 +141,7 @@ async def listen(file: UploadFile = File(...)) -> dict:
     For dictating into a message box, where the text is the point and the audio
     was never meant to be kept.
     """
-    base = server_base(Modality.TRANSCRIPTION)
+    server_base(Modality.TRANSCRIPTION)
 
     payload = await file.read()
     if not payload:
@@ -185,11 +150,11 @@ async def listen(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=413, detail="That recording is too long.")
 
     try:
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            response = await client.post(
-                f"{base}/audio/transcriptions",
-                files={"file": (file.filename or "dictation.webm", payload)},
-            )
+        response = await server.post(
+            Modality.TRANSCRIPTION,
+            "/audio/transcriptions",
+            files={"file": (file.filename or "dictation.webm", payload)},
+        )
     except httpx.HTTPError as error:
         raise HTTPException(
             status_code=502, detail=f"The transcription server did not respond: {error}"
@@ -197,7 +162,7 @@ async def listen(file: UploadFile = File(...)) -> dict:
 
     if response.status_code != 200:
         raise HTTPException(
-            status_code=502, detail=upstream_detail(response, "Transcription failed")
+            status_code=502, detail=server.upstream_detail(response, "Transcription failed")
         )
 
     return {"text": response.json().get("text", "")}
@@ -231,10 +196,12 @@ async def create_transcriptions(
     A list rather than a single file: transcribing an afternoon of recordings is
     the ordinary case, and doing them one upload at a time made the user the queue.
     """
-    base_checked = server_base(Modality.TRANSCRIPTION)  # noqa: F841 - refuses early
-    model_id = _model_of(Modality.TRANSCRIPTION)
+    server_base(Modality.TRANSCRIPTION)
+    model_id = model_of(Modality.TRANSCRIPTION)
 
-    queued: list[AudioJob] = []
+    # Every file is checked before any is queued: refusing the third after queueing
+    # the first two would leave work running that the caller was told failed.
+    payloads: list[tuple[str, bytes]] = []
     for upload in files:
         payload = await upload.read()
         if not payload:
@@ -250,16 +217,14 @@ async def create_transcriptions(
                     f"The limit is {MAX_UPLOAD_BYTES // 1024 ** 2} MB."
                 ),
             )
-        queued.append(
-            job_queues.transcription_queue.submit(
-                data=payload,
-                filename=upload.filename or "recording.wav",
-                model_id=model_id,
-                language=language,
-            )
-        )
+        payloads.append((upload.filename or "recording.wav", payload))
 
-    return queued
+    return [
+        job_queues.transcription_queue.submit(
+            data=payload, filename=filename, model_id=model_id, language=language
+        )
+        for filename, payload in payloads
+    ]
 
 
 @router.get("/items", response_model=list[AudioItem])
@@ -296,32 +261,3 @@ async def delete_item(item_id: str) -> dict:
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error))
     return {"status": "deleted", "id": item_id}
-
-
-def upstream_detail(response: httpx.Response, fallback: str) -> str:
-    """The audio server's own explanation, when it gave one.
-
-    Replacing it with a generic message would hide the only sentence that says what
-    went wrong -- an unsupported format, or a model that cannot do this direction.
-    """
-    try:
-        detail = response.json().get("detail")
-    except Exception:
-        detail = None
-    return str(detail) if detail else f"{fallback} ({response.status_code})."
-
-
-def wav_duration(data: bytes) -> Optional[float]:
-    """Length of a WAV in seconds, when the bytes are a WAV at all.
-
-    Read here rather than in the page: an <audio> element only knows the duration
-    once it has loaded the file, so a list of clips would otherwise show nothing
-    until each one was played.
-    """
-    try:
-        with wave.open(BytesIO(data)) as handle:
-            frames = handle.getnframes()
-            rate = handle.getframerate()
-            return round(frames / rate, 2) if rate else None
-    except Exception:
-        return None

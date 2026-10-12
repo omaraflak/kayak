@@ -1,22 +1,24 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
-export type ResolvedTheme = 'light' | 'dark';
 
 interface ThemeContextType {
   theme: ThemeMode;
-  resolvedTheme: ResolvedTheme;
   setTheme: (theme: ThemeMode) => void;
-  toggleTheme: () => void;
 }
 
 const ThemeContext = createContext<ThemeContextType | null>(null);
 
 const STORAGE_KEY = 'kayak_theme_mode';
 
-function getSystemTheme(): ResolvedTheme {
-  if (typeof window === 'undefined') return 'light';
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+const darkQuery = () => window.matchMedia('(prefers-color-scheme: dark)');
+
+/** Applies a mode to the page, following macOS's appearance when it is 'system'. */
+function applyTheme(mode: ThemeMode): void {
+  const dark = mode === 'dark' || (mode === 'system' && darkQuery().matches);
+  const root = document.documentElement;
+  root.classList.toggle('dark', dark);
+  root.style.colorScheme = dark ? 'dark' : 'light';
 }
 
 export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
@@ -30,54 +32,26 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return 'system';
   });
 
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => {
-    if (theme === 'system') return getSystemTheme();
-    return theme;
-  });
-
-  const applyTheme = useCallback((mode: ThemeMode) => {
-    const resolved = mode === 'system' ? getSystemTheme() : mode;
-    setResolvedTheme(resolved);
-
-    const root = document.documentElement;
-    if (resolved === 'dark') {
-      root.classList.add('dark');
-      root.style.colorScheme = 'dark';
-    } else {
-      root.classList.remove('dark');
-      root.style.colorScheme = 'light';
-    }
-  }, []);
-
   const setTheme = useCallback((newTheme: ThemeMode) => {
     setThemeState(newTheme);
     try {
       localStorage.setItem(STORAGE_KEY, newTheme);
     } catch {}
-    applyTheme(newTheme);
-  }, [applyTheme]);
+  }, []);
 
-  const toggleTheme = useCallback(() => {
-    setTheme(resolvedTheme === 'dark' ? 'light' : 'dark');
-  }, [resolvedTheme, setTheme]);
-
-  // Initial theme application and system preference listener
+  // Applied on every change, and again whenever macOS switches appearance while
+  // the app follows the system.
   useEffect(() => {
     applyTheme(theme);
-
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    const handleSystemChange = () => {
-      if (theme === 'system') {
-        applyTheme('system');
-      }
-    };
-
-    mediaQuery.addEventListener('change', handleSystemChange);
-    return () => mediaQuery.removeEventListener('change', handleSystemChange);
-  }, [theme, applyTheme]);
+    if (theme !== 'system') return;
+    const query = darkQuery();
+    const follow = () => applyTheme('system');
+    query.addEventListener('change', follow);
+    return () => query.removeEventListener('change', follow);
+  }, [theme]);
 
   return (
-    <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme, toggleTheme }}>
+    <ThemeContext.Provider value={{ theme, setTheme }}>
       {children}
     </ThemeContext.Provider>
   );

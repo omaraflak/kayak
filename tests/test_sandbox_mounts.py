@@ -8,12 +8,7 @@ provider API keys in plaintext.
 
 from pathlib import Path
 
-from backend.app.agent.sandbox import _build_volume_mounts, has_forbidden_data_mount
-
-
-class FakeContainer:
-    def __init__(self, mounts):
-        self.attrs = {"Mounts": mounts}
+from backend.app.agent.sandbox import _build_volume_mounts
 
 
 class TestVolumeMounts:
@@ -27,23 +22,3 @@ class TestVolumeMounts:
     def test_nothing_binds_the_data_directory(self, tmp_path: Path):
         mounts = _build_volume_mounts(tmp_path / "workspaces" / "conv-1")
         assert all(config["bind"] != "/data" for config in mounts.values())
-
-
-class TestLegacyMountDetection:
-    def test_a_container_with_the_data_mount_is_flagged(self):
-        container = FakeContainer(
-            [
-                {"Source": "/host/ws/conv-1", "Destination": "/workspace"},
-                {"Source": "/host/data", "Destination": "/data"},
-            ]
-        )
-        assert has_forbidden_data_mount(container) is True
-
-    def test_a_clean_container_is_not_flagged(self):
-        container = FakeContainer(
-            [{"Source": "/host/ws/conv-1", "Destination": "/workspace"}]
-        )
-        assert has_forbidden_data_mount(container) is False
-
-    def test_a_container_with_no_mount_metadata_is_not_flagged(self):
-        assert has_forbidden_data_mount(FakeContainer([])) is False

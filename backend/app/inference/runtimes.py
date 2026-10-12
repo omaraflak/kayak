@@ -6,6 +6,8 @@ after a restart, stopping it again. None of that is specific to what is being se
 
 A :class:`Runtime` owns everything that is: which image to run, what to pass it, which
 health answer counts as ready, and which of the deploy settings it actually honours.
+Every runtime runs on the CPU, because Docker Desktop gives containers no GPU; the
+Apple GPU is reached through the launcher instead (see :mod:`metal`).
 Adding a modality is therefore a new Runtime, not a change to the manager, and a
 misbehaving backend cannot destabilise the lifecycle logic that every modality shares.
 """
@@ -14,6 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from backend.app.config import local_api_base
 from backend.app.inference.models import (
     DeployRequest,
     DeploymentProgress,
@@ -30,9 +33,7 @@ class SpecContext:
     Passed in rather than read from the manager so that a runtime cannot reach into
     lifecycle state, and so that building a spec is a pure function in tests.
     """
-    #: Whether an NVIDIA GPU was detected on the host.
-    has_gpu: bool
-    #: Memory Docker reports for its host, if it would say.
+    #: Memory Docker reports for its VM, if it would say.
     docker_memory_bytes: Optional[int]
     #: The Hugging Face token to hand the container, if one is configured.
     hf_token: Optional[str]
@@ -44,7 +45,7 @@ class ContainerSpec:
     image: str
     command: List[str] = field(default_factory=list)
     environment: Dict[str, str] = field(default_factory=dict)
-    #: Extra keyword arguments for ``containers.run``: device requests, shm size.
+    #: Extra keyword arguments for ``containers.run``, such as the shm size.
     #: Resource ceilings the user chose are applied by the manager, which owns them
     #: for every runtime alike.
     run_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -73,6 +74,9 @@ class Runtime(ABC):
     #: Whether this runtime can also be served by the launcher on the Apple GPU.
     #: Metal is a text-only path; every other runtime skips it entirely.
     supports_metal: bool = False
+    #: Whether the image is published with each Kayak release, and so has to be
+    #: refreshed when Kayak updates. Nothing else pulls it again once it is here.
+    released_with_kayak: bool = False
     #: Hugging Face pipeline tags and libraries this runtime serves. Consumed by the
     #: catalogue through the API so no client carries its own copy.
     pipeline_tags: Tuple[str, ...] = ()
@@ -86,12 +90,13 @@ class Runtime(ABC):
 
     @property
     @abstractmethod
+    def image(self) -> str:
+        """The Docker image this runtime runs."""
+
+    @property
+    @abstractmethod
     def default_port(self) -> int:
         """First host port to try. Neighbours are tried when it is taken."""
-
-    @abstractmethod
-    def api_base(self, port: int) -> str:
-        """The OpenAI-compatible base URL for a server published on ``port``."""
 
     @abstractmethod
     async def container_spec(
@@ -99,9 +104,9 @@ class Runtime(ABC):
     ) -> ContainerSpec:
         """Builds the image, command and environment for one deployment."""
 
-    @abstractmethod
-    def candidate_images(self) -> Tuple[str, ...]:
-        """Images this runtime may run, for reporting whether one is already pulled."""
+    def api_base(self, port: int) -> str:
+        """The OpenAI-compatible base URL for a server published on ``port``."""
+        return local_api_base(port)
 
     def augment_capability(
         self, capability: HostCapability, docker_memory_bytes: Optional[int]

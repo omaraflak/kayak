@@ -221,14 +221,13 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-full w-full overflow-hidden bg-md-surface text-md-on-surface font-['Plus_Jakarta_Sans',sans-serif]">
+    <div className="flex h-full w-full overflow-hidden bg-md-surface text-md-on-surface">
       {/* Navigation Sidebar */}
       <Sidebar
         conversations={conversations}
         activeConversationId={activeConversationId}
         onSelectConversation={handleSelectConversation}
         onDeleteConversation={handleDeleteConversation}
-        agents={agents}
         currentTab={currentTab}
         onSelectTab={handleSelectTab}
       />
@@ -304,8 +303,8 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      {/* Persistent Global vLLM Server Status & Download Progress Widget */}
-      <GlobalVLLMStatusWidget />
+      {/* Narrates a text model deployment from any page. */}
+      <GlobalVLLMStatusWidget onOpenModels={() => handleOpenModels('text')} />
     </div>
   );
 };

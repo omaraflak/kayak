@@ -21,7 +21,7 @@ import io
 import logging
 import os
 import tempfile
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import numpy as np
 import soundfile as sf
@@ -53,11 +53,12 @@ _GAP_SECONDS = 0.12
 
 
 class SpeechRequest(BaseModel):
-    """OpenAI's ``POST /v1/audio/speech`` body."""
+    """OpenAI's ``POST /v1/audio/speech`` body.
+
+    OpenAI's ``model`` field is accepted and ignored, like any other unknown field:
+    this server holds one model, chosen when the container started.
+    """
     input: str = Field(..., description="Text to speak")
-    #: Accepted and ignored when it names the loaded model, for API compatibility:
-    #: this server holds one model, chosen when the container started.
-    model: Optional[str] = None
     voice: Optional[str] = None
     response_format: str = "wav"
     speed: float = Field(1.0, gt=0.25, le=4.0)
@@ -100,12 +101,16 @@ class WorkProgress(BaseModel):
 
 
 class ServerState:
-    """The single loaded model, and the lock serialising work against it."""
+    """The single loaded model, and the lock serialising work against it.
+
+    The model is loaded before the HTTP server starts, so no request ever sees a
+    server without one.
+    """
 
     def __init__(self) -> None:
         self.model_id: str = ""
         self.modality: str = "speech"
-        self.backend: Optional[SpeechBackend] = None
+        self.backend: Optional[Union[SpeechBackend, TranscriptionBackend]] = None
         self.progress = WorkProgress()
         # Most of these models are not safe to call concurrently, and a second
         # request arriving mid-generation corrupts the first one's output rather
@@ -118,8 +123,6 @@ class ServerState:
         A transcription request reaching a speech server is a wiring mistake, and
         saying so beats whatever a synthesis model would do with an audio file.
         """
-        if not self.backend:
-            raise HTTPException(status_code=503, detail="The model is still loading.")
         if self.modality != modality:
             raise HTTPException(
                 status_code=400,
@@ -135,15 +138,6 @@ state = ServerState()
 app = FastAPI(title="Kayak audio server")
 
 
-@app.get("/health")
-async def health() -> dict:
-    return {
-        "status": "ok" if state.backend else "loading",
-        "model": state.model_id,
-        "modality": state.modality,
-    }
-
-
 @app.get("/v1/audio/progress", response_model=WorkProgress)
 async def work_progress() -> WorkProgress:
     """Where the work in flight has got to, by chunk."""
@@ -157,8 +151,6 @@ async def list_models() -> dict:
     Kayak verifies readiness by checking that this names the model it asked for --
     a 200 alone is not proof, since another server may be answering on the port.
     """
-    if not state.backend:
-        raise HTTPException(status_code=503, detail="The model is still loading.")
     return {
         "object": "list",
         "data": [
@@ -232,23 +224,15 @@ async def create_speech(request: SpeechRequest) -> Response:
 @app.post("/v1/audio/transcriptions", response_model=TranscriptionResponse)
 async def create_transcription(
     file: UploadFile = File(..., description="Audio file to transcribe"),
-    model: Optional[str] = Form(None),
     language: Optional[str] = Form(None),
-    response_format: str = Form("json"),
 ) -> TranscriptionResponse:
-    """Transcribes an uploaded recording.
+    """Transcribes an uploaded recording, answering in OpenAI's JSON shape.
 
     The upload is written to a temporary file rather than decoded here: the models
     read a path, and letting the library decode means every container format ffmpeg
     knows is accepted rather than only the ones soundfile reads.
     """
     backend = state.require("transcription")
-
-    if response_format not in ("json", "text"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"'{response_format}' is not supported. Use 'json' or 'text'.",
-        )
 
     payload = await file.read()
     if not payload:
@@ -315,30 +299,16 @@ def _synthesize_all(chunks: List[str], voice: Optional[str], speed: float):
 def load_model(model_id: str, modality: str, trust_remote_code: bool) -> None:
     """Loads the model for one direction, or raises with a legible reason."""
     if modality == "transcription":
-        logger.info("Loading %s for transcription", model_id)
         backend = TranscriptionBackend(model_id, trust_remote_code=trust_remote_code)
-        backend.load()
-        state.model_id = model_id
-        state.modality = modality
-        state.backend = backend
-        logger.info("Ready: transcribing with %s", model_id)
-        return
-
-    logger.info("Selecting a backend for %s", model_id)
-    backend = select_backend(model_id, trust_remote_code=trust_remote_code)
+    else:
+        backend = select_backend(model_id, trust_remote_code=trust_remote_code)
     logger.info("Loading %s with the %s backend", model_id, backend.name)
     backend.load()
 
     state.model_id = model_id
     state.modality = modality
     state.backend = backend
-    voices = backend.voices()
-    logger.info(
-        "Ready: serving %s with %d voice%s",
-        model_id,
-        len(voices),
-        "" if len(voices) == 1 else "s",
-    )
+    logger.info("Ready: %s with %s", modality, model_id)
 
 
 def main() -> None:

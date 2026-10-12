@@ -29,11 +29,9 @@ export interface HuggingFaceCatalogProps {
   isVllmLoading?: boolean;
   /** Repositories already downloaded, so the catalog can say what is free to start. */
   cachedModelIds?: Set<string>;
-  /** Accelerator memory available, for flagging models that cannot fit. */
-  availableVramGB?: number;
-  /** Whether this machine has an accelerator at all, even if its size is unknown. */
-  hasAccelerator?: boolean;
-  /** Whether this machine can serve MLX weights on the Apple GPU. */
+  /** Memory Docker Desktop's VM has, for flagging models that cannot fit. */
+  availableMemoryGB?: number;
+  /** Whether this Mac can serve MLX weights on the Apple GPU. */
   metalSupported?: boolean;
   /** Runtimes the server offers, which drive the filters and the support badge. */
   runtimes?: RuntimeDescriptor[];
@@ -51,8 +49,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
   activeVllmModelId,
   isVllmLoading = false,
   cachedModelIds,
-  availableVramGB = 0,
-  hasAccelerator = false,
+  availableMemoryGB = 0,
   metalSupported = false,
   runtimes = [],
   modality = 'text',
@@ -217,7 +214,10 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
             // button that fails minutes into a download is worse than saying so now.
             const isSupported = activeRuntime ? canRuntimeServe(activeRuntime, hfModel) : true;
             const estimate = estimateModelSize(rawModelId);
-            const fit = judgeFit(estimate, availableVramGB, hasAccelerator);
+            const runsOnGpu = metalSupported && isMlxModel(rawModelId);
+            // An MLX model runs outside Docker, in the Mac's own memory, which
+            // nothing here can measure.
+            const fit = runsOnGpu ? 'unknown' : judgeFit(estimate, availableMemoryGB);
 
             // Staging checks for 'select' mode
             const isHfInferenceStaged = selectedModelString === hfModel.model_string_hf && selectedHfMode === 'hf';
@@ -259,7 +259,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                   </div>
 
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    {metalSupported && isMlxModel(rawModelId) && (
+                    {runsOnGpu && (
                       <span
                         className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-md-primary-container text-md-on-primary-container"
                         title="Runs on the Apple GPU instead of the CPU"
@@ -278,11 +278,9 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                             : 'bg-md-surface-container-high text-md-on-surface-variant border-md-outline-variant'
                         }`}
                         title={
-                          fit === 'too-large'
-                            ? `Needs roughly ${estimate.requiredGB} GB; this machine has ${availableVramGB.toFixed(0)} GB of VRAM.`
-                            : fit === 'cpu-only'
-                            ? 'No GPU detected on this machine.'
-                            : `Roughly ${estimate.requiredGB} GB of memory to serve.`
+                          fit === 'too-large' || fit === 'tight'
+                            ? `Needs roughly ${estimate.requiredGB} GB; Docker has ${availableMemoryGB.toFixed(0)} GB.`
+                            : `${estimate.weightsGB} GB of weights to download.`
                         }
                       >
                         {(fit === 'too-large' || fit === 'tight') && (
@@ -294,7 +292,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                     {isCached && (
                       <span
                         className="text-[10px] font-semibold px-1.5 py-0.5 rounded border inline-flex items-center gap-1 bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 border-emerald-300 dark:border-emerald-800/80"
-                        title="Weights are already on this machine"
+                        title="Weights are already on this Mac"
                       >
                         <HardDrive className="w-2.5 h-2.5" /> Downloaded
                       </span>
@@ -399,10 +397,10 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                               ? 'bg-md-primary text-md-on-primary border-md-primary font-bold shadow-xs'
                               : 'bg-md-tertiary-container hover:opacity-90 border-md-outline-variant text-md-on-tertiary-container'
                           }`}
-                          title="Stage for local vLLM Docker container serving"
+                          title="Serve it on this Mac"
                         >
                           <span className="flex items-center gap-1 font-semibold">
-                            <Rocket className="w-3 h-3" /> Local vLLM
+                            <Rocket className="w-3 h-3" /> This Mac
                           </span>
                           {isVllmStaged && <Check className="w-3 h-3 stroke-[3]" />}
                         </button>

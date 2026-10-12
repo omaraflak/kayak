@@ -292,9 +292,6 @@ export const api = {
   stopTask: (taskId: string): Promise<void> =>
     requestVoid(`${API_BASE}/tasks/${taskId}/stop`, 'POST', 'stop task'),
 
-  sendTaskInput: (taskId: string, input: string): Promise<{ status: string }> =>
-    fetchJSONPost(`${API_BASE}/tasks/${taskId}/input`, { input }),
-
   // Auth (only enforced when the server has KAYAK_AUTH_TOKEN set)
   getAuthStatus: (): Promise<{ auth_required: boolean; authenticated: boolean }> =>
     fetchJSON(`${API_BASE}/auth/status`),
@@ -333,9 +330,6 @@ export const api = {
   getInferenceStatus: (): Promise<Record<Modality, VLLMDeploymentProgress>> =>
     fetchJSON(`${API_BASE}/inference/status`),
 
-  getVLLMStatus: (modality: Modality = 'text'): Promise<VLLMDeploymentProgress> =>
-    fetchJSON(`${API_BASE}/inference/${modality}/status`),
-
   deployVLLMModel: (
     data: VLLMDeployRequest,
     modality: Modality = 'text',
@@ -358,14 +352,9 @@ export const api = {
     return response.text();
   },
 
+  /** Whether the launcher can serve MLX models on the Apple GPU, and why not if not. */
   getMetalStatus: (): Promise<MetalStatus> =>
     fetchJSON(`${API_BASE}/inference/metal`),
-
-  startMetal: (modelId: string): Promise<MetalStatus> =>
-    fetchJSONPost(`${API_BASE}/inference/metal/start`, { model_id: modelId }),
-
-  stopMetal: (): Promise<MetalStatus> =>
-    fetchJSON(`${API_BASE}/inference/metal/stop`, { method: 'POST' }),
 
   getModelCache: (): Promise<ModelCacheInfo> =>
     fetchJSON(`${API_BASE}/inference/cache`),
@@ -422,7 +411,10 @@ export const api = {
   /** Transcribes a recording and returns the text, storing nothing. */
   listen: async (recording: Blob): Promise<string> => {
     const body = new FormData();
-    body.append('file', recording, 'dictation.webm');
+    // Named after what was actually recorded: Safari and the launcher's WebKit
+    // record MP4, and a .webm name sends the decoder after the wrong container.
+    const extension = recording.type.includes('mp4') ? 'm4a' : 'webm';
+    body.append('file', recording, `dictation.${extension}`);
     const response = await fetch(`${API_BASE}/audio/listen`, withAuth({ method: 'POST', body }));
     await assertOk(response);
     return (await response.json()).text ?? '';

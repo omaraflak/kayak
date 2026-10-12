@@ -607,3 +607,44 @@ async def test_read_only_tools_needing_approval_are_not_parallelized(
     assert any(e["type"] == "tool_approval_required" for e in events)
     assert log.index("start:list_directory") > log.index("end:read_file")
     _assert_history_is_well_formed(await get_messages(conversation.id))
+
+
+@pytest.mark.asyncio
+async def test_a_tool_that_raises_on_its_own_is_an_error_result_not_a_dead_turn(
+    agent_env, monkeypatch
+):
+    """The sequential path used to let the exception escape and end the turn."""
+
+    async def handler(name: str, args: Dict[str, Any], context: Dict[str, Any]) -> str:
+        raise RuntimeError("the container went away")
+
+    _stub_stream(monkeypatch, [_tool_call_turn("run_command", "call_1"), _text_turn("ok")])
+    _stub_tool(monkeypatch, handler)
+
+    conversation = await create_conversation(title="t", agent_id="tester")
+    await add_message(conversation.id, MessageRole.USER, content="go")
+
+    events = await _drain(conversation.id)
+
+    result = next(e for e in events if e["type"] == "tool_call_result")
+    assert result["is_error"] is True
+    assert "the container went away" in result["output"]
+    assert events[-1]["type"] == "done"
+    _assert_history_is_well_formed(await get_messages(conversation.id))
+
+
+@pytest.mark.asyncio
+async def test_any_error_output_is_flagged_as_an_error(agent_env, monkeypatch):
+    async def handler(name: str, args: Dict[str, Any], context: Dict[str, Any]) -> str:
+        return "Error executing tool 'run_command': boom"
+
+    _stub_stream(monkeypatch, [_tool_call_turn("run_command", "call_1"), _text_turn("ok")])
+    _stub_tool(monkeypatch, handler)
+
+    conversation = await create_conversation(title="t", agent_id="tester")
+    await add_message(conversation.id, MessageRole.USER, content="go")
+
+    events = await _drain(conversation.id)
+
+    result = next(e for e in events if e["type"] == "tool_call_result")
+    assert result["is_error"] is True

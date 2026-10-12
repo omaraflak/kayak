@@ -1,274 +1,132 @@
-import importlib.util
+"""Every tool an agent can call: Kayak's built-ins and the custom tools in data/tools.
+
+Built-ins are Kayak's own functions and run in the server. Custom tools are read from
+their source and only ever run inside the calling conversation's sandbox: the server
+holds the Docker socket, so code an agent wrote must never execute in it.
+"""
+
+from dataclasses import dataclass
 import inspect
-from typing import Any, Callable, Dict, List, Optional, get_type_hints
+import logging
+from typing import Any, Callable, Dict, List, Optional
+
 from backend.app.config import settings
-from backend.app.models import ToolCategory, ToolDefinition, ToolRisk
-from backend.app.tools.metadata import (
-    ToolMetadata,
-    read_function_metadata,
-    read_module_metadata,
+from backend.app.models import ToolDefinition
+from backend.app.tools.metadata import ToolMetadata, read_function_metadata
+from backend.app.tools.schema import (
+    CustomTool,
+    ToolSourceError,
+    extract_tool_schema,
+    read_custom_tool,
 )
 
-# Type mapping from Python to JSON Schema
-TYPE_MAP = {
-    str: "string",
-    int: "integer",
-    float: "number",
-    bool: "boolean",
-    list: "array",
-    dict: "object",
-    List: "array",
-    Dict: "object",
-    Any: "string",
-}
-
-# Context parameters injected at runtime, excluded from tool schemas
-_CONTEXT_PARAMS = frozenset({
-    "context", "workspace_dir", "container_id", "conversation_id", "task_manager",
-    "agent_depth", "caller_agent_id",
-})
+logger = logging.getLogger(__name__)
 
 
-def python_type_to_json_type(py_type: Any) -> str:
-    """Converts a Python type hint to JSON schema type."""
-    origin = getattr(py_type, "__origin__", None)
-    if origin is not None:
-        return TYPE_MAP.get(origin, "string")
-    return TYPE_MAP.get(py_type, "string")
-
-
-def parse_docstring(docstring: Optional[str]) -> tuple[str, Dict[str, str]]:
-    """Parses a docstring into a main description and per-argument descriptions."""
-    if not docstring:
-        return "", {}
-
-    import re
-
-    lines = docstring.strip().split("\n")
-    main_desc = []
-    param_descs: Dict[str, str] = {}
-
-    in_args_section = False
-    current_param = None
-    current_param_text: List[str] = []
-
-    for line in lines:
-        stripped = line.strip()
-        if stripped.lower() in [
-            "args:",
-            "arguments:",
-            "parameters:",
-            "params:",
-        ]:
-            in_args_section = True
-            continue
-
-        if not in_args_section:
-            main_desc.append(stripped)
-        else:
-            match = re.match(
-                r"^([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*\([^)]*\))?\s*:\s*(.*)$",
-                stripped,
-            )
-            if match:
-                if current_param:
-                    param_descs[current_param] = " ".join(
-                        current_param_text
-                    ).strip()
-                current_param = match.group(1)
-                current_param_text = [match.group(2)]
-            elif current_param and stripped:
-                current_param_text.append(stripped)
-
-    if current_param:
-        param_descs[current_param] = " ".join(current_param_text).strip()
-
-    return "\n".join(main_desc).strip(), param_descs
-
-
-def extract_tool_schema(func: Callable, name: Optional[str] = None) -> Dict[str, Any]:
-    """Generates an OpenAI/LiteLLM tool definition schema from a Python function."""
-    func_name = name or func.__name__
-    docstring = inspect.getdoc(func)
-    main_description, param_descriptions = parse_docstring(docstring)
-
-    sig = inspect.signature(func)
-    try:
-        type_hints = get_type_hints(func)
-    except Exception:
-        type_hints = {}
-
-    properties = {}
-    required = []
-
-    for param_name, param in sig.parameters.items():
-        if param_name.startswith("_") or param_name in _CONTEXT_PARAMS:
-            continue
-
-        param_type = type_hints.get(param_name, str)
-        json_type = python_type_to_json_type(param_type)
-        param_desc = param_descriptions.get(
-            param_name, f"Parameter: {param_name}"
-        )
-
-        properties[param_name] = {
-            "type": json_type,
-            "description": param_desc,
-        }
-
-        if param.default == inspect.Parameter.empty:
-            required.append(param_name)
-
-    return {
-        "type": "function",
-        "function": {
-            "name": func_name,
-            "description": main_description or f"Executes {func_name}",
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            },
-        },
-    }
-
-
-def _find_tool_function(module: Any, tool_name: str) -> Optional[Callable]:
-    """Locates the primary callable in a tool module by convention."""
-    target = (
-        getattr(module, "execute", None)
-        or getattr(module, "main", None)
-        or getattr(module, tool_name, None)
-    )
-    if target:
-        return target
-    # Fallback: first public function defined in this module
-    for attr_name in dir(module):
-        attr = getattr(module, attr_name)
-        if (
-            callable(attr)
-            and not attr_name.startswith("_")
-            and attr.__module__ == f"kayak_tool_{tool_name}"
-        ):
-            return attr
-    return None
+@dataclass(frozen=True)
+class _InstalledTool:
+    """A custom tool found on disk."""
+    tool: CustomTool
+    source: str
+    verify_source: Optional[str]
 
 
 class ToolRegistry:
 
-    def __init__(self):
-        self._builtin_tools: Dict[str, Callable] = {}
+    def __init__(self) -> None:
+        self._builtins: Dict[str, Callable] = {}
         self._builtin_schemas: Dict[str, Dict[str, Any]] = {}
-        self._custom_tools: Dict[str, Callable] = {}
-        self._custom_schemas: Dict[str, Dict[str, Any]] = {}
-        self._custom_source_codes: Dict[str, str] = {}
-        self._custom_verify_codes: Dict[str, str] = {}
-        self._metadata: Dict[str, ToolMetadata] = {}
+        self._custom: Dict[str, _InstalledTool] = {}
 
-    def register_builtin(self, func: Callable, name: Optional[str] = None):
-        """Registers a built-in tool function."""
-        tool_name = name or func.__name__
-        self._builtin_tools[tool_name] = func
-        self._builtin_schemas[tool_name] = extract_tool_schema(func, tool_name)
-        self._metadata[tool_name] = read_function_metadata(func)
+    def register_builtin(self, func: Callable) -> None:
+        """Registers one of Kayak's own tool functions."""
+        self._builtins[func.__name__] = func
+        self._builtin_schemas[func.__name__] = extract_tool_schema(func)
 
-    def load_custom_tools(self):
-        """Scans data/tools/<name>/tool.py and loads each tool."""
-        self._custom_tools.clear()
-        self._custom_schemas.clear()
-        self._custom_source_codes.clear()
-        self._custom_verify_codes.clear()
-        for tool_name in [n for n in self._metadata if n not in self._builtin_schemas]:
-            self._metadata.pop(tool_name, None)
-
+    def load_custom_tools(self) -> None:
+        """Reads every data/tools/<name>/tool.py, replacing what was loaded before."""
+        loaded: Dict[str, _InstalledTool] = {}
         tools_dir = settings.TOOLS_DIR
-        if not tools_dir.exists():
-            return
+        folders = sorted(tools_dir.iterdir()) if tools_dir.exists() else []
 
-        for tool_folder in tools_dir.iterdir():
-            if not tool_folder.is_dir():
+        for folder in folders:
+            tool_file = folder / "tool.py"
+            if not folder.is_dir() or not tool_file.exists():
                 continue
-
-            tool_name = tool_folder.name
-            tool_file = tool_folder / "tool.py"
-            verify_file = tool_folder / "verify.py"
-
-            if not tool_file.exists():
+            name = folder.name
+            if name in self._builtins:
+                logger.warning("Ignoring custom tool '%s': a built-in has that name.", name)
                 continue
-
             try:
-                spec = importlib.util.spec_from_file_location(
-                    f"kayak_tool_{tool_name}", tool_file
-                )
-                if not spec or not spec.loader:
-                    continue
+                source = tool_file.read_text(encoding="utf-8")
+                tool = read_custom_tool(name, source)
+            except (OSError, ToolSourceError) as error:
+                logger.warning("Ignoring custom tool '%s': %s", name, error)
+                continue
+            verify_file = folder / "verify.py"
+            loaded[name] = _InstalledTool(
+                tool=tool,
+                source=source,
+                verify_source=(
+                    verify_file.read_text(encoding="utf-8") if verify_file.exists() else None
+                ),
+            )
 
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
+        self._custom = loaded
 
-                target_func = _find_tool_function(module, tool_name)
-                if not target_func:
-                    continue
+    def has_tool(self, name: str) -> bool:
+        return name in self._builtins or name in self._custom
 
-                self._custom_tools[tool_name] = target_func
-                self._custom_schemas[tool_name] = extract_tool_schema(target_func, tool_name)
-                # A custom tool declares its own classification with module-level
-                # CATEGORY / RISK / READ_ONLY constants; it cannot import Kayak because
-                # the same file also runs standalone during verification and in the sandbox.
-                self._metadata[tool_name] = read_module_metadata(module)
-                self._custom_source_codes[tool_name] = tool_file.read_text(encoding="utf-8")
-                if verify_file.exists():
-                    self._custom_verify_codes[tool_name] = verify_file.read_text(encoding="utf-8")
+    def is_custom(self, name: str) -> bool:
+        return name in self._custom
 
-            except Exception as e:
-                print(f"Error loading custom tool '{tool_name}': {e}")
-
-    def get_tool(self, name: str) -> Optional[Callable]:
-        """Returns the callable for a tool."""
-        return self._builtin_tools.get(name) or self._custom_tools.get(name)
+    def metadata(self, name: str) -> ToolMetadata:
+        """Category, risk and read-only flag of a tool; defaults for an unknown one."""
+        if name in self._builtins:
+            return read_function_metadata(self._builtins[name])
+        if name in self._custom:
+            return self._custom[name].tool.metadata
+        return ToolMetadata()
 
     def is_read_only(self, name: str) -> bool:
-        """Returns True if the tool has no side effects and is safe for concurrent execution."""
-        meta = self._metadata.get(name)
-        if meta is not None:
-            return meta.read_only
-        func = self.get_tool(name)
-        if func is not None:
-            return read_function_metadata(func).read_only
-        return False
+        """True if the tool has no side effects and is safe for concurrent execution."""
+        return self.has_tool(name) and self.metadata(name).read_only
+
+    def _schemas(self) -> Dict[str, Dict[str, Any]]:
+        return {
+            **self._builtin_schemas,
+            **{name: installed.tool.schema for name, installed in self._custom.items()},
+        }
 
     def get_tool_definitions(
         self, allowed_names: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
-        """Returns OpenAPI function definitions formatted for LiteLLM/OpenAI."""
-        all_schemas = {**self._builtin_schemas, **self._custom_schemas}
+        """Function schemas for LiteLLM, limited to the allowed tools when given."""
+        schemas = self._schemas()
         if allowed_names is None:
-            return list(all_schemas.values())
-        return [schema for name, schema in all_schemas.items() if name in allowed_names]
+            return list(schemas.values())
+        return [schema for name, schema in schemas.items() if name in allowed_names]
 
     def list_all_tools(self) -> List[ToolDefinition]:
-        """Returns a list of all tools with metadata for UI management."""
+        """Every tool with its metadata and, for custom tools, its source."""
         result: List[ToolDefinition] = []
-        all_schemas = {**self._builtin_schemas, **self._custom_schemas}
-
-        for name, schema in all_schemas.items():
-            fn = schema.get("function", {})
-            is_builtin = name in self._builtin_schemas
-            meta = self._metadata.get(name, ToolMetadata())
+        for name, schema in self._schemas().items():
+            function = schema["function"]
+            meta = self.metadata(name)
+            installed = self._custom.get(name)
             result.append(
                 ToolDefinition(
                     name=name,
-                    description=fn.get("description", ""),
-                    parameters=fn.get("parameters", {}),
-                    is_builtin=is_builtin,
+                    description=function.get("description", ""),
+                    parameters=function.get("parameters", {}),
+                    is_builtin=installed is None,
                     category=meta.category,
                     risk=meta.risk,
                     read_only=meta.read_only,
-                    source_code=self._custom_source_codes.get(name) if not is_builtin else None,
-                    verify_code=self._custom_verify_codes.get(name) if not is_builtin else None,
+                    source_code=installed.source if installed else None,
+                    verify_code=installed.verify_source if installed else None,
                 )
             )
-
         return result
 
     async def execute_tool(
@@ -277,43 +135,38 @@ class ToolRegistry:
         arguments: Dict[str, Any],
         context: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Executes a tool with the provided arguments and runtime context."""
-        # If executing in a Docker sandbox container and this is a custom tool
-        container_id = context.get("container_id") if context else None
-        if container_id and name in self._custom_source_codes:
+        """Runs a tool with the model's arguments and the turn's runtime context."""
+        context = context or {}
+
+        installed = self._custom.get(name)
+        if installed:
+            container_id = context.get("container_id")
+            if not container_id:
+                return "Error: Custom tools run in the conversation's sandbox, and none is available."
             from backend.app.agent.sandbox import sandbox_manager
-            tool_code = self._custom_source_codes[name]
+
             return await sandbox_manager.exec_custom_tool(
                 container_id=container_id,
-                tool_name=name,
-                tool_code=tool_code,
+                entrypoint=installed.tool.entrypoint,
+                tool_code=installed.source,
                 arguments=arguments,
             )
 
-        func = self.get_tool(name)
+        func = self._builtins.get(name)
         if not func:
             return f"Error: Tool '{name}' not found."
 
-        sig = inspect.signature(func)
         call_kwargs = dict(arguments)
+        for param_name in inspect.signature(func).parameters:
+            if param_name == "context":
+                call_kwargs["context"] = context
+            elif param_name in context:
+                call_kwargs[param_name] = context[param_name]
 
-        # Inject context parameters if function signature accepts them
-        if context:
-            for param_name in sig.parameters:
-                if param_name in context:
-                    call_kwargs[param_name] = context[param_name]
-                elif param_name == "context":
-                    call_kwargs["context"] = context
-
-        try:
-            if inspect.iscoroutinefunction(func):
-                result = await func(**call_kwargs)
-            else:
-                result = func(**call_kwargs)
-            return str(result)
-        except Exception as e:
-            return f"Error executing tool '{name}': {str(e)}"
+        result = func(**call_kwargs)
+        if inspect.isawaitable(result):
+            result = await result
+        return str(result)
 
 
-# Singleton instance
 tool_registry = ToolRegistry()

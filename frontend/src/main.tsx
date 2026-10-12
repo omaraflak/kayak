@@ -7,6 +7,8 @@ import { DialogProvider } from './context/DialogContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { VLLMStatusProvider } from './context/VLLMStatusContext';
 import { watchForNewAppShell } from './utils/appShellGuard';
+// Bundled rather than linked from a CDN, so maths renders when the Mac is offline.
+import 'katex/dist/katex.min.css';
 import './index.css';
 
 watchForNewAppShell();

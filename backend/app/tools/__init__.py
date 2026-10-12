@@ -19,7 +19,6 @@ from backend.app.tools.builtins.subagent_tools import (
 )
 from backend.app.tools.builtins.task_tools import (
     get_task_status,
-    send_task_input,
     start_background_task,
     stop_task,
 )
@@ -41,7 +40,6 @@ tool_registry.register_builtin(run_command)
 tool_registry.register_builtin(run_python)
 tool_registry.register_builtin(start_background_task)
 tool_registry.register_builtin(get_task_status)
-tool_registry.register_builtin(send_task_input)
 tool_registry.register_builtin(stop_task)
 tool_registry.register_builtin(spawn_subagent)
 tool_registry.register_builtin(get_subagent_result)
@@ -54,6 +52,3 @@ tool_registry.register_builtin(activate_tool)
 tool_registry.register_builtin(get_tool_source)
 tool_registry.register_builtin(create_or_update_skill)
 tool_registry.register_builtin(list_available_skills)
-
-# Initial load of custom tools from data/tools/
-tool_registry.load_custom_tools()

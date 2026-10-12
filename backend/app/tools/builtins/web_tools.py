@@ -1,15 +1,10 @@
+import asyncio
 from typing import Optional
 from bs4 import BeautifulSoup
+from ddgs import DDGS
 import httpx
 from backend.app.models import ToolCategory, ToolRisk
 from backend.app.tools.metadata import tool_metadata
-
-try:
-    # duckduckgo-search was renamed to ddgs; keep the old import working so an
-    # existing environment does not break on upgrade.
-    from ddgs import DDGS
-except ImportError:  # pragma: no cover - depends on which package is installed
-    from duckduckgo_search import DDGS
 
 
 def _clean_html_text(html_content: str, max_length: int = 4000) -> str:
@@ -34,18 +29,18 @@ async def web_search(query: str, max_results: Optional[int] = 5) -> str:
         query: Search query string.
         max_results: Maximum number of search results to return (default 5).
     """
-    try:
-        results = []
+    def _search() -> list:
         with DDGS() as ddgs:
-            raw_results = list(
-                ddgs.text(query, max_results=max_results or 5)
-            )
-            for r in raw_results:
-                results.append(
-                    f"Title: {r.get('title', 'N/A')}\nURL:"
-                    f" {r.get('href', 'N/A')}\nSnippet:"
-                    f" {r.get('body', 'N/A')}\n"
-                )
+            return list(ddgs.text(query, max_results=max_results or 5))
+
+    try:
+        # The search client is synchronous; run inline, it would stall every other
+        # conversation's stream for as long as the search takes.
+        results = [
+            f"Title: {r.get('title', 'N/A')}\nURL: {r.get('href', 'N/A')}\n"
+            f"Snippet: {r.get('body', 'N/A')}\n"
+            for r in await asyncio.to_thread(_search)
+        ]
 
         if not results:
             return f"No search results found for query: '{query}'"
@@ -72,7 +67,7 @@ async def fetch_url(url: str, max_length: Optional[int] = 4000) -> str:
     try:
         headers = {
             "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
             )
         }
         async with httpx.AsyncClient(

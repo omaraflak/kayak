@@ -19,7 +19,6 @@ async def _conversation(title: str, parent: str | None = None) -> str:
     conversation = await create_conversation(
         title=title,
         agent_id="general",
-        isolated_container=True,
         parent_conversation_id=parent,
     )
     return conversation.id

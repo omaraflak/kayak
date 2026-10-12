@@ -47,33 +47,18 @@ async def init_db() -> None:
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             agent_id TEXT NOT NULL,
-            isolated_container INTEGER DEFAULT 0,
             container_id TEXT,
             status TEXT DEFAULT 'active',
+            -- Set on sub-agent conversations; deleting the parent deletes these.
             parent_conversation_id TEXT,
+            -- Where a branch was taken from. Separate from the parent link so that
+            -- deleting a conversation does not take its branches with it.
+            branched_from_conversation_id TEXT,
+            branched_from_message_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
         """)
-
-        # Migration: link sub-agent conversations back to the conversation that spawned them
-        try:
-            await db.execute(
-                "ALTER TABLE conversations ADD COLUMN parent_conversation_id TEXT;"
-            )
-        except Exception:
-            pass
-
-        # Migration: record where a branch was taken from. Deliberately separate from
-        # parent_conversation_id, which means "sub-agent of" and cascades deletion --
-        # deleting a conversation must not take its branches with it.
-        for column in ("branched_from_conversation_id", "branched_from_message_id"):
-            try:
-                await db.execute(
-                    f"ALTER TABLE conversations ADD COLUMN {column} TEXT;"
-                )
-            except Exception:
-                pass
 
         await db.execute("""
         CREATE TABLE IF NOT EXISTS messages (
@@ -90,12 +75,6 @@ async def init_db() -> None:
         );
         """)
 
-        # Migration: Ensure thinking column exists if table was previously created without it
-        try:
-            await db.execute("ALTER TABLE messages ADD COLUMN thinking TEXT;")
-        except Exception:
-            pass
-
         await db.execute("""
         CREATE TABLE IF NOT EXISTS tasks (
             id TEXT PRIMARY KEY,
@@ -104,24 +83,16 @@ async def init_db() -> None:
             name TEXT NOT NULL,
             command TEXT,
             status TEXT DEFAULT 'running',
-            pid INTEGER,
             exit_code INTEGER,
             stdout TEXT DEFAULT '',
             stderr TEXT DEFAULT '',
+            -- For a sub-agent task, the conversation the delegated agent works in.
+            subagent_conversation_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
         """)
-
-        # Migration: a sub-agent task names the conversation it is running, so the
-        # task list can open the transcript of the delegated work.
-        try:
-            await db.execute(
-                "ALTER TABLE tasks ADD COLUMN subagent_conversation_id TEXT;"
-            )
-        except Exception:
-            pass
 
         await db.execute(
             # rowid is implicit in every index entry, so ordering by
@@ -168,24 +139,11 @@ def _row_to_conversation(row: aiosqlite.Row) -> Conversation:
         id=row["id"],
         title=row["title"],
         agent_id=row["agent_id"],
-        isolated_container=bool(row["isolated_container"]),
         container_id=row["container_id"],
         status=ConversationStatus(row["status"]),
-        parent_conversation_id=(
-            row["parent_conversation_id"]
-            if "parent_conversation_id" in row.keys()
-            else None
-        ),
-        branched_from_conversation_id=(
-            row["branched_from_conversation_id"]
-            if "branched_from_conversation_id" in row.keys()
-            else None
-        ),
-        branched_from_message_id=(
-            row["branched_from_message_id"]
-            if "branched_from_message_id" in row.keys()
-            else None
-        ),
+        parent_conversation_id=row["parent_conversation_id"],
+        branched_from_conversation_id=row["branched_from_conversation_id"],
+        branched_from_message_id=row["branched_from_message_id"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -200,15 +158,10 @@ def _row_to_task(row: aiosqlite.Row) -> BackgroundTask:
         name=row["name"],
         command=row["command"],
         status=TaskStatus(row["status"]),
-        pid=row["pid"],
         exit_code=row["exit_code"],
         stdout=row["stdout"],
         stderr=row["stderr"],
-        subagent_conversation_id=(
-            row["subagent_conversation_id"]
-            if "subagent_conversation_id" in row.keys()
-            else None
-        ),
+        subagent_conversation_id=row["subagent_conversation_id"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -228,7 +181,7 @@ def _row_to_message(row: aiosqlite.Row) -> Message:
         conversation_id=row["conversation_id"],
         role=MessageRole(row["role"]),
         content=row["content"],
-        thinking=row["thinking"] if "thinking" in row.keys() else None,
+        thinking=row["thinking"],
         tool_calls=tool_calls,
         tool_call_id=row["tool_call_id"],
         name=row["name"],
@@ -242,8 +195,6 @@ def _row_to_message(row: aiosqlite.Row) -> Message:
 async def create_conversation(
     title: str,
     agent_id: str = "general",
-    isolated_container: bool = False,
-    conversation_id: Optional[str] = None,
     container_id: Optional[str] = None,
     parent_conversation_id: Optional[str] = None,
     branched_from_conversation_id: Optional[str] = None,
@@ -254,8 +205,6 @@ async def create_conversation(
     Args:
         title: Title of the conversation session.
         agent_id: ID of the agent profile assigned to this conversation.
-        isolated_container: Whether to run this conversation in an isolated Docker container.
-        conversation_id: Optional predetermined UUID identifier.
         container_id: Optional Docker container this conversation is bound to.
         parent_conversation_id: Optional parent conversation, set for sub-agent sessions.
         branched_from_conversation_id: Conversation this one was branched from, if any.
@@ -264,21 +213,20 @@ async def create_conversation(
     Returns:
         Conversation: The newly created Conversation instance.
     """
-    cid = conversation_id or str(uuid.uuid4())
+    cid = str(uuid.uuid4())
     now = _utc_now_iso()
     status = ConversationStatus.ACTIVE
 
     async with get_db_connection() as db:
         await db.execute(
             """
-        INSERT INTO conversations (id, title, agent_id, isolated_container, container_id, status, parent_conversation_id, branched_from_conversation_id, branched_from_message_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO conversations (id, title, agent_id, container_id, status, parent_conversation_id, branched_from_conversation_id, branched_from_message_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 cid,
                 title,
                 agent_id,
-                1 if isolated_container else 0,
                 container_id,
                 status.value,
                 parent_conversation_id,
@@ -297,7 +245,6 @@ async def create_conversation(
         id=cid,
         title=title,
         agent_id=agent_id,
-        isolated_container=isolated_container,
         container_id=container_id,
         status=status,
         parent_conversation_id=parent_conversation_id,
@@ -342,7 +289,6 @@ async def list_conversations() -> List[Conversation]:
 async def update_conversation(
     conversation_id: str,
     title: Optional[str] = None,
-    agent_id: Optional[str] = None,
     status: Optional[ConversationStatus | str] = None,
     container_id: Optional[str] = None,
 ) -> None:
@@ -351,7 +297,6 @@ async def update_conversation(
     Args:
         conversation_id: Unique identifier of the conversation to update.
         title: Optional new title.
-        agent_id: Optional new agent identifier.
         status: Optional updated conversation status enum or string.
         container_id: Optional Docker container identifier.
     """
@@ -362,9 +307,6 @@ async def update_conversation(
     if title is not None:
         fields.append("title = ?")
         values.append(title)
-    if agent_id is not None:
-        fields.append("agent_id = ?")
-        values.append(agent_id)
     if status is not None:
         status_val = status.value if isinstance(status, ConversationStatus) else str(status)
         fields.append("status = ?")
@@ -583,7 +525,7 @@ async def copy_messages_through(
                     target_conversation_id,
                     row["role"],
                     row["content"],
-                    row["thinking"] if "thinking" in row.keys() else None,
+                    row["thinking"],
                     row["tool_calls"],
                     row["tool_call_id"],
                     row["name"],
@@ -625,7 +567,6 @@ async def create_task(
     task_type: TaskType | str,
     name: str,
     command: Optional[str] = None,
-    pid: Optional[int] = None,
     subagent_conversation_id: Optional[str] = None,
 ) -> BackgroundTask:
     """Inserts a new asynchronous background task record.
@@ -635,7 +576,6 @@ async def create_task(
         task_type: Task classification type.
         name: Descriptive name for the task.
         command: Optional shell command line executed.
-        pid: Optional process ID.
         subagent_conversation_id: For a sub-agent task, the conversation the delegated
             agent is working in, so its transcript can be opened from the task.
 
@@ -650,8 +590,8 @@ async def create_task(
     async with get_db_connection() as db:
         await db.execute(
             """
-        INSERT INTO tasks (id, conversation_id, task_type, name, command, status, pid, stdout, stderr, subagent_conversation_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?)
+        INSERT INTO tasks (id, conversation_id, task_type, name, command, status, stdout, stderr, subagent_conversation_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, '', '', ?, ?, ?)
         """,
             (
                 tid,
@@ -660,7 +600,6 @@ async def create_task(
                 name,
                 command,
                 status_enum.value,
-                pid,
                 subagent_conversation_id,
                 now,
                 now,
@@ -675,7 +614,6 @@ async def create_task(
         name=name,
         command=command,
         status=status_enum,
-        pid=pid,
         exit_code=None,
         stdout="",
         stderr="",
@@ -756,7 +694,6 @@ async def update_task(
     exit_code: Optional[int] = None,
     stdout: Optional[str] = None,
     stderr: Optional[str] = None,
-    pid: Optional[int] = None,
 ) -> None:
     """Updates attributes of an active or completed background task.
 
@@ -766,7 +703,6 @@ async def update_task(
         exit_code: Optional process exit code.
         stdout: Optional full stdout replacement.
         stderr: Optional full stderr replacement.
-        pid: Optional process ID.
     """
     now = _utc_now_iso()
     fields = ["updated_at = ?"]
@@ -785,9 +721,6 @@ async def update_task(
     if stderr is not None:
         fields.append("stderr = ?")
         values.append(stderr)
-    if pid is not None:
-        fields.append("pid = ?")
-        values.append(pid)
 
     values.append(task_id)
     query = f"UPDATE tasks SET {', '.join(fields)} WHERE id = ?"

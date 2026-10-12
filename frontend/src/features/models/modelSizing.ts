@@ -6,6 +6,9 @@
  * count and the quantization, which is enough to say "this will not fit" before the
  * download starts rather than after it fails.
  *
+ * Containers on a Mac run on the CPU, inside the memory Docker Desktop's VM has, so
+ * that is the memory a model has to fit in.
+ *
  * These are estimates presented as estimates -- they inform a warning, never a block.
  */
 
@@ -24,12 +27,23 @@ export interface ModelSizeEstimate {
   format: WeightFormat;
   /** Approximate size of the weights alone. */
   weightsGB: number;
-  /**
-   * Weights plus room for the KV cache, activations and CUDA graphs. vLLM reserves a
-   * fraction of total VRAM rather than sizing to the model, so headroom is not optional.
-   */
+  /** Weights, the runtime, and the smallest useful KV cache: what starting it takes. */
   requiredGB: number;
 }
+
+/**
+ * Memory a CPU deployment consumes beyond the size of the weight files.
+ *
+ * Measured rather than guessed. On a 7.77 GB host, a model whose weights are 1.4 GB on
+ * disk reported a 2.33 GB loaded footprint and left 2.5 GB free -- so about 4 GB went
+ * to the runtime plus the gap between the file size and what the loaded model actually
+ * occupies. Rounded up, because over-promising here is precisely what stops a
+ * deployment from starting.
+ */
+const CPU_RUNTIME_OVERHEAD_GB = 4.5;
+
+/** The smallest KV cache vLLM is given, which a model needs to start at all. */
+const MIN_KV_CACHE_GB = 1;
 
 // Matches "7B", "1.5b", "70B" but not the "2.5" in "Qwen2.5-Coder": a bare decimal
 // with no unit is a version number, not a parameter count.
@@ -78,44 +92,24 @@ export function estimateModelSize(modelId: string): ModelSizeEstimate | null {
     parametersB,
     format,
     weightsGB: round(weightsGB),
-    requiredGB: round(weightsGB * 1.2 + 2),
+    requiredGB: round(weightsGB + CPU_RUNTIME_OVERHEAD_GB + MIN_KV_CACHE_GB),
   };
 }
 
-export type FitVerdict = 'fits' | 'tight' | 'too-large' | 'cpu-only' | 'unknown';
+export type FitVerdict = 'fits' | 'tight' | 'too-large' | 'unknown';
 
 /**
- * Compares an estimate against the memory the host actually has.
+ * Compares an estimate against the memory a container will have.
  *
  * @param estimate Sizing for the model, or null when it could not be determined.
- * @param availableGB Total accelerator memory, or 0 on a machine without a GPU.
+ * @param availableGB Memory the container may use, or 0 when Docker did not say.
  */
-export function judgeFit(
-  estimate: ModelSizeEstimate | null,
-  availableGB: number,
-  hasAccelerator = false
-): FitVerdict {
-  // A GPU whose size could not be read is not the same as no GPU. Kayak usually
-  // runs in a container that cannot see the cards even when the daemon can hand
-  // one over, so treating "no reading" as "no accelerator" called every model too
-  // large on exactly the machines that could run them.
-  if (availableGB <= 0) return hasAccelerator ? 'unknown' : 'cpu-only';
-  if (!estimate) return 'unknown';
+export function judgeFit(estimate: ModelSizeEstimate | null, availableGB: number): FitVerdict {
+  if (!estimate || availableGB <= 0) return 'unknown';
   if (estimate.requiredGB > availableGB) return 'too-large';
   if (estimate.requiredGB > availableGB * 0.85) return 'tight';
   return 'fits';
 }
-
-/**
- * Memory a CPU deployment consumes beyond the size of the weight files.
- *
- * Measured rather than guessed. On a 7.77 GB host, a model whose weights are 1.4 GB on
- * disk reported a 2.33 GB loaded footprint and left 2.5 GB free -- so about 4 GB went
- * to the runtime plus the gap between the file size and what the loaded model actually
- * occupies. Rounded up, because over-promising here is precisely what stops a
- * deployment from starting.
- */
-const CPU_RUNTIME_OVERHEAD_GB = 4.5;
 
 /**
  * The largest working-memory reservation a CPU deployment can actually use.
@@ -135,15 +129,6 @@ export function maxWorkingMemoryGB(
   const weightsGB = estimate?.weightsGB ?? 0;
   const spare = Math.floor(totalMemoryGB - weightsGB - CPU_RUNTIME_OVERHEAD_GB);
   return Math.max(1, spare);
-}
-
-/** Formats a byte count for display, in the units people use for model weights. */
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  const value = bytes / 1024 ** exponent;
-  return `${value >= 10 || exponent === 0 ? Math.round(value) : value.toFixed(1)} ${units[exponent]}`;
 }
 
 function round(value: number): number {

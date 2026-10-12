@@ -15,14 +15,12 @@ class ConversationStatus(str, Enum):
     """Lifecycle status of a conversation."""
     ACTIVE = "active"
     RUNNING = "running"
-    ARCHIVED = "archived"
 
 
 class TaskType(str, Enum):
     """Classification of asynchronous tasks."""
     SHELL_COMMAND = "shell_command"
     SUBAGENT = "subagent"
-    CUSTOM = "custom"
 
 
 class TaskStatus(str, Enum):
@@ -62,16 +60,6 @@ class ToolRisk(str, Enum):
     HIGH = "high"
 
 
-class JSONSchemaType(str, Enum):
-    """JSON Schema primitive data types."""
-    STRING = "string"
-    INTEGER = "integer"
-    NUMBER = "number"
-    BOOLEAN = "boolean"
-    ARRAY = "array"
-    OBJECT = "object"
-
-
 class Message(BaseModel):
     """A single message item in the conversation history."""
     id: Optional[str] = None
@@ -90,7 +78,6 @@ class Conversation(BaseModel):
     id: str
     title: str
     agent_id: str
-    isolated_container: bool = False
     container_id: Optional[str] = None
     status: ConversationStatus = ConversationStatus.ACTIVE
     #: Set on sub-agent sessions. Deleting a conversation deletes these with it.
@@ -106,8 +93,7 @@ class Conversation(BaseModel):
 class CreateConversationRequest(BaseModel):
     """Request body for instantiating a new conversation session.
 
-    There is deliberately no isolation flag any more: every conversation runs its
-    tools inside a dedicated Docker container.
+    Every conversation runs its tools inside a dedicated Docker container.
     """
     title: Optional[str] = None
     agent_id: str = "general"
@@ -173,7 +159,6 @@ class BackgroundTask(BaseModel):
     name: str
     command: Optional[str] = None
     status: TaskStatus = TaskStatus.RUNNING
-    pid: Optional[int] = None
     exit_code: Optional[int] = None
     stdout: str = ""
     stderr: str = ""

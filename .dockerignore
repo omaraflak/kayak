@@ -17,7 +17,6 @@ data/huggingface_cache/
 # Secrets
 .env
 .env.*
-!.env.example
 *.key
 *.pem
 

@@ -6,8 +6,6 @@ when no model is running, which is the state a user is in the first time they op
 the page.
 """
 
-import asyncio
-import json
 import time
 
 import pytest
@@ -16,9 +14,6 @@ from fastapi.testclient import TestClient
 from backend.app.audio import store
 from backend.app.audio.models import AudioKind, JobKind, JobState
 from backend.app.audio.store import AudioStoreError
-from backend.app.inference.audio_runtimes import SpeechRuntime, TranscriptionRuntime
-from backend.app.inference.models import DeployRequest, Modality
-from backend.app.inference.runtimes import SpecContext
 from backend.app.main import app
 
 
@@ -161,12 +156,6 @@ class TestRoutesWithNothingRunning:
             "default_voice": None,
         }
 
-    def test_a_malformed_id_is_rejected_not_served(self, client):
-        response = client.get("/api/audio/items/..%2F..%2Fetc%2Fpasswd/file")
-
-        assert response.status_code in (400, 404)
-        assert "root:" not in response.text
-
 
 class TestSynthesisQueue:
     """The queue's own decisions, which need no model to exercise.
@@ -181,12 +170,6 @@ class TestSynthesisQueue:
         from backend.app.audio.jobs import SynthesisQueue
 
         return SynthesisQueue()
-
-    @pytest.fixture
-    def transcription(self, audio_dir):
-        from backend.app.audio.jobs import TranscriptionQueue
-
-        return TranscriptionQueue()
 
     def _request(self, text: str = "hello"):
         from backend.app.audio.models import SpeechRequest
@@ -386,42 +369,3 @@ class TestSpeechCache:
         revived._load_from_disk()
 
         assert revived.get("m1") is None
-
-
-class TestTranscriptionRuntime:
-    @pytest.fixture
-    def spec(self):
-        return asyncio.run(
-            TranscriptionRuntime().container_spec(
-                DeployRequest(model_id="openai/whisper-small"),
-                SpecContext(has_gpu=False, docker_memory_bytes=None, hf_token=None),
-            )
-        )
-
-    def test_the_server_is_told_which_direction_to_run(self, spec):
-        assert spec.command[spec.command.index("--modality") + 1] == "transcription"
-
-    def test_it_shares_the_image_with_speech(self, spec):
-        # One image, told at start what it is: they share torch and transformers
-        # entirely, and a second image would double a two gigabyte download.
-        speech_spec = asyncio.run(
-            SpeechRuntime().container_spec(
-                DeployRequest(model_id="hexgrad/Kokoro-82M"),
-                SpecContext(has_gpu=False, docker_memory_bytes=None, hf_token=None),
-            )
-        )
-        assert spec.image == speech_spec.image
-
-    def test_but_not_the_container_or_the_port(self):
-        speech, transcription = SpeechRuntime(), TranscriptionRuntime()
-
-        # Sharing either would mean transcribing a recording costs you the voice
-        # model you had loaded.
-        assert speech.container_name != transcription.container_name
-        assert speech.default_port != transcription.default_port
-
-    def test_it_claims_speech_recognition_repositories(self):
-        runtime = TranscriptionRuntime()
-
-        assert runtime.can_serve("openai/whisper-large-v3", library_name="transformers")
-        assert runtime.pipeline_tags == ("automatic-speech-recognition",)

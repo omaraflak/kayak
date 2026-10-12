@@ -2,9 +2,9 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, create_model
 
-from backend.app import support
+from backend.app import docker_host, support
 from backend.app.config import settings
 from backend.app.providers import PROVIDERS
 
@@ -18,26 +18,22 @@ _VISIBLE_SUFFIX = 4
 
 _SECRET_KEYS = tuple(provider.api_key_setting for provider in PROVIDERS)
 
-#: Addresses that keep the server reachable only from this machine.
-_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+#: Addresses that keep the server reachable only from this Mac.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
-class UpdateSettingsRequest(BaseModel):
-    """Payload for updating stored provider credentials.
-
-    Credentials are the only thing this endpoint writes. Endpoints, model choices and
-    execution limits are deployment configuration and come from the environment, so
-    they cannot be changed by anyone who can reach the UI. Unknown fields are rejected
-    rather than ignored, so an attempt to set one fails loudly instead of appearing to
-    succeed.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    OPENAI_API_KEY: Optional[str] = None
-    GEMINI_API_KEY: Optional[str] = None
-    ANTHROPIC_API_KEY: Optional[str] = None
-    HUGGINGFACE_API_KEY: Optional[str] = None
+#: Payload for updating stored provider credentials, one optional field per provider.
+#:
+#: Credentials are the only thing this endpoint writes. Endpoints, model choices and
+#: execution limits are deployment configuration and come from the environment, so
+#: they cannot be changed by anyone who can reach the UI. Unknown fields are rejected
+#: rather than ignored, so an attempt to set one fails loudly instead of appearing to
+#: succeed.
+UpdateSettingsRequest = create_model(
+    "UpdateSettingsRequest",
+    __config__=ConfigDict(extra="forbid"),
+    **{key: (Optional[str], None) for key in _SECRET_KEYS},
+)
 
 
 class ProviderCredential(BaseModel):
@@ -86,23 +82,37 @@ def is_masked(value: str) -> bool:
     return _MASK_CHAR in value
 
 
+def reachable_address() -> str:
+    """The address Kayak can be reached on from outside this Mac, if any.
+
+    Inside a container Kayak binds 0.0.0.0, which is harmless: what matters is the
+    address Docker publishes the port on, which the launcher and docker-compose
+    keep to 127.0.0.1.
+    """
+    hosts = docker_host.published_hosts(settings.PORT)
+    if hosts is None:
+        return settings.HOST
+    exposed = [host for host in hosts if host not in LOOPBACK_HOSTS]
+    return exposed[0] if exposed else "127.0.0.1"
+
+
 def _security_posture() -> SecurityPosture:
     """Describes whether this server is safely reachable."""
-    host = settings.HOST
-    is_loopback = host in _LOOPBACK_HOSTS
+    host = reachable_address()
+    is_loopback = host in LOOPBACK_HOSTS
     auth_required = bool(settings.AUTH_TOKEN)
 
     warning: Optional[str] = None
     if not is_loopback and not auth_required:
         warning = (
-            f"This server is bound to {host} and has no access token, so anyone who can "
-            "reach it can run shell commands on this machine. Set KAYAK_AUTH_TOKEN, or "
-            "bind to 127.0.0.1."
+            f"This server is reachable on {host} and has no access token, so anyone who "
+            "can reach it can run shell commands on this Mac. Set KAYAK_AUTH_TOKEN, or "
+            "publish it on 127.0.0.1 only."
         )
     elif not is_loopback:
         warning = (
-            f"This server is reachable beyond this machine (bound to {host}). Access is "
-            "gated by the configured token."
+            f"This server is reachable beyond this Mac (on {host}). Access is gated by "
+            "the configured token."
         )
 
     return SecurityPosture(

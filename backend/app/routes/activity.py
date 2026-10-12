@@ -9,18 +9,14 @@ reconnects after the server restarts -- is immediately correct without needing
 to have witnessed the events it missed.
 """
 
-import asyncio
-import json
-from typing import AsyncGenerator
+from typing import AsyncIterator
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
+from backend.app import sse
 from backend.app.agent import events
 from backend.app.agent.activity import activity_tracker
 
 router = APIRouter(prefix="/api/activity", tags=["activity"])
-
-# Idle streams send a comment-like ping so proxies do not time the connection out.
-_PING_INTERVAL_SECONDS = 20.0
 
 
 @router.get("/events")
@@ -28,30 +24,12 @@ async def stream_activity(request: Request) -> StreamingResponse:
     """Streams conversation activity changes to a single client."""
     queue = activity_tracker.subscribe()
 
-    async def event_generator() -> AsyncGenerator[str, None]:
+    async def frames() -> AsyncIterator[str]:
         try:
-            snapshot = events.activity_snapshot(activity_tracker.running_ids())
-            yield f"data: {json.dumps(snapshot)}\n\n"
-
-            while True:
-                if await request.is_disconnected():
-                    break
-                try:
-                    event = await asyncio.wait_for(
-                        queue.get(), timeout=_PING_INTERVAL_SECONDS
-                    )
-                    yield f"data: {json.dumps(event)}\n\n"
-                except asyncio.TimeoutError:
-                    yield f"data: {json.dumps({'type': 'ping'})}\n\n"
+            yield sse.frame(events.activity_snapshot(activity_tracker.running_ids()))
+            async for chunk in sse.drain(request, queue, events.ping()):
+                yield chunk
         finally:
             activity_tracker.unsubscribe(queue)
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return sse.response(frames())

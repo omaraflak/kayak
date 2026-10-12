@@ -26,16 +26,14 @@ class ServerState(str, Enum):
 
 
 class DeployRequest(BaseModel):
-    """Request payload for deploying a model via local vLLM."""
+    """Request payload for starting a local model server."""
     model_id: str = Field(..., description="Hugging Face repository ID or model name (e.g. 'Qwen/Qwen2.5-Coder-7B-Instruct')")
-    gpu_memory_utilization: float = Field(0.90, ge=0.1, le=1.0, description="Fraction of GPU memory to reserve for model weights and KV cache")
     max_model_len: Optional[int] = Field(None, ge=256, description="Maximum sequence length (context window)")
-    enforce_eager: bool = Field(False, description="Disable CUDA graph capture for reduced memory usage")
-    dtype: str = Field("auto", description="Data type for model weights ('auto', 'float16', 'bfloat16')")
-    #: CPU deployments only. vLLM refuses to start when this exceeds free memory, so
-    #: the default is derived from the memory Docker reports rather than fixed. The
-    #: upper bound exists only to reject nonsense; the real ceiling is the machine's
-    #: memory, enforced where the request is resolved.
+    dtype: str = Field("auto", description="Data type for model weights ('auto', 'bfloat16', 'float32')")
+    #: vLLM refuses to start when this exceeds free memory, so the default is
+    #: derived from the memory Docker reports rather than fixed. The upper bound
+    #: exists only to reject nonsense; the real ceiling is the machine's memory,
+    #: enforced where the request is resolved.
     cpu_kvcache_space_gb: Optional[int] = Field(
         None, ge=1, le=512, description="Memory reserved for the KV cache on CPU, in GiB"
     )
@@ -107,27 +105,21 @@ class RuntimeDescriptor(BaseModel):
     default_query: str = ""
 
 
-class GPUDevice(BaseModel):
-    """A single accelerator visible to the host."""
-    name: str
-    total_memory_mb: int
-
-
 class HostCapability(BaseModel):
-    """What this machine can serve locally."""
+    """What Docker Desktop can give a model container on this Mac.
+
+    Containers on a Mac run on the CPU: Docker Desktop has no GPU passthrough. The
+    Apple GPU is reached through the launcher instead, reported by MetalStatus.
+    """
     docker_available: bool
-    gpus: List[GPUDevice] = []
-    total_vram_mb: int = 0
-    #: Memory Docker reports for its host. On Docker Desktop this is the VM's
-    #: allocation, which is what actually bounds a CPU deployment.
+    #: Memory Docker Desktop's VM has, which is what actually bounds a container --
+    #: it is set independently of the Mac's own RAM.
     total_memory_mb: int = 0
-    #: CPU cores Docker reports for its host, bounding a container's cpu limit.
+    #: CPU cores Docker Desktop's VM has, bounding a container's cpu limit.
     total_cpus: int = 0
-    #: KV cache size a CPU deployment would use by default, in GiB.
+    #: KV cache size a deployment would use by default, in GiB.
     default_cpu_kvcache_gb: int = 0
-    #: 'cuda' when the GPU image will be used, 'cpu' otherwise.
-    accelerator: str = "cpu"
-    #: Whether the vLLM image is already pulled, when it could be determined.
+    #: Whether the runtime's image is already pulled, when it could be determined.
     image_present: Optional[bool] = None
 
 
@@ -139,7 +131,7 @@ class MetalStatus(BaseModel):
     Metal -- reports "not supported" rather than offering something nothing can
     service.
     """
-    #: False unless the launcher is present and the machine is Apple Silicon.
+    #: False unless the launcher is present and the Mac is Apple Silicon.
     supported: bool = False
     #: Whether the vllm-metal environment has been installed on the host.
     installed: bool = False
@@ -160,11 +152,6 @@ class MetalStatus(BaseModel):
     #: Older launchers never write the key, and their statuses are matched by
     #: model id instead.
     acknowledges_requests: bool = False
-
-
-class MetalStartRequest(BaseModel):
-    """Asks the launcher to serve a model on the host GPU."""
-    model_id: str = Field(..., description="MLX repository, e.g. 'mlx-community/Qwen3.8-27B-8bit'")
 
 
 class ModelClassification(BaseModel):

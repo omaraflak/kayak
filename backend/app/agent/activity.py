@@ -64,10 +64,6 @@ class ActivityTracker:
         self._running.discard(conversation_id)
         self._broadcast(conversation_activity(conversation_id, running=False))
 
-    def reset(self) -> None:
-        """Clears all state. Used when a process takes over after a restart."""
-        self._running.clear()
-
     def _broadcast(self, event: ActivityEvent) -> None:
         for queue in list(self._listeners):
             try:

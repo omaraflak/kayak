@@ -1,9 +1,8 @@
 """Tests for the tool activation gate.
 
-Activated tools are imported and executed inside the Kayak server process, so
-"verification passed" has to hold for every caller. It was previously enforced only
-by the UI's disabled button, leaving the agent's own activate_tool free to install
-code whose tests fail.
+An activated tool is available to every agent, so "verification passed" has to hold
+for every caller. It was previously enforced only by the UI's disabled button,
+leaving the agent's own activate_tool free to install code whose tests fail.
 """
 
 from pathlib import Path
@@ -42,6 +41,11 @@ def execute(text:
 """
 
 
+@pytest.fixture(autouse=True)
+def verification(isolated_runs_locally):
+    """Verification runs in a throwaway sandbox; locally here."""
+
+
 @pytest.fixture
 def tools_dir(tmp_path: Path, monkeypatch) -> Path:
     """Points the registry at an empty tools directory for each test."""
@@ -61,7 +65,7 @@ async def test_passing_tool_is_installed_and_registered(tools_dir: Path):
     assert result.tool_name == "shouty_tool"
     assert (tools_dir / "shouty_tool" / "tool.py").exists()
     assert (tools_dir / "shouty_tool" / "verify.py").exists()
-    assert tool_registry.get_tool("shouty_tool") is not None
+    assert tool_registry.has_tool("shouty_tool")
 
 
 @pytest.mark.asyncio
@@ -72,7 +76,7 @@ async def test_failing_tests_block_installation(tools_dir: Path):
     # Nothing may be written: a partially installed tool would be loaded on the next
     # registry reload even though its tests never passed.
     assert not (tools_dir / "bad_tool").exists()
-    assert tool_registry.get_tool("bad_tool") is None
+    assert not tool_registry.has_tool("bad_tool")
 
 
 @pytest.mark.asyncio

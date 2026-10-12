@@ -226,12 +226,11 @@ def ping() -> PingEvent:
 # --------------------------------------------------------------- background tasks
 
 
-class TaskStartedEvent(TypedDict, total=False):
+class TaskStartedEvent(TypedDict):
     """A background task began running."""
     type: Literal["task_started"]
     task_id: str
     name: str
-    pid: int
 
 
 class TaskOutputEvent(TypedDict):
@@ -270,11 +269,8 @@ class SubagentFinishedEvent(TypedDict, total=False):
     error: str
 
 
-def task_started(task_id: str, name: str, pid: Optional[int] = None) -> TaskStartedEvent:
-    event: TaskStartedEvent = {"type": "task_started", "task_id": task_id, "name": name}
-    if pid is not None:
-        event["pid"] = pid
-    return event
+def task_started(task_id: str, name: str) -> TaskStartedEvent:
+    return {"type": "task_started", "task_id": task_id, "name": name}
 
 
 def task_output(task_id: str, text: str, is_stderr: bool) -> TaskOutputEvent:

@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { Modality, VLLMDeploymentProgress } from '../types';
 import { api } from '../api/client';
 
@@ -17,7 +17,27 @@ import { api } from '../api/client';
  */
 
 const LOG_BUFFER_LIMIT = 300;
-const LOADING_STATES = ['pulling_image', 'starting_container', 'loading'];
+
+/** States in which a server is coming up rather than serving. */
+const LOADING_STATES: readonly string[] = ['pulling_image', 'starting_container', 'loading'];
+
+/** Whether a server in this state is mid-deployment. */
+export function isLoadingState(state: string | null | undefined): boolean {
+  return !!state && LOADING_STATES.includes(state);
+}
+
+/**
+ * The model a server is actually holding -- serving or coming up -- or null.
+ *
+ * After a stop or a failure the status still names the last model, and treating
+ * that as active marked a dead server's model as running.
+ */
+export function activeModelOf(progress: VLLMDeploymentProgress | null | undefined): string | null {
+  if (!progress) return null;
+  return progress.state === 'ready' || isLoadingState(progress.state)
+    ? progress.model_id ?? null
+    : null;
+}
 
 /** The frame shape the server sends; `modality` is stamped on every event. */
 interface ServerEvent {
@@ -29,15 +49,12 @@ interface ServerEvent {
 interface VLLMStatusContextValue {
   /** The text server, i.e. the one that answers chat. */
   status: VLLMDeploymentProgress | null;
-  logs: string[];
   /** Every local server's state, keyed by modality. */
   statuses: Partial<Record<Modality, VLLMDeploymentProgress>>;
   /** Log lines per modality, so each server's startup reads on its own. */
   logsByModality: Partial<Record<Modality, string[]>>;
   /** Re-fetches status over REST, for use right after a mutating call. */
   refresh: () => Promise<void>;
-  /** True while the text server is pulling, starting, or loading. */
-  isBusy: boolean;
 }
 
 const VLLMStatusContext = createContext<VLLMStatusContextValue | null>(null);
@@ -45,7 +62,6 @@ const VLLMStatusContext = createContext<VLLMStatusContextValue | null>(null);
 export const VLLMStatusProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [statuses, setStatuses] = useState<Partial<Record<Modality, VLLMDeploymentProgress>>>({});
   const [logsByModality, setLogsByModality] = useState<Partial<Record<Modality, string[]>>>({});
-  const eventSourceRef = useRef<EventSource | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -69,7 +85,6 @@ export const VLLMStatusProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     refresh();
 
     const eventSource = new EventSource('/api/inference/events');
-    eventSourceRef.current = eventSource;
 
     // An unlabelled frame is treated as the text server: that is what every frame
     // was before modalities existed, and mislabelling one as speech would hide it.
@@ -114,20 +129,13 @@ export const VLLMStatusProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       refresh();
     };
 
-    return () => {
-      eventSource.close();
-      eventSourceRef.current = null;
-    };
+    return () => eventSource.close();
   }, [refresh]);
 
   const status = statuses.text ?? null;
-  const logs = logsByModality.text ?? [];
-  const isBusy = Boolean(status && LOADING_STATES.includes(status.state));
 
   return (
-    <VLLMStatusContext.Provider
-      value={{ status, logs, statuses, logsByModality, refresh, isBusy }}
-    >
+    <VLLMStatusContext.Provider value={{ status, statuses, logsByModality, refresh }}>
       {children}
     </VLLMStatusContext.Provider>
   );
@@ -141,6 +149,3 @@ export function useVLLMStatus(): VLLMStatusContextValue {
   }
   return context;
 }
-
-/** States in which the local server is mid-deployment rather than serving. */
-export const VLLM_LOADING_STATES = LOADING_STATES;

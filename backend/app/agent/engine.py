@@ -135,7 +135,6 @@ def _build_llm_messages(
     """
     system_prompt_text = build_system_prompt(
         agent_config=session.agent_config,
-        workspace_dir=session.workspace_dir,
         container_id=session.container_id,
     )
 
@@ -225,13 +224,17 @@ async def _execute_single_tool(
     if not isinstance(parsed_args, dict):
         return "Error: Tool arguments must be a JSON object.", True
 
-    result_output = await tool_registry.execute_tool(
-        name=fn_name,
-        arguments=parsed_args,
-        context=session.runtime_context,
-    )
-    is_error = isinstance(result_output, str) and result_output.startswith("Error:")
-    return str(result_output), is_error
+    try:
+        output = await tool_registry.execute_tool(
+            name=fn_name,
+            arguments=parsed_args,
+            context=session.runtime_context,
+        )
+    except Exception as e:
+        # A tool blowing up -- the container gone, a bad argument type -- is a
+        # result the model can react to, not a reason to abandon the turn.
+        return f"Error executing tool '{fn_name}': {e}", True
+    return output, output.startswith("Error")
 
 
 def _is_parallelizable(tc: Dict[str, Any], session: _SessionContext) -> bool:
@@ -511,13 +514,7 @@ class AgentEngine:
 
         async def _run_single(tool_call: Dict[str, Any]) -> Tuple[str, bool]:
             async with limit:
-                try:
-                    return await _execute_single_tool(tool_call, session)
-                except Exception as e:
-                    # One tool blowing up must not discard the results of the
-                    # siblings it was gathered with.
-                    name = tool_call["function"]["name"]
-                    return f"Error executing tool '{name}': {str(e)}", True
+                return await _execute_single_tool(tool_call, session)
 
         results = await asyncio.gather(*[_run_single(tc) for tc in group])
 

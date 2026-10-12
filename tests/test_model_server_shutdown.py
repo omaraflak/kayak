@@ -7,9 +7,7 @@ container has to be gone by the time the process exits.
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional
-
-import pytest
+from typing import Dict, List, Optional
 
 from backend.app.inference import registry
 from backend.app.inference.audio_runtimes import SpeechRuntime, TranscriptionRuntime

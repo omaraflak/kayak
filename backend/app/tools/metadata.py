@@ -12,8 +12,8 @@ since the cost is only that the calls run one after another.
 
 Built-in tools carry the metadata as function attributes set by :func:`tool_metadata`.
 Custom tools in ``data/tools/<name>/tool.py`` declare module-level ``CATEGORY`` and
-``RISK`` strings and an optional ``READ_ONLY`` boolean; they cannot import from Kayak
-because they also run standalone during verification and inside the sandbox container.
+``RISK`` strings and an optional ``READ_ONLY`` boolean, read from their source; they
+cannot import from Kayak because they only ever run inside a sandbox container.
 """
 
 from dataclasses import dataclass
@@ -24,8 +24,8 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 METADATA_ATTRIBUTE = "__kayak_metadata__"
 
-# Anything a user writes runs in the Kayak server process just like a built-in, so an
-# unclassified tool is assumed to be more than trivially capable.
+# Anything a user writes can run arbitrary code in the sandbox, so an unclassified
+# tool is assumed to be more than trivially capable.
 DEFAULT_CATEGORY = ToolCategory.CUSTOM
 DEFAULT_RISK = ToolRisk.MODERATE
 DEFAULT_READ_ONLY = False
@@ -49,7 +49,7 @@ _CATEGORY_CATALOG: Tuple[Tuple[ToolCategory, str, str], ...] = (
     (
         ToolCategory.EXECUTION,
         "Execution",
-        "Run commands and processes. These reach the host unless the conversation uses a Docker sandbox.",
+        "Run commands and processes inside the conversation's sandbox container.",
     ),
     (
         ToolCategory.WEB,
@@ -69,7 +69,7 @@ _CATEGORY_CATALOG: Tuple[Tuple[ToolCategory, str, str], ...] = (
     (
         ToolCategory.TOOLING,
         "Tool Management",
-        "Inspect, test, and install tools. Installed tools execute in the Kayak server process.",
+        "Inspect, test, and install tools. Installed tools become available to every agent.",
     ),
     (
         ToolCategory.CUSTOM,
@@ -118,12 +118,12 @@ def read_function_metadata(func: Callable) -> ToolMetadata:
     return ToolMetadata()
 
 
-def read_module_metadata(module: Any) -> ToolMetadata:
-    """Reads optional CATEGORY, RISK, and READ_ONLY constants declared by a custom tool module."""
+def coerce_metadata(category: Any, risk: Any, read_only: Any) -> ToolMetadata:
+    """Builds metadata from a custom tool's declared CATEGORY, RISK and READ_ONLY values."""
     return ToolMetadata(
-        category=_coerce(getattr(module, "CATEGORY", None), ToolCategory, DEFAULT_CATEGORY),
-        risk=_coerce(getattr(module, "RISK", None), ToolRisk, DEFAULT_RISK),
-        read_only=bool(getattr(module, "READ_ONLY", DEFAULT_READ_ONLY)),
+        category=_coerce(category, ToolCategory, DEFAULT_CATEGORY),
+        risk=_coerce(risk, ToolRisk, DEFAULT_RISK),
+        read_only=read_only is True,
     )
 
 

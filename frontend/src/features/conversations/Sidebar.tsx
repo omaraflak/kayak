@@ -1,5 +1,5 @@
 import React from 'react';
-import { Conversation, AgentConfig, NavigationTab } from '../../types';
+import { Conversation, NavigationTab } from '../../types';
 import { KayakMark } from '../../ui/KayakMark';
 import { 
   MessageSquare, 
@@ -23,7 +23,6 @@ interface SidebarProps {
   activeConversationId: string | null;
   onSelectConversation: (conversationId: string | null) => void;
   onDeleteConversation: (conversationId: string) => void;
-  agents: AgentConfig[];
   currentTab: NavigationTab;
   onSelectTab: (tab: NavigationTab) => void;
 }
@@ -57,7 +56,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeConversationId,
   onSelectConversation,
   onDeleteConversation,
-  agents,
   currentTab,
   onSelectTab,
 }) => {

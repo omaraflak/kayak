@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { api, errorMessage } from '../../api/client';
 import { useDialog } from '../../context/DialogContext';
-import { useVLLMStatus } from '../../context/VLLMStatusContext';
+import { activeModelOf, isLoadingState, useVLLMStatus } from '../../context/VLLMStatusContext';
 import {
   HostCapability,
   MetalStatus,
@@ -29,16 +29,18 @@ import {
 import { HuggingFaceCatalog } from './HuggingFaceCatalog';
 import { isMlxModel } from './metalModels';
 import { VLLMLaunchDialog } from './VLLMLaunchDialog';
-import { formatBytes } from './modelSizing';
+import { formatBytes } from '../../utils/format';
 
 /**
  * Local model serving.
  *
  * The page answers three questions in the order they get asked: what is running right
- * now and how do I point an agent at it, what does this machine hold, and how do I get
- * something new. Previously it opened on a Hugging Face search box seeded with someone
- * else's default query, and never mentioned the disk it was filling or the model string
- * an agent needs.
+ * now and how do I point an agent at it, what does this Mac hold, and how do I get
+ * something new.
+ *
+ * Models run in Docker on the CPU, except MLX models on Apple Silicon, which the
+ * launcher serves on the GPU. Both are the text server as far as this page is
+ * concerned: starting, stopping and status go through the same calls.
  */
 
 export interface ModelsViewProps {
@@ -52,7 +54,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   onSelectModality,
 }) => {
   const dialog = useDialog();
-  const { status, logs, statuses, logsByModality, refresh: fetchStatus } = useVLLMStatus();
+  const { status, statuses, logsByModality, refresh: fetchStatus } = useVLLMStatus();
   const [capability, setCapability] = useState<HostCapability | null>(null);
   const [metal, setMetal] = useState<MetalStatus | null>(null);
   const [cache, setCache] = useState<ModelCacheInfo | null>(null);
@@ -69,10 +71,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   const [launchModality, setLaunchModality] = useState<Modality>('text');
   const logContainerRef = useRef<HTMLDivElement>(null);
 
-  const isReady = status?.state === 'ready';
-  const isLoading =
-    ['pulling_image', 'starting_container', 'loading'].includes(status?.state || '') || isDeploying;
-  const isError = status?.state === 'error';
+  const isLoading = isLoadingState(status?.state) || isDeploying;
 
   const refreshMachine = useCallback(async () => {
     const [capabilityResult, cacheResult, metalResult] = await Promise.allSettled([
@@ -138,7 +137,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   useEffect(() => {
     for (const progress of Object.values(statuses)) {
       if (!progress) continue;
-      if (LOADING_STATES.includes(progress.state) || progress.state === 'error') {
+      if (isLoadingState(progress.state) || progress.state === 'error') {
         setOpenLogsFor(progress.modality);
         return;
       }
@@ -154,30 +153,11 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
    * clicking two buttons.
    */
   const anyServerBusy =
-    isDeploying ||
-    Object.values(statuses).some(
-      (progress) => !!progress && LOADING_STATES.includes(progress.state)
-    );
+    isDeploying || Object.values(statuses).some((progress) => isLoadingState(progress?.state));
 
   /**
-   * The model whose card carries the server state. Status, logs, and the stop
-   * control live in that model's row in the inventory below -- a separate
-   * "Server" section used to describe the same model a second time, and the two
-   * could disagree.
-   */
-  /** The GPU server's model, while it is coming up or serving. */
-  const metalModelId =
-    metal && (metal.state === 'ready' || metal.state === 'starting') ? metal.model : null;
-  /** True while the GPU server is installing or loading. */
-  const metalBusy = metal?.state === 'installing' || metal?.state === 'starting';
-
-  /**
-   * Every server holding a model right now, keyed by the model it holds.
-   *
-   * Plural on purpose. This was a single value read from the text server, so once
-   * a second modality existed a running speech or transcription model rendered as
-   * an inert "Start" row -- the page said nothing was running while the Audio page
-   * was happily using it.
+   * Every server holding a model right now, keyed by the model it holds. Status,
+   * logs, and the stop control live in that model's row in the inventory below.
    */
   const activeByModel = new Map<string, VLLMDeploymentProgress>();
   for (const progress of Object.values(statuses)) {
@@ -185,11 +165,6 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
     if (SERVER_HELD_STATES.includes(progress.state)) {
       activeByModel.set(progress.model_id, progress);
     }
-  }
-  // The GPU server is the text server by another route, so its model belongs in
-  // the same map rather than in a branch of its own.
-  if (metalModelId && !activeByModel.has(metalModelId) && statuses.text) {
-    activeByModel.set(metalModelId, statuses.text);
   }
 
   const cachedModels = cache?.models || [];
@@ -210,9 +185,9 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   const requestLaunch = (modelId: string) => {
     if (capability && !capability.docker_available) {
       dialog.alert({
-        title: 'Docker is not available',
+        title: 'Docker is not running',
         message:
-          'Local serving runs vLLM in a Docker container. Start Docker and this page will notice on its own.',
+          'Local models run in Docker. Start Docker Desktop and this page will notice on its own.',
         variant: 'danger',
       });
       return;
@@ -220,74 +195,55 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
     setPendingLaunch(modelId);
   };
 
-  // Metal runs on the host via the launcher rather than in a container, so its
-  // progress arrives by polling the control file rather than the vLLM event
-  // stream. Polled only while something is actually in flight.
-  useEffect(() => {
-    if (!metal || (metal.state !== 'installing' && metal.state !== 'starting')) return;
-    const timer = setInterval(async () => {
-      try {
-        setMetal(await api.getMetalStatus());
-      } catch {
-        // The launcher rewrites the file continuously; a failed read is transient.
-      }
-    }, 3000);
-    return () => clearInterval(timer);
-  }, [metal]);
-
   /**
    * Sends a model to whichever backend can actually run it.
    *
-   * MLX weights only run on the Apple GPU, and the container dialog's options
-   * -- GPU memory fraction, KV cache size, CUDA graphs -- mean nothing there,
-   * so those models skip it and start directly.
+   * MLX weights only run on the Apple GPU, where the container dialog's options --
+   * KV cache size, container memory and cores -- mean nothing, so those models
+   * skip it and start directly.
    */
-  const handleLaunchRequest = useCallback(
-    async (modelId: string) => {
-      if (metal?.supported && isMlxModel(modelId)) {
-        try {
-          setMetal(await api.startMetal(modelId));
-          await fetchStatus();
-        } catch (err) {
-          // A refused start (launcher quit, non-MLX repository) used to be an
-          // unhandled rejection: the click just did nothing.
-          dialog.alert({
-            title: 'Could not start the model',
-            message: errorMessage(err),
-            variant: 'danger',
-          });
-        }
+  const handleLaunchRequest = async (modelId: string) => {
+    if (metal?.supported && isMlxModel(modelId)) {
+      setOpenLogsFor('text');
+      try {
+        await api.deployVLLMModel({ model_id: modelId, force_restart: true }, 'text');
+        await fetchStatus();
+      } catch (err) {
+        dialog.alert({
+          title: 'Could not start the model',
+          message: errorMessage(err),
+          variant: 'danger',
+        });
+      }
+      return;
+    }
+
+    // Which runtime can serve it is decided by the Hub's own metadata, not by
+    // the filter the user happens to be browsing: pressing Start on a cached
+    // Kokoro sent it to vLLM, which spent minutes on a model it cannot load.
+    let target: Modality = modality;
+    try {
+      const classification = await api.classifyModel(modelId);
+      if (classification.modality && !classification.supported) {
+        dialog.alert({
+          title: 'This model cannot run here yet',
+          message:
+            `${modelId} is a ${classification.pipeline_tag ?? 'model'} that needs ` +
+            `${classification.library_name ?? 'a library'}, which the local runtime ` +
+            'does not ship a backend for.',
+          variant: 'danger',
+        });
         return;
       }
-      // Which runtime can serve it is decided by the Hub's own metadata, not by
-      // the filter the user happens to be browsing: pressing Start on a cached
-      // Kokoro sent it to vLLM, which spent minutes on a model it cannot load.
-      let target: Modality = modality;
-      try {
-        const classification = await api.classifyModel(modelId);
-        if (classification.modality && !classification.supported) {
-          dialog.alert({
-            title: 'This model cannot run here yet',
-            message:
-              `${modelId} is a ${classification.pipeline_tag ?? 'model'} that needs ` +
-              `${classification.library_name ?? 'a library'}, which the local runtime ` +
-              'does not ship a backend for.',
-            variant: 'danger',
-          });
-          return;
-        }
-        if (classification.modality) target = classification.modality;
-      } catch {
-        // The Hub being unreachable must not stop a start; the filter in view is
-        // the best remaining guess.
-      }
+      if (classification.modality) target = classification.modality;
+    } catch {
+      // The Hub being unreachable must not stop a start; the filter in view is
+      // the best remaining guess.
+    }
 
-      setLaunchModality(target);
-      requestLaunch(modelId);
-    },
-    [metal?.supported, requestLaunch, fetchStatus, dialog, modality]
-  );
-
+    setLaunchModality(target);
+    requestLaunch(modelId);
+  };
 
   const handleLaunch = async (request: VLLMDeployRequest) => {
     setPendingLaunch(null);
@@ -299,8 +255,8 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
       await fetchStatus();
     } catch (err) {
       dialog.alert({
-        title: 'Deployment Failed',
-        message: `Could not start ${request.model_id}: ${err}`,
+        title: 'Could not start the model',
+        message: `Could not start ${request.model_id}: ${errorMessage(err)}`,
         variant: 'danger',
       });
     } finally {
@@ -326,8 +282,6 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
     setStoppingModality(modality);
     try {
       await api.stopVLLMServer(modality);
-      // Metal is the text server by another route, so it winds down with it.
-      if (modality === 'text' && metal?.supported) setMetal(await api.stopMetal());
       await fetchStatus();
     } catch (err) {
       dialog.alert({
@@ -343,7 +297,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   const handleDeleteWeights = async (repoId: string, sizeBytes: number) => {
     const confirmed = await dialog.confirm({
       title: 'Delete downloaded weights?',
-      message: `This frees ${formatBytes(sizeBytes)} by removing ${repoId} from this machine. Starting it again re-downloads the whole model.`,
+      message: `This frees ${formatBytes(sizeBytes)} by removing ${repoId} from this Mac. Starting it again re-downloads the whole model.`,
       confirmText: 'Delete',
       cancelText: 'Keep',
       variant: 'danger',
@@ -372,7 +326,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
           <div>
             <h2 className="font-bold text-sm text-md-on-surface">Local Models</h2>
             <p className="text-xs text-md-on-surface-variant">
-              Serve open-weights models on this machine through vLLM
+              Serve open-weights models on this Mac
             </p>
           </div>
         </div>
@@ -392,9 +346,8 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
             <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800/80 text-rose-900 dark:text-rose-100 text-[11px] leading-relaxed flex items-start gap-2">
               <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <p>
-                Docker is not reachable, so no model can be served locally. Start Docker Desktop
-                (or the daemon) — this page checks again every few seconds and will
-                update by itself.
+                Docker is not running, so no model can be served locally. Start Docker Desktop
+                — this page checks again every few seconds and will update by itself.
               </p>
             </div>
           )}
@@ -403,36 +356,15 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
             <Stat
               icon={<Zap className="w-3.5 h-3.5" />}
               label="Accelerator"
-              value={
-                // The GPU probe only knows about NVIDIA, so an Apple Silicon Mac
-                // reported "CPU only" while sitting next to a usable GPU. Metal
-                // has to be asked separately.
-                metal?.supported
-                  ? 'Apple GPU'
-                  : capability
-                  ? capability.gpus.length > 0
-                    ? capability.gpus.map((gpu) => gpu.name).join(', ')
-                    : 'CPU only'
-                  : '—'
-              }
+              // Docker on a Mac has no GPU access; the Apple GPU is reached through
+              // the launcher, for MLX models only.
+              value={metal?.supported ? 'Apple GPU' : 'CPU only'}
               detail={
                 metal?.supported
-                  ? 'Available for MLX models'
-                  : metal?.detail
-                  ? metal.detail
-                  : capability && capability.total_vram_mb > 0
-                  ? `${(capability.total_vram_mb / 1024).toFixed(0)} GB VRAM`
-                  : capability
-                  ? 'Generation will be slow'
-                  : undefined
+                  ? 'For MLX models; others run on the CPU'
+                  : metal?.detail ?? 'Generation will be slow'
               }
-              tone={
-                metal?.supported
-                  ? 'default'
-                  : capability && capability.gpus.length === 0
-                  ? 'warning'
-                  : 'default'
-              }
+              tone={metal?.supported ? 'default' : 'warning'}
             />
             <Stat
               icon={<Package className="w-3.5 h-3.5" />}
@@ -470,8 +402,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                 const server = activeByModel.get(model.repo_id);
                 const rowModality = server?.modality ?? 'text';
                 const rowReady = server?.state === 'ready';
-                const rowLoading =
-                  !!server && LOADING_STATES.includes(server.state);
+                const rowLoading = !!server && isLoadingState(server.state);
                 const rowError = server?.state === 'error';
                 const rowStopping = stoppingModality === rowModality;
                 const rowLogs = logsByModality[rowModality] ?? [];
@@ -519,7 +450,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                   <div
                     key={model.repo_id}
                     className={`rounded-2xl border shadow-xs transition-colors ${
-                      isError
+                      rowError
                         ? 'bg-md-surface border-rose-300 dark:border-rose-800/80'
                         : 'bg-md-primary-container/20 border-md-primary/50'
                     }`}
@@ -653,18 +584,10 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
           <HuggingFaceCatalog
             mode="deploy"
             onDeployVLLM={handleLaunchRequest}
-            // Only a model that is actually up or coming up occupies the server:
-            // after a stop or a failure, status.model_id still names the last
-            // model, and passing it here showed that model as "Active".
-            activeVllmModelId={
-              modality === 'text'
-                ? metalModelId ?? (isReady || isLoading ? status?.model_id : null)
-                : activeModelFor(statuses[modality])
-            }
-            isVllmLoading={isLoading || metalBusy}
+            activeVllmModelId={activeModelOf(statuses[modality])}
+            isVllmLoading={isLoading}
             cachedModelIds={cachedIds}
-            availableVramGB={(capability?.total_vram_mb ?? 0) / 1024}
-            hasAccelerator={capability?.accelerator === 'cuda'}
+            availableMemoryGB={(capability?.total_memory_mb ?? 0) / 1024}
             metalSupported={metal?.supported ?? false}
             runtimes={runtimes}
             modality={modality}
@@ -676,8 +599,9 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
       {pendingLaunch && (
         <VLLMLaunchDialog
           modelId={pendingLaunch}
+          modality={launchModality}
           capability={capability}
-          replacingModelId={isReady || isLoading ? status?.model_id : null}
+          replacingModelId={activeModelOf(statuses[launchModality])}
           isCached={cachedIds.has(pendingLaunch)}
           // Only the settings the runtime this launch is bound for actually reads:
           // a transcription model has no context window to offer.
@@ -690,23 +614,8 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   );
 };
 
-/**
- * The model a server is actually holding, or null.
- *
- * "Serving" and "starting" stay disjoint here as everywhere else: after a stop or
- * a failure the status still names the last model, and treating that as active
- * marked a dead server's model as running.
- */
 /** States in which a server is holding a model, so its row owns the status card. */
 const SERVER_HELD_STATES = ['ready', 'pulling_image', 'starting_container', 'loading', 'error'];
-/** States in which a server is coming up rather than serving. */
-const LOADING_STATES = ['pulling_image', 'starting_container', 'loading'];
-
-function activeModelFor(progress?: VLLMDeploymentProgress): string | null {
-  if (!progress) return null;
-  const active = ['ready', 'pulling_image', 'starting_container', 'loading'];
-  return active.includes(progress.state) ? progress.model_id ?? null : null;
-}
 
 const SectionHeading: React.FC<{ icon: React.ReactNode; title: string; note?: string }> = ({
   icon,

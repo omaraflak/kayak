@@ -2,12 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { BackgroundTask } from '../../types';
 import { api, errorMessage } from '../../api/client';
 import { CodeBlock } from '../../ui/CodeBlock';
-import { acceptsInput, orderTasks, subagentConversationId } from './conversationTasks';
+import { orderTasks, subagentConversationId } from './conversationTasks';
 import {
   ArrowLeft,
   Bot,
   ExternalLink,
-  Send,
   StopCircle,
   Terminal as TerminalIcon,
 } from 'lucide-react';
@@ -101,25 +100,12 @@ const TaskDetail: React.FC<{
   onRefresh: () => void;
   onOpenConversation: (conversationId: string) => void;
 }> = ({ task, onBack, onRefresh, onOpenConversation }) => {
-  const [inputValue, setInputValue] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
   const childConversationId = subagentConversationId(task);
 
   const handleStop = async () => {
     try {
       await api.stopTask(task.id);
-      onRefresh();
-    } catch (err) {
-      setActionError(errorMessage(err));
-    }
-  };
-
-  const handleSend = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!inputValue.trim()) return;
-    try {
-      await api.sendTaskInput(task.id, inputValue);
-      setInputValue('');
       onRefresh();
     } catch (err) {
       setActionError(errorMessage(err));
@@ -169,10 +155,11 @@ const TaskDetail: React.FC<{
           </button>
         )}
 
-        <div className="text-[10px] text-md-on-surface-variant font-mono flex flex-wrap gap-x-3 gap-y-1">
-          {task.pid != null && <span>PID {task.pid}</span>}
-          {task.exit_code != null && <span>Exit code {task.exit_code}</span>}
-        </div>
+        {task.exit_code != null && (
+          <div className="text-[10px] text-md-on-surface-variant font-mono">
+            Exit code {task.exit_code}
+          </div>
+        )}
 
         {task.command && (
           <div>
@@ -208,27 +195,6 @@ const TaskDetail: React.FC<{
         )}
       </div>
 
-      {acceptsInput(task) && (
-        <form
-          onSubmit={handleSend}
-          className="p-2 border-t border-md-outline-variant flex items-center gap-2 shrink-0 bg-md-surface-container-low"
-        >
-          <input
-            type="text"
-            value={inputValue}
-            onChange={(event) => setInputValue(event.target.value)}
-            placeholder="Send input to this process…"
-            className="flex-1 min-w-0 bg-md-surface border border-md-outline-variant rounded-lg px-3 py-1.5 text-xs font-mono text-md-on-surface focus:outline-none focus:border-md-primary focus:ring-1 focus:ring-md-primary transition-colors"
-          />
-          <button
-            type="submit"
-            className="p-2 rounded-lg bg-md-primary text-md-on-primary hover:opacity-90 transition-opacity cursor-pointer shrink-0"
-            title="Send"
-          >
-            <Send className="w-3.5 h-3.5" />
-          </button>
-        </form>
-      )}
     </div>
   );
 };

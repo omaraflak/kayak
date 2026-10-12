@@ -6,9 +6,7 @@ verified by running it, not by asserting about it in this process, which has nei
 torch nor the speech libraries installed.
 """
 
-import pytest
-
-from audio_server.backends import UnsupportedModelError, select_backend
+from audio_server.backends import select_backend
 from audio_server.backends.kokoro_backend import (
     KokoroBackend,
     preferred_voice,

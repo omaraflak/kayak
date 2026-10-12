@@ -26,6 +26,7 @@ from backend.app.routes import (
     workspace,
 )
 from backend.app.routes.auth import PUBLIC_API_PATHS, is_authorized
+from backend.app.routes.settings import LOOPBACK_HOSTS, reachable_address
 from backend.app.skills.registry import skill_registry
 from backend.app import support
 from backend.app.tools.registry import tool_registry
@@ -60,7 +61,6 @@ async def lifespan(app: FastAPI):
     # RUNNING state that the UI can never clear on its own.
     await reconcile_interrupted_state()
 
-    agent_manager.ensure_default_agents()
     agent_manager.load_all_agents()
     skill_registry.load_all_skills()
 
@@ -91,20 +91,24 @@ async def lifespan(app: FastAPI):
 
     speech_cache.start()
 
-    if not settings.AUTH_TOKEN and settings.HOST not in ("127.0.0.1", "localhost", "::1"):
+    # A conversation's first turn should not wait on a sandbox image download.
+    track_background_task(asyncio.create_task(sandbox_manager.prepare()))
+
+    address = reachable_address()
+    if not settings.AUTH_TOKEN and address not in LOOPBACK_HOSTS:
         logger.warning(
-            "Kayak is bound to %s with no KAYAK_AUTH_TOKEN set. Agents have shell and "
-            "filesystem access, so anyone who can reach this port can run code on this "
-            "host. Set KAYAK_AUTH_TOKEN or bind to 127.0.0.1.",
-            settings.HOST,
+            "Kayak is reachable on %s with no KAYAK_AUTH_TOKEN set. Agents have shell "
+            "access, so anyone who can reach this port can run code on this Mac. Set "
+            "KAYAK_AUTH_TOKEN or publish the port on 127.0.0.1 only.",
+            address,
         )
 
     yield
 
     # Shutdown: nothing this process started may outlive it. Sandboxes are stopped
     # and kept; model servers are stopped and removed, because a speech or text
-    # server left behind holds gigabytes of memory (and the GPU) after the app the
-    # user closed is gone.
+    # server left behind holds gigabytes of memory after the app the user closed
+    # is gone.
     await turns.cancel_all()
     await sandbox_manager.shutdown_all()
     await audio_jobs.shutdown_all()
@@ -113,9 +117,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Kayak Agent Platform",
-    description="Opinionated, open-source, containerized AI agent workspace",
-    version="1.0.0",
+    title="Kayak",
+    description="Open-source AI agent platform for macOS",
+    version=settings.VERSION,
     lifespan=lifespan,
 )
 
@@ -215,14 +219,3 @@ if FRONTEND_DIST.exists():
         if index_path.exists():
             return FileResponse(str(index_path), headers=_NO_CACHE_HEADERS)
         raise HTTPException(status_code=404, detail="Frontend build index.html not found")
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(
-        "backend.app.main:app",
-        host=settings.HOST,
-        port=settings.PORT,
-        reload=settings.DEBUG,
-    )

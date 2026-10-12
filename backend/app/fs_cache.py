@@ -16,14 +16,12 @@ DirectorySignature = Tuple[Tuple[str, int, int], ...]
 def directory_signature(
     root: Path,
     patterns: Iterable[str] = ("*",),
-    recursive: bool = False,
 ) -> DirectorySignature:
     """Builds a fingerprint of a directory's contents from paths, sizes, and mtimes.
 
     Args:
         root: Directory to fingerprint.
-        patterns: Glob patterns to include.
-        recursive: Whether to descend into subdirectories.
+        patterns: Glob patterns to include, relative to the root.
 
     Returns:
         DirectorySignature: A comparable, order-stable fingerprint. An empty tuple
@@ -34,8 +32,7 @@ def directory_signature(
 
     entries: list[Tuple[str, int, int]] = []
     for pattern in patterns:
-        matches = root.rglob(pattern) if recursive else root.glob(pattern)
-        for path in matches:
+        for path in root.glob(pattern):
             try:
                 stat = path.stat()
             except OSError:

@@ -1,9 +1,6 @@
-import asyncio
-from pathlib import Path
 import re
 import shlex
 from typing import Dict, Optional, Tuple
-from backend.app.agent.history import truncate_tool_result
 from backend.app.agent.sandbox import sandbox_manager
 from backend.app.models import ToolCategory, ToolRisk
 from backend.app.tools.metadata import tool_metadata
@@ -12,6 +9,9 @@ from backend.app.tools.metadata import tool_metadata
 # longer belongs in start_background_task, which streams instead of blocking.
 MAX_COMMAND_TIMEOUT_SECONDS = 600
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 60
+
+#: Where every conversation's shell starts, inside its container.
+WORKSPACE_ROOT = "/workspace"
 
 #: Marks where the shell reports its final working directory. Each call is still
 #: a fresh shell -- deliberately, so a hung command cannot wedge a session -- but
@@ -73,30 +73,25 @@ def remember_cwd(conversation_id: Optional[str], cwd: str) -> None:
         _conversation_cwds[conversation_id] = cwd
 
 
-def _clamp_timeout(timeout: Optional[int]) -> int:
-    """Clamps a model-supplied timeout into a range that cannot wedge a turn."""
-    if not timeout or timeout <= 0:
+def clamp_timeout(timeout: object) -> int:
+    """Clamps a model-supplied timeout into a range that cannot wedge a turn.
+
+    Models do not always honour the schema: "120" arrives as often as 120, and
+    garbage falls back to the default rather than failing the call.
+    """
+    try:
+        seconds = int(timeout)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
         return DEFAULT_COMMAND_TIMEOUT_SECONDS
-    return min(int(timeout), MAX_COMMAND_TIMEOUT_SECONDS)
-
-
-def _format_process_output(stdout_str: str, stderr_str: str, exit_code: int) -> str:
-    """Formats standard output, standard error, and exit code into a response string."""
-    output = []
-    if stdout_str:
-        output.append(truncate_tool_result(stdout_str))
-    if stderr_str:
-        output.append(f"STDERR:\n{truncate_tool_result(stderr_str)}")
-    if exit_code != 0:
-        output.append(f"\n[Exit code: {exit_code}]")
-    return "\n".join(output) if output else ""
+    if seconds <= 0:
+        return DEFAULT_COMMAND_TIMEOUT_SECONDS
+    return min(seconds, MAX_COMMAND_TIMEOUT_SECONDS)
 
 
 @tool_metadata(category=ToolCategory.EXECUTION, risk=ToolRisk.HIGH)
 async def run_command(
     command: str,
     timeout: Optional[int] = 60,
-    workspace_dir: Optional[Path] = None,
     container_id: Optional[str] = None,
     conversation_id: Optional[str] = None,
 ) -> str:
@@ -106,45 +101,19 @@ async def run_command(
         command: The shell command line string to execute.
         timeout: Maximum execution time in seconds before terminating (default 60s, max 600s).
     """
-    timeout = _clamp_timeout(timeout)
-    default_dir = "/workspace" if container_id else str(workspace_dir or Path.cwd())
-    cwd = current_cwd(conversation_id, default_dir)
-    wrapped = wrap_with_cwd_tracking(command, cwd, default_dir)
+    if not container_id:
+        return "Error: No container is available for this conversation."
 
-    if container_id:
-        try:
-            raw = await sandbox_manager.exec_command(
-                container_id=container_id, command=wrapped, timeout=timeout
-            )
-        except Exception as e:
-            return (
-                f"Error executing command in sandbox container"
-                f" '{container_id}': {str(e)}"
-            )
-    else:
-        try:
-            process = await asyncio.create_subprocess_shell(
-                wrapped,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=default_dir,
-            )
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(), timeout=timeout
-                )
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-                return f"Error: Command timed out after {timeout} seconds."
+    timeout = clamp_timeout(timeout)
+    cwd = current_cwd(conversation_id, WORKSPACE_ROOT)
+    wrapped = wrap_with_cwd_tracking(command, cwd, WORKSPACE_ROOT)
 
-            raw = _format_process_output(
-                stdout.decode("utf-8", errors="replace"),
-                stderr.decode("utf-8", errors="replace"),
-                process.returncode,
-            )
-        except Exception as e:
-            return f"Error executing command: {str(e)}"
+    try:
+        raw = await sandbox_manager.exec_command(
+            container_id=container_id, command=wrapped, timeout=timeout
+        )
+    except Exception as e:
+        return f"Error executing command in the sandbox: {e}"
 
     output, new_cwd = extract_cwd(raw, cwd)
     remember_cwd(conversation_id, new_cwd)

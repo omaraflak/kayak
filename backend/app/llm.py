@@ -1,9 +1,8 @@
 import logging
-import os
 import re
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 import litellm
-from backend.app.config import default_vllm_api_base, settings
+from backend.app.config import local_api_base, settings
 from backend.app.providers import API_KEY_SETTINGS, get_provider
 from backend.app.inference import metal
 from backend.app.inference.models import ServerState
@@ -180,6 +179,26 @@ def missing_key_error(model: str) -> Optional[str]:
     )
 
 
+def _local_api_base() -> str:
+    """Where the local text server answers right now.
+
+    Metal is asked directly rather than through the manager, so a model the launcher
+    has just brought up is reachable before the next status sync. A container may be
+    published on a neighbouring port when the configured one was taken -- on launcher
+    installs Kayak itself occupies the default -- and the manager's status says where.
+    """
+    metal_status = metal.read_status()
+    if metal_status.supported and metal_status.state == "ready" and metal_status.port:
+        return local_api_base(metal_status.port)
+
+    from backend.app.inference import registry as inference_registry
+
+    status = inference_registry.text_manager.get_status()
+    if status.state == ServerState.READY and status.endpoint:
+        return status.endpoint
+    return local_api_base(settings.VLLM_PORT)
+
+
 def _build_llm_kwargs(
     model: str,
     messages: List[Dict[str, Any]],
@@ -215,32 +234,7 @@ def _build_llm_kwargs(
                 raw_model = raw_model[len(prefix):]
                 break
         kwargs["model"] = f"openai/{raw_model}"
-        api_base = settings.VLLM_API_BASE
-        metal_status = metal.read_status()
-        if (
-            metal_status.supported
-            and metal_status.state == "ready"
-            and metal_status.port
-            and metal_status.port != settings.VLLM_PORT
-            and "VLLM_API_BASE" not in os.environ
-        ):
-            api_base = default_vllm_api_base(
-                metal_status.port, settings.RUNNING_IN_CONTAINER
-            )
-        elif "VLLM_API_BASE" not in os.environ:
-            # The container may be published on a neighbouring port when the
-            # configured one was taken -- on launcher installs Kayak itself
-            # occupies the default. The manager's status carries where the
-            # server actually answers.
-            from backend.app.inference import registry as inference_registry
-
-            manager_status = inference_registry.text_manager.get_status()
-            if (
-                manager_status.state == ServerState.READY
-                and manager_status.endpoint
-            ):
-                api_base = manager_status.endpoint
-        kwargs["api_base"] = api_base
+        kwargs["api_base"] = _local_api_base()
         kwargs["api_key"] = "EMPTY"
     elif provider:
         api_key = getattr(settings, _PROVIDER_KEY_SETTINGS[provider], "")
@@ -363,76 +357,29 @@ async def generate_completion_stream(
         yield {"type": "error", "error": str(error)}
 
 
-def _parse_completion_response(message: Any) -> Dict[str, Any]:
-    """Extracts content, thinking, and tool calls from a non-streamed completion response."""
-    raw_content = getattr(message, "content", None)
-    native_reasoning = getattr(message, "reasoning_content", None)
-    extracted_thinking, clean_content = extract_thinking_and_content(raw_content)
+async def generate_text(model: str, messages: List[Dict[str, Any]], temperature: float) -> str:
+    """Generates one complete, tool-free answer, with any reasoning stripped.
 
-    result: Dict[str, Any] = {
-        "content": clean_content,
-        "thinking": native_reasoning or extracted_thinking,
-        "tool_calls": None,
-    }
-
-    if hasattr(message, "tool_calls") and message.tool_calls:
-        result["tool_calls"] = [
-            {
-                "id": tc.id,
-                "type": "function",
-                "function": {
-                    "name": tc.function.name,
-                    "arguments": tc.function.arguments,
-                },
-            }
-            for tc in message.tool_calls
-        ]
-
-    return result
-
-
-async def generate_completion(
-    model: str,
-    messages: List[Dict[str, Any]],
-    tools: Optional[List[Dict[str, Any]]] = None,
-    temperature: float = 0.7,
-) -> Dict[str, Any]:
-    """Generates a synchronous (non-streamed) completion from LiteLLM.
-
-    Args:
-        model: Model string identifier.
-        messages: List of message dictionaries.
-        tools: Optional tool schemas.
-        temperature: Sampling temperature.
-
-    Returns:
-        Dict[str, Any]: Response content, thinking, and parsed tool calls.
+    Raises:
+        Exception: Whatever the provider raised, or a missing-key error.
     """
     missing_key = missing_key_error(model)
     if missing_key:
-        return {
-            "content": None,
-            "thinking": None,
-            "tool_calls": None,
-            "error": missing_key,
-        }
+        raise RuntimeError(missing_key)
 
-    kwargs = _build_llm_kwargs(model, messages, tools, temperature, stream=False)
+    response = await litellm.acompletion(
+        **_build_llm_kwargs(model, messages, temperature=temperature, stream=False)
+    )
+    _thinking, content = extract_thinking_and_content(response.choices[0].message.content)
+    return content or ""
 
-    try:
-        response = await litellm.acompletion(**kwargs)
-        return _parse_completion_response(response.choices[0].message)
-    except Exception as error:
-        if tools and _is_tool_unsupported_error(error):
-            try:
-                response = await litellm.acompletion(**_strip_tools(kwargs))
-                result = _parse_completion_response(response.choices[0].message)
-                result["tool_calls"] = None
-                return result
-            except Exception as fallback_error:
-                return {"content": None, "thinking": None, "tool_calls": None, "error": str(fallback_error)}
 
-        return {"content": None, "thinking": None, "tool_calls": None, "error": str(error)}
+def excerpt_title(prompt: Optional[str]) -> Optional[str]:
+    """A provisional title made of the first words of a prompt."""
+    clean = " ".join((prompt or "").split())
+    if not clean:
+        return None
+    return clean[:36].rsplit(" ", 1)[0] + "..." if len(clean) > 36 else clean
 
 
 async def generate_title(prompt: str, model: str) -> str:
@@ -461,19 +408,11 @@ async def generate_title(prompt: str, model: str) -> str:
             },
             {"role": "user", "content": f"User prompt:\n{prompt[:350]}"},
         ]
-        result = await generate_completion(
-            model=model,
-            messages=messages,
-            temperature=0.3,
-        )
-        content = (result.get("content") or "").strip().strip("\"'#-* \t\r\n")
+        content = (await generate_text(model, messages, temperature=0.3)).strip()
+        content = content.strip("\"'#-* \t\r\n")
         if content and len(content) <= 60:
             return content
     except Exception:
         pass
 
-    # Clean fallback based on first words of the prompt
-    clean = " ".join(prompt.strip().split())
-    if len(clean) > 36:
-        return clean[:36].rsplit(" ", 1)[0] + "..."
-    return clean or "New Conversation"
+    return excerpt_title(prompt) or "New Conversation"

@@ -109,7 +109,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => 
     } catch (error) {
       dialog.alert({
         title: 'Settings not saved',
-        message: `${error}. Your changes are still here — you can try again.`,
+        message: `${errorMessage(error)} Your changes are still here — you can try again.`,
         variant: 'danger',
       });
     } finally {
@@ -248,7 +248,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => 
         <Section
           icon={<Key className="w-4 h-4 text-md-primary" />}
           title="Model provider credentials"
-          subtitle="Stored on this machine, never sent back to the browser."
+          subtitle="Stored on this Mac, never sent back to the browser."
         >
           <div className="space-y-4">
             {settings.providers.map((provider) => (
@@ -333,7 +333,7 @@ const SecurityCard: React.FC<{ settings: AppSettings }> = ({ settings }) => {
         </h2>
         <p className="text-[11px] text-md-on-surface-variant leading-relaxed">
           {security.warning ??
-            `Bound to ${security.host}, reachable only from this machine.${
+            `Reachable only from this Mac (${security.host}).${
               security.auth_required ? ' An access token is required.' : ''
             }`}
         </p>

@@ -61,8 +61,9 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          # Apple Silicon is a first-class target for the launcher, and an
-          # amd64-only image would run there under emulation.
+          # Docker Desktop runs Linux containers on both kinds of Mac: arm64 on
+          # Apple Silicon, amd64 on Intel. Either one alone would run the other
+          # under emulation.
           platforms: linux/amd64,linux/arm64
           push: true
           # Baked in so the running container can report its own version, which

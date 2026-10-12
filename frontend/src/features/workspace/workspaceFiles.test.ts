@@ -7,7 +7,6 @@ import {
   clampPanelWidth,
   extractWrittenFiles,
   fileKind,
-  formatFileSize,
   joinPath,
   parentPath,
   prismLanguageForFile,
@@ -54,12 +53,6 @@ describe('path helpers', () => {
       { label: 'a', path: 'a' },
       { label: 'b', path: 'a/b' },
     ]);
-  });
-
-  it('formats sizes for humans', () => {
-    expect(formatFileSize(512)).toBe('512 B');
-    expect(formatFileSize(2048)).toBe('2.0 KB');
-    expect(formatFileSize(5 * 1024 * 1024)).toBe('5.0 MB');
   });
 });
 

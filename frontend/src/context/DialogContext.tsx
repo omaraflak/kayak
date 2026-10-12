@@ -6,7 +6,6 @@ import {
   Info, 
   HelpCircle, 
   X,
-  Trash2
 } from 'lucide-react';
 
 export type DialogVariant = 'danger' | 'warning' | 'info' | 'success' | 'question';
@@ -18,9 +17,6 @@ export interface DialogOptions {
   confirmText?: string;
   cancelText?: string;
   showCancel?: boolean;
-  inputPlaceholder?: string;
-  inputValue?: string;
-  isPrompt?: boolean;
 }
 
 interface DialogContextType {
@@ -37,14 +33,6 @@ interface DialogContextType {
     confirmText?: string;
     variant?: DialogVariant;
   }) => Promise<void>;
-  prompt: (options: {
-    title: string;
-    message: string | ReactNode;
-    placeholder?: string;
-    defaultValue?: string;
-    confirmText?: string;
-    cancelText?: string;
-  }) => Promise<string | null>;
 }
 
 const DialogContext = createContext<DialogContextType | null>(null);
@@ -57,18 +45,13 @@ export const useDialog = () => {
   return context;
 };
 
-/** What a dialog settles with: a decision, entered text, or a dismissal. */
-type DialogResult = boolean | string | null;
-
 export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [dialogConfig, setDialogConfig] = useState<DialogOptions | null>(null);
-  const [promptInput, setPromptInput] = useState('');
-  // A dialog answers with a boolean (confirm) or a string/null (prompt), and one
-  // resolver serves both, so the settled value is the union rather than anything.
-  const [resolver, setResolver] = useState<{
-    resolve: (value: DialogResult) => void;
-  } | null>(null);
+  // Settled with whether the user confirmed; an alert ignores the answer.
+  const [resolver, setResolver] = useState<{ resolve: (confirmed: boolean) => void } | null>(
+    null
+  );
 
   const confirm = useCallback(
     (options: {
@@ -86,11 +69,8 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           confirmText: options.confirmText || 'Confirm',
           cancelText: options.cancelText || 'Cancel',
           showCancel: true,
-          isPrompt: false,
         });
-        // Narrowed at the boundary rather than cast: one resolver serves three kinds
-        // of dialog, and each converts the settled value into its own answer.
-        setResolver({ resolve: (value) => resolve(value === true) });
+        setResolver({ resolve });
         setIsOpen(true);
       });
     },
@@ -111,7 +91,6 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           variant: options.variant || 'info',
           confirmText: options.confirmText || 'OK',
           showCancel: false,
-          isPrompt: false,
         });
         setResolver({ resolve: () => resolve() });
         setIsOpen(true);
@@ -120,56 +99,14 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     []
   );
 
-  const prompt = useCallback(
-    (options: {
-      title: string;
-      message: string | ReactNode;
-      placeholder?: string;
-      defaultValue?: string;
-      confirmText?: string;
-      cancelText?: string;
-    }): Promise<string | null> => {
-      return new Promise((resolve) => {
-        setPromptInput(options.defaultValue || '');
-        setDialogConfig({
-          title: options.title,
-          message: options.message,
-          variant: 'question',
-          confirmText: options.confirmText || 'Submit',
-          cancelText: options.cancelText || 'Cancel',
-          showCancel: true,
-          isPrompt: true,
-          inputPlaceholder: options.placeholder || '',
-        });
-        setResolver({
-          resolve: (value) => resolve(typeof value === 'string' ? value : null),
-        });
-        setIsOpen(true);
-      });
-    },
-    []
-  );
-
   const handleConfirm = () => {
     setIsOpen(false);
-    if (resolver) {
-      if (dialogConfig?.isPrompt) {
-        resolver.resolve(promptInput);
-      } else {
-        resolver.resolve(true);
-      }
-    }
+    resolver?.resolve(true);
   };
 
   const handleCancel = () => {
     setIsOpen(false);
-    if (resolver) {
-      if (dialogConfig?.isPrompt) {
-        resolver.resolve(null);
-      } else {
-        resolver.resolve(false);
-      }
-    }
+    resolver?.resolve(false);
   };
 
   const getIcon = (variant?: DialogVariant) => {
@@ -222,10 +159,7 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   // `dialog` value change identity whenever any dialog merely opened or closed, so
   // every callback and effect keyed on it re-ran -- silently refetching data and
   // discarding in-progress form state on an unrelated part of the screen.
-  const contextValue = useMemo(
-    () => ({ confirm, alert, prompt }),
-    [confirm, alert, prompt]
-  );
+  const contextValue = useMemo(() => ({ confirm, alert }), [confirm, alert]);
 
   return (
     <DialogContext.Provider value={contextValue}>
@@ -254,23 +188,6 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
               </button>
             </div>
 
-            {dialogConfig.isPrompt && (
-              <div className="pt-1">
-                <input
-                  type="text"
-                  value={promptInput}
-                  onChange={(e) => setPromptInput(e.target.value)}
-                  placeholder={dialogConfig.inputPlaceholder}
-                  autoFocus
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleConfirm();
-                    if (e.key === 'Escape') handleCancel();
-                  }}
-                  className="w-full bg-md-surface-container-lowest border border-md-outline-variant rounded-xl px-3.5 py-2 text-xs font-mono text-md-on-surface placeholder:text-md-on-surface-variant/70 focus:outline-none focus:border-md-primary focus:ring-1 focus:ring-md-primary transition-colors"
-                />
-              </div>
-            )}
-
             <div className="flex justify-end space-x-2.5 pt-3 border-t border-md-outline-variant">
               {dialogConfig.showCancel && (
                 <button
@@ -284,7 +201,7 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
               <button
                 type="button"
                 onClick={handleConfirm}
-                autoFocus={!dialogConfig.isPrompt}
+                autoFocus
                 className={`px-4 py-2 rounded-xl text-xs font-semibold transition-opacity cursor-pointer ${getConfirmButtonClass(
                   dialogConfig.variant
                 )}`}

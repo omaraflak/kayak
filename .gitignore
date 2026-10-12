@@ -5,7 +5,6 @@
 # --- Secrets & Environment Variables ---
 .env
 .env.*
-!.env.example
 *.key
 *.pem
 data/settings.json

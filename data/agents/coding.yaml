@@ -28,7 +28,6 @@ allowed_tools:
 - remember
 - run_command
 - run_python
-- send_task_input
 - spawn_subagent
 - start_background_task
 - stop_task

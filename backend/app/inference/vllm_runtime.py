@@ -1,17 +1,18 @@
 """Serving text models with vLLM.
 
-Everything here is specific to vLLM: which image to run, how to size a CPU KV cache,
+Everything here is specific to vLLM: which image to run, how to size its KV cache,
 which tool-call parser a model family needs, and the one start failure worth retrying
 automatically. The lifecycle around it lives in the manager and is shared with every
 other modality.
+
+Docker Desktop gives containers no GPU, so this is always vLLM's CPU image. MLX
+models run on the Apple GPU through the launcher instead.
 """
 
 import re
 from typing import List, Optional, Tuple
 
-import docker
-
-from backend.app.config import default_vllm_api_base, settings
+from backend.app.config import settings
 from backend.app.inference.models import (
     DeployRequest,
     DeploymentProgress,
@@ -21,8 +22,7 @@ from backend.app.inference.models import (
 )
 from backend.app.inference.runtimes import ContainerSpec, Runtime, SpecContext
 
-GPU_IMAGE = "vllm/vllm-openai:latest"
-CPU_IMAGE = "vllm/vllm-openai-cpu:latest"
+VLLM_IMAGE = "vllm/vllm-openai-cpu:latest"
 
 #: Share of total memory offered to the KV cache. The rest goes to the model weights
 #: and the vLLM runtime, which together take far more than the weights alone: loading a
@@ -180,37 +180,30 @@ class VLLMRuntime(Runtime):
     default_query = "qwen2.5-coder"
     tunable_fields = (
         "max_model_len",
-        "gpu_memory_utilization",
         "cpu_kvcache_space_gb",
         "memory_limit_gb",
         "cpu_limit",
         "dtype",
-        "enforce_eager",
         "trust_remote_code",
     )
 
     @property
+    def image(self) -> str:
+        return VLLM_IMAGE
+
+    @property
     def default_port(self) -> int:
         return settings.VLLM_PORT
-
-    def candidate_images(self) -> Tuple[str, ...]:
-        return (GPU_IMAGE, CPU_IMAGE)
 
     def augment_capability(
         self, capability: HostCapability, docker_memory_bytes: Optional[int]
     ) -> None:
         capability.default_cpu_kvcache_gb = resolve_cpu_kvcache_gib(docker_memory_bytes)
 
-    def api_base(self, port: int) -> str:
-        if port == settings.VLLM_PORT:
-            # Honours an explicit VLLM_API_BASE override for the configured port.
-            return settings.VLLM_API_BASE
-        return default_vllm_api_base(port, settings.RUNNING_IN_CONTAINER)
-
     async def container_spec(
         self, request: DeployRequest, context: SpecContext
     ) -> ContainerSpec:
-        spec = ContainerSpec(image=GPU_IMAGE if context.has_gpu else CPU_IMAGE)
+        spec = ContainerSpec(image=self.image)
 
         spec.environment.update({
             # HF_HUB_ENABLE_HF_TRANSFER is deprecated and ignored by current
@@ -228,53 +221,31 @@ class VLLMRuntime(Runtime):
             "--host", "0.0.0.0",
         ]
 
-        if context.has_gpu:
-            spec.notes.append(
-                f"✓ NVIDIA GPU detected. Configuring GPU acceleration for {request.model_id}..."
-            )
-            spec.command.extend([
-                "--gpu-memory-utilization", str(request.gpu_memory_utilization),
-                "--dtype", request.dtype,
-            ])
-            if request.enforce_eager:
-                spec.command.append("--enforce-eager")
-            spec.run_kwargs["device_requests"] = [
-                docker.types.DeviceRequest(count=-1, capabilities=[["gpu"]])
-            ]
-        else:
-            spec.notes.append(
-                f"ℹ No NVIDIA GPU found. Using CPU image for {request.model_id}..."
-            )
-            cpu_dtype = "bfloat16" if request.dtype in ("auto", "bfloat16") else request.dtype
-            spec.command.extend([
-                "--dtype", cpu_dtype,
-                "--enforce-eager",
-            ])
+        spec.notes.append(f"ℹ Loading {request.model_id} on the CPU...")
+        # The CPU backend computes in bfloat16 unless told otherwise, and has no
+        # CUDA graphs to capture, so eager mode is not a choice here.
+        dtype = "bfloat16" if request.dtype in ("auto", "bfloat16") else request.dtype
+        spec.command.extend(["--dtype", dtype, "--enforce-eager"])
 
-            # Sized to what the container will actually have: the user's
-            # allocation when one was chosen, otherwise everything Docker has.
-            # vLLM refuses to start when the requested KV cache exceeds free
-            # memory, so a fixed figure made every CPU launch fail on any host
-            # smaller than that figure.
-            effective_memory = context.docker_memory_bytes
-            if request.memory_limit_gb:
-                limit_bytes = int(request.memory_limit_gb * 1024 ** 3)
-                effective_memory = (
-                    min(effective_memory, limit_bytes)
-                    if effective_memory
-                    else limit_bytes
-                )
-            kvcache_gib = resolve_cpu_kvcache_gib(
-                effective_memory, request.cpu_kvcache_space_gb
+        # Sized to what the container will actually have: the user's allocation
+        # when one was chosen, otherwise everything Docker has. vLLM refuses to
+        # start when the requested KV cache exceeds free memory, so a fixed figure
+        # made every launch fail on any machine smaller than that figure.
+        effective_memory = context.docker_memory_bytes
+        if request.memory_limit_gb:
+            limit_bytes = int(request.memory_limit_gb * 1024 ** 3)
+            effective_memory = (
+                min(effective_memory, limit_bytes) if effective_memory else limit_bytes
             )
-            spec.environment["VLLM_CPU_KVCACHE_SPACE"] = str(kvcache_gib)
-            spec.run_kwargs["shm_size"] = f"{kvcache_gib}g"
+        kvcache_gib = resolve_cpu_kvcache_gib(effective_memory, request.cpu_kvcache_space_gb)
+        spec.environment["VLLM_CPU_KVCACHE_SPACE"] = str(kvcache_gib)
+        spec.run_kwargs["shm_size"] = f"{kvcache_gib}g"
 
-            if effective_memory:
-                spec.notes.append(
-                    f"ℹ The container has {effective_memory / 1024 ** 3:.1f} GiB of memory to work with; "
-                    f"reserving {kvcache_gib} GiB for the KV cache."
-                )
+        if effective_memory:
+            spec.notes.append(
+                f"ℹ The container has {effective_memory / 1024 ** 3:.1f} GiB of memory to work with; "
+                f"reserving {kvcache_gib} GiB for the KV cache."
+            )
 
         if request.trust_remote_code:
             spec.command.append("--trust-remote-code")

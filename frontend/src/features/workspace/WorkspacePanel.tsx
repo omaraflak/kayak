@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BackgroundTask, WorkspaceFileEntry } from '../../types';
 import { api, errorMessage } from '../../api/client';
+import { formatBytes } from '../../utils/format';
 import { CodeBlock } from '../../ui/CodeBlock';
 import { ContainerTasks } from './ContainerTasks';
 import { ContainerTerminal } from './ContainerTerminal';
@@ -9,7 +10,6 @@ import {
   breadcrumbs,
   clampPanelWidth,
   fileKind,
-  formatFileSize,
   joinPath,
   parentPath,
   prismLanguageForFile,
@@ -198,7 +198,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
       await refreshListing();
       setListError(null);
     } catch (err) {
-      setListError(`Upload failed: ${err}`);
+      setListError(`Upload failed: ${errorMessage(err)}`);
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -363,7 +363,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
                 <span className="truncate flex-1 min-w-0">{entry.name}</span>
                 {!entry.is_dir && (
                   <span className="text-[10px] text-md-on-surface-variant font-mono shrink-0">
-                    {formatFileSize(entry.size)}
+                    {formatBytes(entry.size)}
                   </span>
                 )}
               </button>

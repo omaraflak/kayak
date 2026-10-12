@@ -18,6 +18,7 @@ from backend.app.agent.task_manager import TaskManager
 from backend.app.config import settings
 from backend.app.database import create_conversation, get_task, init_db
 from backend.app.models import TaskStatus
+from backend.app.realtime import conversation_events
 
 
 class FakeSandbox:
@@ -54,7 +55,7 @@ async def conversation_id(tmp_path: Path, monkeypatch) -> str:
     monkeypatch.setattr(settings, "DB_PATH", tmp_path / "tasks.db")
     await init_db()
     conversation = await create_conversation(
-        title="t", agent_id="general", isolated_container=True
+        title="t", agent_id="general"
     )
     return conversation.id
 
@@ -186,41 +187,29 @@ class TestStopping:
         assert await manager.stop_task("no-such-task") is False
 
 
-class TestListeners:
-    async def test_subscribers_see_output_as_it_arrives(self, conversation_id, monkeypatch):
+class TestLiveEvents:
+    async def test_watchers_of_the_conversation_see_output_as_it_arrives(
+        self, conversation_id, monkeypatch
+    ):
         monkeypatch.setattr(
             task_manager_module,
             "sandbox_manager",
             FakeSandbox([ExecChunk("line one\n", False)]),
         )
         manager = TaskManager()
-        seen: List[TaskEvent] = []
-        manager.add_listener(conversation_id, seen.append)
+        queue = conversation_events.subscribe(conversation_id)
 
         task = await manager.start_shell_task(
             conversation_id=conversation_id, name="build", command="make",
             container_id="container-1",
         )
         await _run_to_completion(manager, task.id)
+        conversation_events.unsubscribe(conversation_id, queue)
 
+        seen: List[TaskEvent] = []
+        while not queue.empty():
+            seen.append(queue.get_nowait())
         kinds = [event["type"] for event in seen]
         assert kinds == ["task_started", "task_output", "task_finished"]
         assert seen[1]["text"] == "line one\n"
         assert seen[1]["stream"] == "stdout"
-
-    async def test_a_removed_listener_stops_hearing(self, conversation_id, monkeypatch):
-        monkeypatch.setattr(
-            task_manager_module, "sandbox_manager", FakeSandbox([])
-        )
-        manager = TaskManager()
-        seen: List[TaskEvent] = []
-        manager.add_listener(conversation_id, seen.append)
-        manager.remove_listener(conversation_id, seen.append)
-
-        task = await manager.start_shell_task(
-            conversation_id=conversation_id, name="build", command="make",
-            container_id="container-1",
-        )
-        await _run_to_completion(manager, task.id)
-
-        assert seen == []

@@ -14,9 +14,9 @@ containers, so transcribing a recording does not require giving up the voice you
 loaded.
 """
 
-from typing import Tuple
+import math
 
-from backend.app.config import default_vllm_api_base, settings
+from backend.app.config import settings
 from backend.app.inference.models import DeployRequest, Modality
 from backend.app.inference.runtimes import ContainerSpec, Runtime, SpecContext
 
@@ -30,17 +30,16 @@ class AudioRuntime(Runtime):
 
     #: Value passed to the server's --modality flag.
     server_mode: str
+    released_with_kayak = True
 
-    def candidate_images(self) -> Tuple[str, ...]:
-        return (settings.AUDIO_IMAGE,)
-
-    def api_base(self, port: int) -> str:
-        return default_vllm_api_base(port, settings.RUNNING_IN_CONTAINER)
+    @property
+    def image(self) -> str:
+        return settings.AUDIO_IMAGE
 
     async def container_spec(
         self, request: DeployRequest, context: SpecContext
     ) -> ContainerSpec:
-        spec = ContainerSpec(image=settings.AUDIO_IMAGE)
+        spec = ContainerSpec(image=self.image)
 
         spec.environment.update({
             "PYTHONUNBUFFERED": "1",
@@ -49,6 +48,10 @@ class AudioRuntime(Runtime):
         if context.hf_token:
             spec.environment["HF_TOKEN"] = context.hf_token
             spec.environment["HUGGING_FACE_HUB_TOKEN"] = context.hf_token
+        if request.cpu_limit:
+            # torch sizes its thread pool from the cores Docker's VM has, not from
+            # the container's quota, and is throttled hard when the two differ.
+            spec.environment["OMP_NUM_THREADS"] = str(max(1, math.ceil(request.cpu_limit)))
 
         spec.command = [
             "--modality", self.server_mode,

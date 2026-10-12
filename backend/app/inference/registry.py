@@ -14,7 +14,7 @@ will not start cannot disturb a text server that is happily running.
 import asyncio
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from backend.app.config import settings
 from backend.app.inference import cache as model_cache

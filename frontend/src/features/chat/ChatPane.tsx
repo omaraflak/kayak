@@ -14,6 +14,7 @@ import { useDictation, useMessageSpeech } from './useSpeech';
 import { ProgressRing } from '../../ui/ProgressRing';
 import { useVLLMStatus } from '../../context/VLLMStatusContext';
 import { MessageAction, MessageActions } from './MessageActions';
+import { isSendShortcut } from './sendShortcut';
 import {
   GroupedTurn,
   countMessagesFrom,
@@ -31,7 +32,6 @@ import {
 } from './toolCallStream';
 import {
   Send,
-  Bot,
   FileText,
   Loader2,
   Sparkles,
@@ -55,17 +55,9 @@ export { groupMessagesIntoTurns } from './conversationTurns';
 
 export interface ChatPaneProps {
   conversationId: string | null;
-  agentId?: string;
   agentName?: string;
   agentModel?: string;
   placeholder?: string;
-  showHeader?: boolean;
-  headerTitle?: string;
-  headerBadge?: string;
-  headerSubtitle?: string;
-  fullWidthInput?: boolean;
-  onSendMessage?: (content: string) => Promise<string | void>;
-  onConversationCreated?: (newId: string) => void;
   onRefreshConversations?: () => void;
   /**
    * The conversation record itself changed (its title, say), as opposed to its
@@ -87,17 +79,9 @@ export interface ChatPaneProps {
 
 export const ChatPane: React.FC<ChatPaneProps> = ({
   conversationId,
-  agentId = 'general',
   agentName = 'Kayak Agent',
   agentModel,
   placeholder,
-  showHeader = true,
-  headerTitle,
-  headerBadge,
-  headerSubtitle,
-  fullWidthInput = false,
-  onSendMessage,
-  onConversationCreated,
   onRefreshConversations,
   onConversationUpdated,
   onOpenConversation,
@@ -278,7 +262,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       loadConversationData();
       dialog.alert({
         title: 'Execution Error',
-        message: `Agent encountered an error: ${err}`,
+        message: `Agent encountered an error: ${errorMessage(err)}`,
         variant: 'danger',
       });
     },
@@ -286,7 +270,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
   /** Sends one message and starts a turn. The queue and the composer share it. */
   const deliver = async (text: string) => {
-    if (!text.trim()) return;
+    if (!text.trim() || !conversationId) return;
     setIsSending(true);
     transcript.followOutput();
 
@@ -294,7 +278,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     const placeholderId = `optimistic_${Date.now()}`;
     const tempUserMsg: Message = {
       id: placeholderId,
-      conversation_id: conversationId || '',
+      conversation_id: conversationId,
       role: 'user',
       content: text,
       created_at: new Date().toISOString(),
@@ -302,25 +286,8 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     setMessages((prev) => [...prev, tempUserMsg]);
 
     try {
-      if (!conversationId) {
-        if (onSendMessage) {
-          const newCid = await onSendMessage(text);
-          if (newCid) {
-            onConversationCreated?.(newCid);
-            onRefreshConversations?.();
-          }
-        } else {
-          const conv = await api.createConversation({
-            agent_id: agentId,
-            initial_message: text,
-          });
-          onConversationCreated?.(conv.id);
-          onRefreshConversations?.();
-        }
-      } else {
-        await api.sendMessage(conversationId, text);
-        onRefreshConversations?.();
-      }
+      await api.sendMessage(conversationId, text);
+      onRefreshConversations?.();
     } catch (err) {
       // The message never reached the server, so leaving the placeholder in place
       // would show it as sent until the next reload. Take it back and say why.
@@ -329,7 +296,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       setInputContent(text);
       dialog.alert({
         title: 'Message not sent',
-        message: `${err}. Your message has been put back in the composer.`,
+        message: `${errorMessage(err)} Your message has been put back in the composer.`,
         variant: 'danger',
       });
     }
@@ -436,7 +403,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       console.error('Failed to submit tool approval:', err);
       dialog.alert({
         title: 'Approval Failed',
-        message: `Could not record your decision: ${err}`,
+        message: `Could not record your decision: ${errorMessage(err)}`,
         variant: 'danger',
       });
     }
@@ -503,7 +470,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (isSendShortcut(e)) {
       e.preventDefault();
       handleSend();
     }
@@ -538,19 +505,6 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
 
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 bg-md-surface overflow-hidden transition-colors">
-      {/* Optional Sub-Header */}
-      {showHeader && (
-        <div className="p-3 border-b border-md-outline-variant bg-md-surface-container-low flex items-center justify-between text-xs font-bold uppercase tracking-wider text-md-on-surface shrink-0 transition-colors">
-          <div className="flex items-center space-x-2">
-            <Bot className="w-4 h-4 text-md-primary" />
-            <span>{headerTitle || agentName}</span>
-          </div>
-          {headerBadge && (
-            <span className="text-[10px] font-mono text-md-on-surface-variant font-normal">{headerBadge}</span>
-          )}
-        </div>
-      )}
-
       {/* Messages Scroll Area - Constrained to max-w-3xl for optimal line length and reading ergonomics */}
       <div className="flex-1 min-h-0 relative">
         <div
@@ -564,9 +518,9 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                 <div className="w-12 h-12 rounded-2xl bg-md-primary-container text-md-on-primary-container border border-md-outline-variant flex items-center justify-center mx-auto shadow-xs">
                   <Sparkles className="w-6 h-6" />
                 </div>
-                <h3 className="text-sm font-bold text-md-on-surface">{headerTitle || `Chat with ${agentName}`}</h3>
+                <h3 className="text-sm font-bold text-md-on-surface">{`Chat with ${agentName}`}</h3>
                 <p className="text-xs text-md-on-surface-variant max-w-sm mx-auto leading-relaxed">
-                  {headerSubtitle || `Ask ${agentName} a question, or give it a task to carry out.`}
+                  {`Ask ${agentName} a question, or give it a task to carry out.`}
                 </p>
               </div>
             )}
@@ -822,7 +776,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
           the agent was actually able to do, so it is surfaced rather than logged. */}
       {streamWarning && (
         <div className="px-4 pt-3 shrink-0">
-          <div className={`${fullWidthInput ? 'w-full' : 'max-w-3xl mx-auto'} flex items-start gap-2 rounded-xl border border-amber-300 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/40 px-3.5 py-2.5`}>
+          <div className={`max-w-3xl mx-auto flex items-start gap-2 rounded-xl border border-amber-300 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/40 px-3.5 py-2.5`}>
             <AlertCircle className="w-4 h-4 text-amber-700 dark:text-amber-300 shrink-0 mt-0.5" />
             <p className="text-xs text-amber-900 dark:text-amber-100 leading-relaxed flex-1">{streamWarning}</p>
             <button
@@ -841,7 +795,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
           button simply does nothing and there is no way to tell why. */}
       {dictation.error && (
         <div
-          className={`px-4 pt-3 ${fullWidthInput ? 'w-full' : 'max-w-3xl mx-auto w-full'}`}
+          className={`px-4 pt-3 max-w-3xl mx-auto w-full`}
         >
           <div className="flex items-start gap-2 px-3 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800/80 text-rose-900 dark:text-rose-100 text-[11px] leading-relaxed">
             <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
@@ -862,7 +816,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
           would claim the agent had seen them. */}
       {queued.length > 0 && (
         <div
-          className={`px-4 pt-3 ${fullWidthInput ? 'w-full' : 'max-w-3xl mx-auto w-full'} space-y-1.5`}
+          className={`px-4 pt-3 max-w-3xl mx-auto w-full space-y-1.5`}
         >
           <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-md-on-surface-variant">
             <Clock className="w-3 h-3" />
@@ -899,7 +853,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
       <div className="p-4 border-t border-md-outline-variant bg-md-surface shrink-0 transition-colors">
         <form
           onSubmit={handleSend}
-          className={`${fullWidthInput ? 'w-full' : 'max-w-3xl mx-auto'} relative bg-md-surface-container-lowest border border-md-outline-variant rounded-2xl overflow-hidden focus-within:border-md-primary focus-within:ring-2 focus-within:ring-md-primary/20 shadow-xs transition-all`}
+          className={`max-w-3xl mx-auto relative bg-md-surface-container-lowest border border-md-outline-variant rounded-2xl overflow-hidden focus-within:border-md-primary focus-within:ring-2 focus-within:ring-md-primary/20 shadow-xs transition-all`}
         >
           {/* Renders at the size the transcript does, so what you type looks like
               what you get back. */}
@@ -1016,7 +970,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                     vllm.start().catch((err) =>
                       dialog.alert({
                         title: 'Model Startup Failed',
-                        message: `Could not launch ${vllm.modelId}: ${err}`,
+                        message: `Could not launch ${vllm.modelId}: ${errorMessage(err)}`,
                         variant: 'danger',
                       })
                     );

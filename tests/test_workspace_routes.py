@@ -21,9 +21,6 @@ class TestSafeUploadPath:
     def test_a_folder_upload_keeps_its_structure(self):
         assert str(safe_upload_path("project/src/main.py")) == "project/src/main.py"
 
-    def test_windows_separators_are_normalised(self):
-        assert str(safe_upload_path("project\\src\\main.py")) == "project/src/main.py"
-
     def test_current_directory_segments_are_dropped(self):
         assert str(safe_upload_path("./project/./file.txt")) == "project/file.txt"
 

@@ -11,14 +11,6 @@ RUN npm run build
 # --- Stage 2: Final Backend & Web Server ---
 FROM python:3.11-slim
 
-# Install system dependencies including docker CLI and curl
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    git \
-    bash \
-    procps \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 # Install Python dependencies
@@ -43,7 +35,6 @@ ENV PYTHONPATH=/app
 # network; publishing the port is an explicit decision made by docker-compose.
 ENV KAYAK_HOST=0.0.0.0
 ENV KAYAK_PORT=8000
-ENV KAYAK_IN_DOCKER=true
 
 EXPOSE 8000
 

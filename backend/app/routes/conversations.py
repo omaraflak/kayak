@@ -6,21 +6,20 @@ fan-out in `realtime`, so that neither is entangled with FastAPI.
 """
 
 import asyncio
-import json
 import logging
 from pathlib import Path
 import shutil
-from typing import Any, AsyncGenerator, Dict, List, Optional, Set
+from typing import Any, AsyncIterator, Dict, List, Optional, Set
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from backend.app import sse
 from backend.app.agent import events, turns
 from backend.app.agent.approvals import approval_registry
 from backend.app.agent.events import ConversationEvent
 from backend.app.agent.sandbox import sandbox_manager
-from backend.app.agent.task_manager import task_manager
 from backend.app.agent.turns import SANDBOX_UNAVAILABLE_DETAIL, ensure_sandbox
 from backend.app.agents.manager import agent_manager
 from backend.app.config import settings
@@ -37,7 +36,7 @@ from backend.app.database import (
     list_conversations,
     update_conversation,
 )
-from backend.app.llm import generate_title, missing_key_error
+from backend.app.llm import excerpt_title, generate_title, missing_key_error
 from backend.app.models import (
     Conversation,
     ConversationStatus,
@@ -51,9 +50,6 @@ from backend.app.realtime import conversation_events
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
-
-#: How long an idle event stream waits before sending a keep-alive.
-_STREAM_PING_SECONDS = 20.0
 
 # Fire-and-forget work (title generation) held so it is not garbage collected.
 _side_tasks: Set[asyncio.Task[None]] = set()
@@ -86,14 +82,6 @@ def _spawn_side_task(coroutine: "asyncio.Future[None] | Any") -> None:
 
 
 # --------------------------------------------------------------------- helpers
-
-
-def _clean_initial_title(prompt: Optional[str]) -> Optional[str]:
-    """Derives a provisional title from the first words of an initial message."""
-    if not prompt:
-        return None
-    clean = " ".join(prompt.strip().split())
-    return clean[:36].rsplit(" ", 1)[0] + "..." if len(clean) > 36 else clean
 
 
 def resolve_conversation_model(agent_id: str) -> Optional[str]:
@@ -147,7 +135,7 @@ def _schedule_title(conversation: Conversation, prompt: Optional[str], had_title
     _spawn_side_task(_generate_title(conversation.id, prompt, model))
 
 
-async def _load_conversation(conversation_id: str) -> Conversation:
+async def load_conversation(conversation_id: str) -> Conversation:
     """Fetches a conversation or reports that it does not exist.
 
     Raises:
@@ -167,7 +155,7 @@ async def _load_conversation_and_anchor(
     Raises:
         HTTPException: 404 if either is missing.
     """
-    conversation = await _load_conversation(conversation_id)
+    conversation = await load_conversation(conversation_id)
 
     messages = await get_messages(conversation_id)
     if not any(message.id == message_id for message in messages):
@@ -194,12 +182,11 @@ async def create_new_conversation(request: CreateConversationRequest) -> Convers
     if request.initial_message:
         require_provider_key(request.agent_id)
 
-    title = request.title or _clean_initial_title(request.initial_message)
+    title = request.title or excerpt_title(request.initial_message)
 
     conversation = await create_conversation(
         title=title or "New Conversation",
         agent_id=request.agent_id,
-        isolated_container=True,
     )
 
     try:
@@ -233,7 +220,7 @@ async def get_all_conversations() -> List[Conversation]:
 @router.get("/{conversation_id}")
 async def get_conversation_details(conversation_id: str) -> Dict[str, Any]:
     """Returns conversation metadata and full message history."""
-    conversation = await _load_conversation(conversation_id)
+    conversation = await load_conversation(conversation_id)
     _revive_sandbox(conversation)
     return {
         "conversation": conversation,
@@ -262,7 +249,7 @@ def _revive_sandbox(conversation: Conversation) -> None:
 @router.delete("/{conversation_id}")
 async def delete_existing_conversation(conversation_id: str) -> Dict[str, str]:
     """Deletes a conversation, its sub-agents, its container, and its workspace."""
-    conversation = await _load_conversation(conversation_id)
+    conversation = await load_conversation(conversation_id)
     await _remove_conversation_tree(conversation)
     return {"status": "deleted"}
 
@@ -326,7 +313,7 @@ async def send_user_message(
     conversation_id: str, request: SendMessageRequest
 ) -> Message:
     """Appends a user prompt and starts the agent's turn."""
-    conversation = await _load_conversation(conversation_id)
+    conversation = await load_conversation(conversation_id)
 
     # Before the message is stored: the composer puts a rejected message back for the
     # user to resend once the key is in place.
@@ -416,14 +403,13 @@ async def branch_from_message(
     branch = await create_conversation(
         title=source.title,
         agent_id=source.agent_id,
-        isolated_container=True,
         branched_from_conversation_id=source.id,
         branched_from_message_id=request.message_id,
     )
 
     copied = await copy_messages_through(conversation_id, branch.id, request.message_id)
     if not copied:
-        await delete_conversation(branch.id)
+        await _remove_conversation_tree(branch)
         raise HTTPException(status_code=409, detail="Could not copy the conversation history.")
 
     # The transcript refers to files the agent made; a branch that cannot see them
@@ -434,7 +420,8 @@ async def branch_from_message(
         await ensure_sandbox(branch)
     except Exception as error:
         logger.warning("Failed to create sandbox for branch %s: %s", branch.id, error)
-        await delete_conversation(branch.id)
+        # The copied workspace goes too, not only the database row.
+        await _remove_conversation_tree(branch)
         raise HTTPException(
             status_code=503, detail=f"{SANDBOX_UNAVAILABLE_DETAIL} ({error})"
         )
@@ -463,11 +450,6 @@ async def _copy_workspace(source_conversation_id: str, target_conversation_id: s
 
 
 # ----------------------------------------------------------------- event stream
-
-
-def _sse(event: ConversationEvent) -> str:
-    """Formats one event as an SSE frame."""
-    return f"data: {json.dumps(event)}\n\n"
 
 
 def _catch_up(conversation_id: str, status: str) -> List[ConversationEvent]:
@@ -501,39 +483,17 @@ async def stream_conversation_events(
     conversation_id: str, request: Request
 ) -> StreamingResponse:
     """Server-Sent Events stream of everything happening in one conversation."""
-    conversation = await _load_conversation(conversation_id)
+    conversation = await load_conversation(conversation_id)
 
     queue = conversation_events.subscribe(conversation_id)
 
-    def on_task_event(event: ConversationEvent) -> None:
-        try:
-            queue.put_nowait(event)
-        except asyncio.QueueFull:
-            pass
-
-    task_manager.add_listener(conversation_id, on_task_event)
-
-    async def event_generator() -> AsyncGenerator[str, None]:
+    async def frames() -> AsyncIterator[str]:
         try:
             for event in _catch_up(conversation_id, conversation.status.value):
-                yield _sse(event)
-
-            while not await request.is_disconnected():
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=_STREAM_PING_SECONDS)
-                    yield _sse(event)
-                except asyncio.TimeoutError:
-                    yield _sse(events.ping())
+                yield sse.frame(event)
+            async for chunk in sse.drain(request, queue, events.ping()):
+                yield chunk
         finally:
-            task_manager.remove_listener(conversation_id, on_task_event)
             conversation_events.unsubscribe(conversation_id, queue)
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return sse.response(frames())

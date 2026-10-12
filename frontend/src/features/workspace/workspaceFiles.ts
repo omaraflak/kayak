@@ -54,14 +54,6 @@ export function breadcrumbs(path: string): Array<{ label: string; path: string }
   return crumbs;
 }
 
-/** Human-readable file size. */
-export function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
-
 /**
  * Maps a path the agent mentioned to a workspace-relative one, or null when it
  * points elsewhere.

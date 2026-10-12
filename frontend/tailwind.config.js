@@ -1,58 +1,61 @@
+/**
+ * Material colour roles, defined as CSS variables in src/m3-tokens.css so that the
+ * light and dark themes swap them in one place.
+ */
+const ROLES = [
+  'primary', 'on-primary', 'primary-container', 'on-primary-container', 'inverse-primary',
+  'secondary', 'on-secondary', 'secondary-container', 'on-secondary-container',
+  'tertiary', 'on-tertiary', 'tertiary-container', 'on-tertiary-container',
+  'surface', 'surface-dim', 'surface-bright', 'on-surface', 'surface-variant', 'on-surface-variant',
+  'surface-container-lowest', 'surface-container-low', 'surface-container',
+  'surface-container-high', 'surface-container-highest',
+  'inverse-surface', 'inverse-on-surface',
+  'outline', 'outline-variant', 'scrim',
+  'error', 'on-error', 'error-container', 'on-error-container',
+];
+
+/**
+ * A colour role usable with opacity modifiers. A bare `var()` is opaque to
+ * Tailwind, so `bg-md-scrim/60` generated nothing at all; mixing with transparent
+ * gives the modifier something to act on.
+ */
+const role = (name) =>
+  `color-mix(in srgb, var(--md-sys-color-${name}) calc(<alpha-value> * 100%), transparent)`;
+
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
+  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   darkMode: 'class',
   theme: {
     extend: {
       colors: {
-        md: {
-          primary: 'var(--md-sys-color-primary)',
-          'on-primary': 'var(--md-sys-color-on-primary)',
-          'primary-container': 'var(--md-sys-color-primary-container)',
-          'on-primary-container': 'var(--md-sys-color-on-primary-container)',
-          'inverse-primary': 'var(--md-sys-color-inverse-primary)',
-          
-          secondary: 'var(--md-sys-color-secondary)',
-          'on-secondary': 'var(--md-sys-color-on-secondary)',
-          'secondary-container': 'var(--md-sys-color-secondary-container)',
-          'on-secondary-container': 'var(--md-sys-color-on-secondary-container)',
-          
-          tertiary: 'var(--md-sys-color-tertiary)',
-          'on-tertiary': 'var(--md-sys-color-on-tertiary)',
-          'tertiary-container': 'var(--md-sys-color-tertiary-container)',
-          'on-tertiary-container': 'var(--md-sys-color-on-tertiary-container)',
-          
-          surface: 'var(--md-sys-color-surface)',
-          'surface-dim': 'var(--md-sys-color-surface-dim)',
-          'surface-bright': 'var(--md-sys-color-surface-bright)',
-          'on-surface': 'var(--md-sys-color-on-surface)',
-          'surface-variant': 'var(--md-sys-color-surface-variant)',
-          'on-surface-variant': 'var(--md-sys-color-on-surface-variant)',
-          
-          'surface-container-lowest': 'var(--md-sys-color-surface-container-lowest)',
-          'surface-container-low': 'var(--md-sys-color-surface-container-low)',
-          'surface-container': 'var(--md-sys-color-surface-container)',
-          'surface-container-high': 'var(--md-sys-color-surface-container-high)',
-          'surface-container-highest': 'var(--md-sys-color-surface-container-highest)',
-          
-          'inverse-surface': 'var(--md-sys-color-inverse-surface)',
-          'inverse-on-surface': 'var(--md-sys-color-inverse-on-surface)',
-          
-          outline: 'var(--md-sys-color-outline)',
-          'outline-variant': 'var(--md-sys-color-outline-variant)',
-          scrim: 'var(--md-sys-color-scrim)',
-          
-          error: 'var(--md-sys-color-error)',
-          'on-error': 'var(--md-sys-color-on-error)',
-          'error-container': 'var(--md-sys-color-error-container)',
-          'on-error-container': 'var(--md-sys-color-on-error-container)',
+        md: Object.fromEntries(ROLES.map((name) => [name, role(name)])),
+      },
+      // The smallest steps of each scale, which the components are written with.
+      boxShadow: {
+        '2xs': '0 1px rgb(0 0 0 / 0.05)',
+        xs: '0 1px 2px 0 rgb(0 0 0 / 0.05)',
+      },
+      backdropBlur: { xs: '2px' },
+      borderRadius: { xs: '0.125rem' },
+      spacing: { 4.5: '1.125rem' },
+      keyframes: {
+        'fade-in': { from: { opacity: '0' }, to: { opacity: '1' } },
+        'scale-up': {
+          from: { opacity: '0', transform: 'scale(0.96)' },
+          to: { opacity: '1', transform: 'scale(1)' },
         },
-      }
+        'slide-up': {
+          from: { opacity: '0', transform: 'translateY(8px)' },
+          to: { opacity: '1', transform: 'translateY(0)' },
+        },
+      },
+      animation: {
+        'fade-in': 'fade-in 150ms ease-out',
+        'scale-up': 'scale-up 150ms ease-out',
+        'slide-up': 'slide-up 200ms ease-out',
+      },
     },
   },
   plugins: [],
-}
-
+};

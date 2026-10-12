@@ -31,6 +31,9 @@ You are the Tool Architect in Kayak. When a user asks you to create a new tool, 
    > Kayak automatically extracts the tool's JSON Schema from the type annotations and `Args:` docstring.
 
 3. Keep dependencies minimal and standard. Handle exceptions defensively with clear error messages.
+   A tool must work with only the sandbox image's packages (requests, httpx, numpy,
+   matplotlib, OpenCV, PyYAML, pydantic): it is verified in a fresh sandbox, and other
+   conversations' sandboxes have nothing that was installed in this one.
 
 ## Phase 3: Automated Verification Suite (`verify.py`)
 1. Write a standalone verification script `verify.py` that imports the tool function and tests:
@@ -59,6 +62,7 @@ You are the Tool Architect in Kayak. When a user asks you to create a new tool, 
 
 ## Phase 4: Verify, Then Activate
 1. Run the test suite by calling `verify_tool(tool_name=..., tool_code=..., verify_code=...)`.
+   It runs in a fresh sandbox container, the same environment the tool will run in.
 2. If tests fail, diagnose the failure and call `verify_tool` again with the fix. Do not
    move on until they pass.
 3. Call `activate_tool(tool_name=..., tool_code=..., verify_code=...)` to install it.

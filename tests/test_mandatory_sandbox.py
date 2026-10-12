@@ -41,7 +41,6 @@ def _conversation(conversation_id: str, container_id: Optional[str]) -> Conversa
         id=conversation_id,
         title="t",
         agent_id="general",
-        isolated_container=True,
         container_id=container_id,
         status=ConversationStatus.ACTIVE,
         created_at="2026-01-01T00:00:00",
@@ -70,7 +69,7 @@ class TestEnsureSandbox:
         from backend.app.database import create_conversation
 
         conv = await create_conversation(
-            title="t", agent_id="general", isolated_container=True,
+            title="t", agent_id="general",
             container_id="gone-container",
         )
         result = await turns_module.ensure_sandbox(conv)
