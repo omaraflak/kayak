@@ -84,7 +84,7 @@ deliberately absent — they come from the Settings page.
 | --- | --- | --- |
 | `KAYAK_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` inside the image). |
 | `KAYAK_PORT` | `8000` | Port the server listens on. |
-| `KAYAK_AUTH_TOKEN` | _(empty)_ | Shared secret required on every API call when set. |
+| `KAYAK_AUTH_TOKEN` | _(empty)_ | Shared secret required on every API call when set. The Kayak app sets a random one by itself, so containers on the same Mac cannot use the API. |
 | `KAYAK_CORS_ORIGINS` | localhost origins | Browser origins allowed to call the API. |
 | `KAYAK_DATA_DIR` | `./data` | Agents, skills, tools, workspaces, and the database. |
 | `KAYAK_HOST_DATA_DIR` | _(discovered)_ | Where the data directory is on the Mac, for mounting into sibling containers. |

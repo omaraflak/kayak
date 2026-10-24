@@ -5,9 +5,11 @@ import { api, setStoredAuthToken } from '../api/client';
 /**
  * Blocks the app until the browser holds a valid shared secret.
  *
- * Authentication is off unless the server sets KAYAK_AUTH_TOKEN, in which case this
- * renders once and then never again: the token is exchanged for a session cookie so
- * that EventSource streams, which cannot send headers, authenticate too.
+ * Authentication is on whenever the server has KAYAK_AUTH_TOKEN, which the Kayak
+ * app always sets. Its own window is signed in before the page loads, so this
+ * screen is only ever seen by someone who opened Kayak some other way, such as in
+ * a browser. The key is exchanged for a session cookie so that EventSource
+ * streams, which cannot send headers, authenticate too.
  */
 export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<'checking' | 'required' | 'ready' | 'unreachable'>(
@@ -55,7 +57,7 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
       setState('ready');
     } catch {
       setStoredAuthToken(null);
-      setError('That token was not accepted. Check KAYAK_AUTH_TOKEN on the server.');
+      setError("That key wasn't accepted. Check it and try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -98,10 +100,11 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
             <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl bg-md-primary-container text-md-on-primary-container border border-md-outline-variant">
               <LockKeyhole className="h-5 w-5" />
             </div>
-            <h1 className="text-base font-bold text-md-on-surface">Kayak is locked</h1>
+            <h1 className="text-base font-bold text-md-on-surface">Open Kayak from the Kayak app</h1>
             <p className="text-xs leading-relaxed text-md-on-surface-variant">
-              This server requires a shared secret. Enter the value of{' '}
-              <code className="font-mono">KAYAK_AUTH_TOKEN</code> to continue.
+              For your safety, Kayak only opens in its own window. If you started it another
+              way, enter its access key (the <code className="font-mono">KAYAK_AUTH_TOKEN</code>{' '}
+              value) to continue.
             </p>
           </div>
 
@@ -110,7 +113,7 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
             value={token}
             onChange={(event) => setToken(event.target.value)}
             autoFocus
-            placeholder="Access token"
+            placeholder="Access key"
             className="w-full rounded-xl border border-md-outline-variant bg-md-surface-container-lowest px-3.5 py-2.5 text-sm text-md-on-surface focus:border-md-primary focus:outline-none focus:ring-2 focus:ring-md-primary/20"
           />
 
