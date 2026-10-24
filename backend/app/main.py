@@ -178,6 +178,25 @@ async def unexpected_error(_request: Request, _error: Exception) -> JSONResponse
     return JSONResponse(status_code=500, content={"detail": GENERIC_FAILURE})
 
 
+#: Where Kayak's pages may load images, sound and video from: Kayak itself, inline
+#: data, and the internet over HTTPS. Never another port on this Mac: browsers send
+#: Kayak's session cookie to every port on 127.0.0.1, so an image in a model's reply
+#: pointing at that model's own server would hand the session to it.
+CONTENT_SECURITY_POLICY = (
+    "img-src 'self' data: blob: https:; "
+    "media-src 'self' data: blob: https:; "
+    "frame-src 'none'; object-src 'none'"
+)
+
+
+@app.middleware("http")
+async def content_security_policy(request: Request, call_next):
+    """Applies the policy above to everything the server sends."""
+    response = await call_next(request)
+    response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    return response
+
+
 @app.middleware("http")
 async def require_auth_token(request: Request, call_next):
     """Rejects unauthenticated API calls when a shared secret is configured."""

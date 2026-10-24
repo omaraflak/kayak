@@ -1,18 +1,6 @@
 import React, { useState } from 'react';
 import { Check, Copy, LifeBuoy, Mail, X } from 'lucide-react';
 
-/**
- * The launcher's bridge, when Kayak is being shown inside the desktop app.
- *
- * A webview cannot open a `mailto:`, so it is handed to the launcher when one
- * is there. In an ordinary browser the bridge is absent and the normal
- * behaviour is used instead.
- */
-function launcherBridge(): { openExternal?: (url: string) => void } | undefined {
-  return (window as unknown as { __kayakLauncher?: { openExternal?: (url: string) => void } })
-    .__kayakLauncher;
-}
-
 interface SupportDialogProps {
   bundle: string;
   address: string;
@@ -65,14 +53,7 @@ export const SupportDialog: React.FC<SupportDialogProps> = ({ bundle, address, o
     const body = encodeURIComponent(
       'Describe what went wrong here, then paste the report below this line.\n\n'
     );
-    const mailto = `mailto:${address}?subject=${subject}&body=${body}`;
-
-    const bridge = launcherBridge();
-    if (bridge?.openExternal) {
-      bridge.openExternal(mailto);
-      return;
-    }
-    window.location.href = mailto;
+    window.location.href = `mailto:${address}?subject=${subject}&body=${body}`;
   };
 
   return (

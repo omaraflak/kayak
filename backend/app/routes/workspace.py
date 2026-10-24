@@ -23,7 +23,12 @@ from pydantic import BaseModel
 from backend.app.agent.sandbox import sandbox_manager
 from backend.app.config import settings
 from backend.app.database import get_conversation
-from backend.app.routes.auth import SESSION_COOKIE_NAME, TOKEN_HEADER_NAME
+from backend.app.routes.auth import (
+    SESSION_COOKIE_NAME,
+    TOKEN_HEADER_NAME,
+    matches_session,
+    matches_token,
+)
 from backend.app.routes.conversations import load_conversation
 from backend.app.agent.turns import ensure_sandbox
 from backend.app.user_errors import describe_sandbox_error
@@ -217,12 +222,11 @@ def _websocket_authorized(websocket: WebSocket) -> bool:
     The HTTP auth middleware never sees WebSocket upgrades, so without this the
     terminal would be an unauthenticated shell on any deployment that set a token.
     """
-    expected = settings.AUTH_TOKEN
-    if not expected:
+    if not settings.AUTH_TOKEN:
         return True
-    if websocket.headers.get(TOKEN_HEADER_NAME) == expected:
-        return True
-    return websocket.cookies.get(SESSION_COOKIE_NAME) == expected
+    return matches_token(websocket.headers.get(TOKEN_HEADER_NAME)) or matches_session(
+        websocket.cookies.get(SESSION_COOKIE_NAME)
+    )
 
 
 async def _send_terminal_error(websocket: WebSocket, message: str) -> None:

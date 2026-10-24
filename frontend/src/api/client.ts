@@ -81,7 +81,7 @@ export class ApiError extends Error {
 /**
  * The sentence to show a user for a thrown value.
  *
- * Only messages written for people are passed through. The webview's own errors --
+ * Only messages written for people are passed through. The browser's own errors --
  * "Load failed" for a server that is restarting, "The string did not match the
  * expected pattern." for a response that was not JSON -- are accurate and mean
  * nothing to someone who does not code, so they become `fallback`, which callers

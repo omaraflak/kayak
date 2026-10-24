@@ -443,7 +443,7 @@ const SecurityCard: React.FC<{ settings: AppSettings }> = ({ settings }) => {
         <p className="text-[11px] text-md-on-surface-variant leading-relaxed">
           {security.warning ??
             security.auth_required
-              ? 'Only the Kayak app on this Mac can open Kayak. Models and agents can still use the internet, but not Kayak itself.'
+              ? 'Only browsers the Kayak app signed in on this Mac can open Kayak. Models and agents can still use the internet, but not Kayak itself.'
               : 'Only this Mac can open Kayak.'}
         </p>
         {/* The details matter only when something needs changing. */}

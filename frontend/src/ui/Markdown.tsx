@@ -123,17 +123,25 @@ function buildComponents(
         {children}
       </em>
     ),
-    a: ({ children, href, ...props }: ElementProps<'a'>) => (
-      <a
-        className={`${onPrimary ? 'text-md-on-primary' : 'text-md-primary'} underline underline-offset-2 hover:opacity-80 transition-opacity`}
-        target="_blank"
-        rel="noopener noreferrer"
-        href={resolve(href)}
-        {...props}
-      >
-        {children}
-      </a>
-    ),
+    a: ({ children, href, ...props }: ElementProps<'a'>) =>
+      // Another port on this Mac is never somewhere a reply should send you: it
+      // is not the agent's sandbox, and the browser would send Kayak's session
+      // along. Shown, not followed.
+      isOtherLocalPort(href) ? (
+        <span className={body} title={href}>
+          {children}
+        </span>
+      ) : (
+        <a
+          className={`${onPrimary ? 'text-md-on-primary' : 'text-md-primary'} underline underline-offset-2 hover:opacity-80 transition-opacity`}
+          target="_blank"
+          rel="noopener noreferrer"
+          href={resolve(href)}
+          {...props}
+        >
+          {children}
+        </a>
+      ),
     hr: (props: ElementProps<'hr'>) => <hr className="my-5 border-md-outline-variant" {...props} />,
     blockquote: ({ children, ...props }: ElementProps<'blockquote'>) => (
       <blockquote
@@ -198,6 +206,21 @@ function buildComponents(
       );
     },
   };
+}
+
+
+/** Whether a link points at a port on this Mac other than Kayak's own. */
+export function isOtherLocalPort(href: string | undefined, here: Location = window.location): boolean {
+  if (!href) return false;
+  let url: URL;
+  try {
+    url = new URL(href, here.href);
+  } catch {
+    return false;
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) return false;
+  const local = ['127.0.0.1', 'localhost', '[::1]', '0.0.0.0'].includes(url.hostname);
+  return local && url.host !== here.host;
 }
 
 export const MarkdownContent: React.FC<MarkdownContentProps> = ({

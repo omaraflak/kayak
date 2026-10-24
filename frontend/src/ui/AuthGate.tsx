@@ -102,9 +102,10 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
             </div>
             <h1 className="text-base font-bold text-md-on-surface">Open Kayak from the Kayak app</h1>
             <p className="text-xs leading-relaxed text-md-on-surface-variant">
-              For your safety, Kayak only opens in its own window. If you started it another
-              way, enter its access key (the <code className="font-mono">KAYAK_AUTH_TOKEN</code>{' '}
-              value) to continue.
+              For your safety, this browser has to be signed in by the Kayak app. Click Kayak
+              in your Dock and it will open here, signed in. If you started Kayak another way,
+              enter its access key (the <code className="font-mono">KAYAK_AUTH_TOKEN</code>{' '}
+              value) instead.
             </p>
           </div>
 
