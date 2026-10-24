@@ -1,5 +1,5 @@
 import React from 'react';
-import { Conversation, NavigationTab } from '../../types';
+import { AgentConfig, Conversation, NavigationTab } from '../../types';
 import { KayakMark } from '../../ui/KayakMark';
 import { 
   MessageSquare, 
@@ -25,6 +25,11 @@ interface SidebarProps {
   onDeleteConversation: (conversationId: string) => void;
   currentTab: NavigationTab;
   onSelectTab: (tab: NavigationTab) => void;
+  /** For showing each conversation's agent by name. */
+  agents?: AgentConfig[];
+  /** The list could not be loaded, which is not the same as there being none. */
+  loadFailed?: boolean;
+  onRetryLoad?: () => void;
 }
 
 /** One entry in the left-hand navigation. */
@@ -58,8 +63,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDeleteConversation,
   currentTab,
   onSelectTab,
+  agents = [],
+  loadFailed = false,
+  onRetryLoad,
 }) => {
   const dialog = useDialog();
+  const agentNames = new Map(agents.map((agent) => [agent.id, agent.name]));
   // Read from the shared stream rather than passed down: the sidebar outlives the
   // chat pane, which is exactly the case the prop could not cover.
   const { runningIds } = useConversationActivity();
@@ -166,7 +175,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onSelectConversation(null); // Enter draft mode; this also opens the chat tab.
           }}
           className="p-1.5 rounded-lg text-md-primary hover:bg-md-surface-container-high transition-colors flex items-center gap-1 text-xs font-bold cursor-pointer"
-          title="New Conversation"
+          title="New conversation"
         >
           <Plus className="w-4 h-4" />
           <span>New</span>
@@ -175,9 +184,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Conversation List */}
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
-        {ownConversations.length === 0 ? (
+        {loadFailed && ownConversations.length === 0 ? (
+          <div className="text-center py-8 px-4 text-md-on-surface-variant text-xs space-y-2">
+            <p>Couldn't load your conversations.</p>
+            {onRetryLoad && (
+              <button
+                type="button"
+                onClick={onRetryLoad}
+                className="font-bold text-md-primary underline cursor-pointer"
+              >
+                Try again
+              </button>
+            )}
+          </div>
+        ) : ownConversations.length === 0 ? (
           <div className="text-center py-8 px-4 text-md-on-surface-variant text-xs">
-            No active conversations.<br />Click + to draft a message.
+            No conversations yet.<br />Click New to start one.
           </div>
         ) : (
           ownConversations.map((conversation) => {
@@ -203,8 +225,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="flex items-center truncate min-w-0 pr-2">
                   <div className="truncate">
                     <div className="truncate text-xs font-semibold text-md-on-surface">{conversation.title}</div>
-                    <div className="text-[10px] text-md-on-surface-variant flex items-center gap-1.5 mt-0.5 font-mono">
-                      <span>{conversation.agent_id}</span>
+                    <div className="text-[10px] text-md-on-surface-variant flex items-center gap-1.5 mt-0.5">
+                      <span>{agentNames.get(conversation.agent_id) ?? conversation.agent_id}</span>
                       {isRunning && (
                         <span
                           className="inline-flex items-center gap-1 text-[10px] text-md-primary font-bold"
@@ -222,8 +244,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   onClick={async (event) => {
                     event.stopPropagation();
                     const confirmed = await dialog.confirm({
-                      title: 'Delete Conversation',
-                      message: `Are you sure you want to delete "${conversation.title}"? All chat history and messages will be permanently deleted.`,
+                      title: 'Delete this conversation?',
+                      message: `"${conversation.title}" and everything in it, including its files, will be deleted. This can't be undone.`,
                       confirmText: 'Delete',
                       variant: 'danger',
                     });
@@ -232,7 +254,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     }
                   }}
                   className="opacity-0 group-hover:opacity-100 p-1 text-md-on-surface-variant hover:text-md-error hover:bg-md-surface-container-highest rounded transition-opacity cursor-pointer"
-                  title="Delete Conversation"
+                  title="Delete conversation"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>

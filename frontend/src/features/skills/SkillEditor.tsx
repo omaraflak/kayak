@@ -82,8 +82,8 @@ export const SkillEditor: React.FC<SkillEditorProps> = ({
       onSaved(saved.name);
     } catch (error) {
       dialog.alert({
-        title: 'Save Failed',
-        message: errorMessage(error) || 'Could not save this skill.',
+        title: "Couldn't save the skill",
+        message: errorMessage(error, "Couldn't save the skill. Try again."),
         variant: 'danger',
       });
     } finally {
@@ -101,8 +101,7 @@ export const SkillEditor: React.FC<SkillEditorProps> = ({
               {isNew ? 'New Skill' : `Editing ${skill?.name}`}
             </h2>
             <p className="text-[11px] text-md-on-surface-variant truncate">
-              Saved to{' '}
-              <code className="font-mono">data/skills/{name || '<name>'}/SKILL.md</code>
+              Written instructions an agent reads when the task calls for them.
             </p>
           </div>
         </div>

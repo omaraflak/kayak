@@ -73,6 +73,12 @@ async def _run_subagent_loop(
         return final_response
     except asyncio.CancelledError:
         await update_task(task_id, status=TaskStatus.STOPPED)
+        # Announced as well as recorded: the parent's task list only learns a run
+        # ended from this event, and without it a stopped sub-agent showed as
+        # running until the page was reloaded.
+        task_manager.notify_listeners(
+            parent_id, subagent_finished(task_id, child_conv_id, "stopped")
+        )
         raise
     except Exception as e:
         logger.exception("Sub-agent run failed for conversation %s", child_conv_id)

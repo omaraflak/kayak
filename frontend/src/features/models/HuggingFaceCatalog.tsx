@@ -4,6 +4,7 @@ import { api, errorMessage } from '../../api/client';
 import { estimateModelSize, judgeFit } from './modelSizing';
 import { MLX_SEARCH_PREFIX, isMlxModel } from './metalModels';
 import { canRuntimeServe, defaultQueryFor, pipelineTagFor, runtimeFor } from './runtimeSupport';
+import { startBlocker } from './serverStatus';
 import {
   Search,
   Loader2,
@@ -33,6 +34,10 @@ export interface HuggingFaceCatalogProps {
   availableMemoryGB?: number;
   /** Whether this Mac can serve MLX weights on the Apple GPU. */
   metalSupported?: boolean;
+  /** Why it cannot, when the desktop app said, for models that need the GPU. */
+  metalDetail?: string | null;
+  /** A model whose Start is being checked before it begins, to show it working. */
+  startingModelId?: string | null;
   /** Runtimes the server offers, which drive the filters and the support badge. */
   runtimes?: RuntimeDescriptor[];
   /** Which runtime's catalogue is being browsed. */
@@ -51,6 +56,8 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
   cachedModelIds,
   availableMemoryGB = 0,
   metalSupported = false,
+  metalDetail = null,
+  startingModelId = null,
   runtimes = [],
   modality = 'text',
   onSelectModality,
@@ -80,7 +87,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
     } catch (error) {
       // Reporting this as "no models found" would send the user off rewording a query
       // that was never the problem.
-      setSearchError(errorMessage(error));
+      setSearchError(errorMessage(error, "Couldn't search Hugging Face. Try again."));
       setResults([]);
     } finally {
       setIsLoading(false);
@@ -125,7 +132,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={`Search Hugging Face for ${activeRuntime?.label.toLowerCase() ?? 'text generation'} models...`}
+            placeholder={`Search Hugging Face for ${activeRuntime?.label.toLowerCase() ?? 'text generation'} models…`}
             className="w-full bg-md-surface-container-lowest border border-md-outline-variant rounded-xl pl-9 pr-4 py-2.5 text-xs text-md-on-surface placeholder:text-md-on-surface-variant/70 focus:outline-none focus:border-md-primary focus:ring-1 focus:ring-md-primary shadow-xs transition-colors"
           />
         </div>
@@ -139,7 +146,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
           ) : (
             <Search className="w-3.5 h-3.5" />
           )}
-          <span>Search Hub</span>
+          <span>Search</span>
         </button>
       </form>
 
@@ -173,7 +180,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
           className="inline-flex items-center gap-1.5 text-[11px] font-bold rounded-lg px-2.5 py-1.5 bg-md-surface-container-high text-md-on-surface hover:brightness-95 transition-all cursor-pointer"
         >
           <Zap className="w-3 h-3 text-md-primary" />
-          Show models that run on the GPU
+          Show models that run on your Mac's GPU
         </button>
       )}
 
@@ -181,7 +188,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
       {isLoading ? (
         <div className="py-16 text-center text-md-on-surface-variant text-xs flex flex-col items-center justify-center space-y-2">
           <Loader2 className="w-6 h-6 animate-spin text-md-primary" />
-          <span>Querying the Hugging Face catalogue...</span>
+          <span>Searching Hugging Face…</span>
         </div>
       ) : searchError ? (
         <div className="py-12 px-8 text-center bg-rose-50 dark:bg-rose-950/40 rounded-2xl border border-rose-300 dark:border-rose-800/80 space-y-3">
@@ -213,6 +220,10 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
             // Whether this machine's runtime can actually load it. Offering a Start
             // button that fails minutes into a download is worse than saying so now.
             const isSupported = activeRuntime ? canRuntimeServe(activeRuntime, hfModel) : true;
+            // A GPU-only model on a Mac without the GPU fails the moment it is
+            // started, so it is not offered as startable at all.
+            const blocker = startBlocker(rawModelId, { supported: metalSupported, detail: metalDetail });
+            const isChecking = startingModelId === rawModelId;
             const estimate = estimateModelSize(rawModelId);
             const runsOnGpu = metalSupported && isMlxModel(rawModelId);
             // An MLX model runs outside Docker, in the Mac's own memory, which
@@ -262,7 +273,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                     {runsOnGpu && (
                       <span
                         className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-md-primary-container text-md-on-primary-container"
-                        title="Runs on the Apple GPU instead of the CPU"
+                        title="Runs on your Mac's GPU, which is much faster"
                       >
                         <Zap className="w-2.5 h-2.5" />
                         GPU
@@ -279,8 +290,8 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                         }`}
                         title={
                           fit === 'too-large' || fit === 'tight'
-                            ? `Needs roughly ${estimate.requiredGB} GB; Docker has ${availableMemoryGB.toFixed(0)} GB.`
-                            : `${estimate.weightsGB} GB of weights to download.`
+                            ? `Needs roughly ${estimate.requiredGB} GB; Kayak can give it ${availableMemoryGB.toFixed(0)} GB.`
+                            : `About ${estimate.weightsGB} GB to download.`
                         }
                       >
                         {(fit === 'too-large' || fit === 'tight') && (
@@ -292,7 +303,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                     {isCached && (
                       <span
                         className="text-[10px] font-semibold px-1.5 py-0.5 rounded border inline-flex items-center gap-1 bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 border-emerald-300 dark:border-emerald-800/80"
-                        title="Weights are already on this Mac"
+                        title="Already downloaded to this Mac"
                       >
                         <HardDrive className="w-2.5 h-2.5" /> Downloaded
                       </span>
@@ -300,7 +311,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                     {!isSupported && (
                       <span
                         className="text-[10px] font-semibold px-1.5 py-0.5 rounded border inline-flex items-center gap-1 bg-md-surface-container-high text-md-on-surface-variant border-md-outline-variant"
-                        title={`This model needs ${hfModel.library_name ?? 'a library'}, which the ${activeRuntime?.label.toLowerCase() ?? 'local'} runtime does not ship yet.`}
+                        title="Kayak can't run this kind of model yet."
                       >
                         <AlertTriangle className="w-2.5 h-2.5" /> Not supported yet
                       </span>
@@ -317,7 +328,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                       rel="noopener noreferrer"
                       className="text-md-primary hover:underline flex items-center gap-0.5 font-semibold"
                     >
-                      <span>HF Hub</span>
+                      <span>Hugging Face</span>
                       <ExternalLink className="w-2.5 h-2.5" />
                     </a>
                   </div>
@@ -330,11 +341,13 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[10px] text-md-on-surface-variant">
                         {isCurrentlyServing
-                          ? 'Serving now'
+                          ? 'Running now'
                           : isCurrentlyLoading
-                          ? 'Coming up now'
+                          ? 'Starting now'
                           : !isSupported
-                          ? 'No backend for this one'
+                          ? "Can't run here yet"
+                          : blocker
+                          ? 'Needs a Mac with an Apple chip'
                           : isVllmLoading
                           ? 'Another model is starting'
                           : isCached
@@ -344,26 +357,30 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
 
                       {isCurrentlyServing ? (
                         <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 dark:text-emerald-200">
-                          <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5]" /> Active
+                          <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5]" /> Running
                         </span>
                       ) : isCurrentlyLoading ? (
                         <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 dark:text-amber-200">
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Starting...
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Starting…
                         </span>
                       ) : (
                         <button
                           type="button"
                           onClick={() => onDeployVLLM?.(hfModel.id)}
-                          disabled={isVllmLoading || !isSupported}
+                          disabled={isVllmLoading || !isSupported || !!blocker || !!startingModelId}
                           title={
-                            isSupported
-                              ? undefined
-                              : 'No backend in the local runtime can load this repository.'
+                            !isSupported
+                              ? "Kayak can't run this kind of model yet."
+                              : blocker ?? undefined
                           }
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-md-primary hover:opacity-90 disabled:opacity-40 text-md-on-primary text-xs font-semibold transition-opacity shadow-2xs cursor-pointer"
                         >
-                          <Play className="w-3 h-3 fill-current" />
-                          <span>Start Model</span>
+                          {isChecking ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Play className="w-3 h-3 fill-current" />
+                          )}
+                          <span>{isChecking ? 'Checking…' : 'Start'}</span>
                         </button>
                       )}
                     </div>
@@ -371,7 +388,7 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                     /* Staging options for ModelSelectorModal */
                     <div className="space-y-1.5">
                       <div className="text-[10px] font-semibold text-md-on-surface-variant uppercase tracking-wider">
-                        Choose Execution Mode:
+                        Run it:
                       </div>
 
                       <div className="grid grid-cols-2 gap-1.5">
@@ -383,21 +400,22 @@ export const HuggingFaceCatalog: React.FC<HuggingFaceCatalogProps> = ({
                               ? 'bg-md-primary text-md-on-primary border-md-primary font-bold shadow-xs'
                               : 'bg-md-surface-container-low hover:bg-md-surface-container-high border-md-outline-variant text-md-on-surface'
                           }`}
-                          title="Stage for Hugging Face Serverless Inference API"
+                          title="Use it through Hugging Face's online service"
                         >
-                          <span>🤗 HF API</span>
+                          <span>🤗 Online</span>
                           {isHfInferenceStaged && <Check className="w-3 h-3 stroke-[3]" />}
                         </button>
 
                         <button
                           type="button"
                           onClick={() => onSelectModel?.(hfModel, 'vllm')}
-                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border text-left flex items-center justify-between transition-colors cursor-pointer ${
+                          disabled={!!blocker}
+                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border text-left flex items-center justify-between transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
                             isVllmStaged
                               ? 'bg-md-primary text-md-on-primary border-md-primary font-bold shadow-xs'
                               : 'bg-md-tertiary-container hover:opacity-90 border-md-outline-variant text-md-on-tertiary-container'
                           }`}
-                          title="Serve it on this Mac"
+                          title={blocker ?? 'Run it on this Mac'}
                         >
                           <span className="flex items-center gap-1 font-semibold">
                             <Rocket className="w-3 h-3" /> This Mac

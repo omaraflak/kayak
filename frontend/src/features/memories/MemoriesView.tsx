@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, errorMessage } from '../../api/client';
+import { ApiError, api, errorMessage } from '../../api/client';
 import { useDialog } from '../../context/DialogContext';
 import { Brain, Check, Loader2, Plus, Trash2, X, XCircle } from 'lucide-react';
 
@@ -26,12 +26,19 @@ export const MemoriesView: React.FC = () => {
     try {
       setMemories(await api.listMemories());
     } catch (error) {
-      setLoadError(errorMessage(error));
+      setLoadError(errorMessage(error, "Couldn't load what Kayak remembers. Try again."));
     }
   }, []);
 
   useEffect(() => {
     load();
+    // Agents add memories while this page is open in another window or behind a
+    // chat; coming back to it shows what they learned.
+    const refresh = () => {
+      if (!document.hidden) load();
+    };
+    document.addEventListener('visibilitychange', refresh);
+    return () => document.removeEventListener('visibilitychange', refresh);
   }, [load]);
 
   /** Runs a change against the store, keeping the list and the file in step. */
@@ -41,7 +48,14 @@ export const MemoriesView: React.FC = () => {
       setMemories(await next);
       return true;
     } catch (error) {
-      dialog.alert({ title: failureTitle, message: errorMessage(error), variant: 'danger' });
+      // A memory that changed meanwhile is refused; showing the current list is
+      // what lets the edit be made again against what is really there.
+      if (error instanceof ApiError && error.status === 409) load();
+      dialog.alert({
+        title: failureTitle,
+        message: errorMessage(error, "Couldn't save the change. Try again."),
+        variant: 'danger',
+      });
       return false;
     } finally {
       setIsSaving(false);
@@ -60,16 +74,12 @@ export const MemoriesView: React.FC = () => {
     const text = editingText.trim();
     if (!text) return;
 
-    const next = memories.map((memory, i) => (i === index ? text : memory));
-    if (await save(api.replaceMemories(next), 'Not saved')) setEditingIndex(null);
+    if (await save(api.editMemory(memories[index], text), 'Not saved')) setEditingIndex(null);
   };
 
   const handleForget = async (index: number) => {
     if (!memories || isSaving) return;
-    await save(
-      api.replaceMemories(memories.filter((_, i) => i !== index)),
-      'Not removed'
-    );
+    await save(api.editMemory(memories[index], ''), 'Not removed');
   };
 
   return (
@@ -208,9 +218,8 @@ export const MemoriesView: React.FC = () => {
         )}
 
         <p className="text-[11px] text-md-on-surface-variant leading-relaxed">
-          Stored as plain markdown in <code className="font-mono">data/memories.md</code>,
-          so you can also edit the file directly. Agents add to this themselves when you
-          correct them, using their <code className="font-mono">remember</code> tool.
+          Every agent reads this list. Agents add to it on their own when you correct
+          them or tell them something worth keeping.
         </p>
       </div>
     </div>

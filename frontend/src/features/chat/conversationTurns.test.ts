@@ -113,6 +113,47 @@ describe('groupMessagesIntoTurns', () => {
     expect(turns[1].toolCalls[0].isError).toBe(true);
   });
 
+  it('trusts the stored flag over the wording of a result', () => {
+    counter = 0;
+    const turns = groupMessagesIntoTurns([
+      message({ role: 'user', content: 'go' }),
+      message({ role: 'assistant', tool_calls: [toolCall('call_1'), toolCall('call_2')] }),
+      message({ role: 'tool', content: 'command not found', tool_call_id: 'call_1', is_error: true }),
+      // Saved before the flag existed; judged as loosely as the server did live.
+      message({ role: 'tool', content: 'Error (1): exit status 1', tool_call_id: 'call_2' }),
+    ]);
+
+    expect(turns[1].toolCalls.map((call) => call.isError)).toEqual([true, true]);
+  });
+
+  it('shows why a turn failed beneath what it managed to say', () => {
+    counter = 0;
+    const turns = groupMessagesIntoTurns([
+      message({ role: 'user', content: 'go' }),
+      message({ role: 'assistant', content: 'Half an answer' }),
+      message({ role: 'assistant', content: "OpenAI didn't accept your key.", is_error: true }),
+    ]);
+
+    expect(turns).toHaveLength(2);
+    expect(turns[1].content).toBe('Half an answer');
+    expect(turns[1].error).toBe("OpenAI didn't accept your key.");
+    // Retry from this turn removes the explanation along with the partial answer.
+    expect(turns[1].lastMessageId).toBe('m3');
+  });
+
+  it('makes a turn of its own for a failure before any answer', () => {
+    counter = 0;
+    const turns = groupMessagesIntoTurns([
+      message({ role: 'user', content: 'go' }),
+      message({ role: 'assistant', content: "Docker Desktop isn't running.", is_error: true }),
+    ]);
+
+    expect(turns[1].role).toBe('assistant');
+    expect(turns[1].id).toBe('m2');
+    expect(turns[1].content).toBeUndefined();
+    expect(turns[1].error).toBe("Docker Desktop isn't running.");
+  });
+
   it('starts a new turn at each prompt', () => {
     counter = 0;
     const turns = groupMessagesIntoTurns([

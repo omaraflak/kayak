@@ -3,6 +3,7 @@ import { AudioItem, AudioJob, Modality, Voice } from '../../types';
 import { api, errorMessage } from '../../api/client';
 import { isLoadingState, useVLLMStatus } from '../../context/VLLMStatusContext';
 import { formatBytes } from '../../utils/format';
+import { shortModelName } from '../models/serverStatus';
 import { ProgressRing } from '../../ui/ProgressRing';
 import {
   AudioLines,
@@ -61,7 +62,7 @@ export const AudioView: React.FC<AudioViewProps> = ({
     try {
       setItems(await api.listAudioItems());
     } catch (err) {
-      setError(errorMessage(err));
+      setError(errorMessage(err, "Couldn't load your clips and transcripts. Try again."));
     }
   }, []);
 
@@ -105,7 +106,7 @@ export const AudioView: React.FC<AudioViewProps> = ({
     try {
       await api.cancelAudioJob(job.id);
     } catch (err) {
-      setError(errorMessage(err));
+      setError(errorMessage(err, "Couldn't remove this from the list. Try again."));
     }
     refreshJobs();
   };
@@ -117,7 +118,7 @@ export const AudioView: React.FC<AudioViewProps> = ({
     try {
       await api.deleteAudioItem(item.id);
     } catch (err) {
-      setError(errorMessage(err));
+      setError(errorMessage(err, "Couldn't delete this. Try again."));
       refreshItems();
     }
   };
@@ -225,10 +226,25 @@ const ServerState: React.FC<{
   what: string;
   onOpenModels: (modality: Modality) => void;
 }> = ({ modality, what, onOpenModels }) => {
-  const { statuses } = useVLLMStatus();
+  const { statuses, isStale } = useVLLMStatus();
   const status = statuses[modality];
   const isReady = status?.state === 'ready';
   const isBusy = isLoadingState(status?.state);
+  const isError = status?.state === 'error';
+  const name = shortModelName(status?.model_id);
+
+  // Kayak itself is unreachable: what was last heard is not claimed as true.
+  if (isStale && (isReady || isBusy)) {
+    return (
+      <div className="flex items-center gap-2 text-[11px] text-md-on-surface-variant opacity-70">
+        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-md-surface-container-high text-md-on-surface-variant border-md-outline-variant">
+          <Loader2 className="w-2.5 h-2.5 animate-spin" />
+          CHECKING…
+        </span>
+        <span title={status?.model_id ?? undefined}>{name}</span>
+      </div>
+    );
+  }
 
   if (isReady) {
     return (
@@ -236,7 +252,7 @@ const ServerState: React.FC<{
         <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 border-emerald-300 dark:border-emerald-800/80">
           ONLINE
         </span>
-        <span className="font-mono">{status?.model_id}</span>
+        <span title={status?.model_id ?? undefined}>{name}</span>
       </div>
     );
   }
@@ -248,7 +264,27 @@ const ServerState: React.FC<{
           <Loader2 className="w-2.5 h-2.5 animate-spin" />
           STARTING
         </span>
-        <span className="font-mono">{status?.model_id}</span>
+        <span title={status?.model_id ?? undefined}>{name}</span>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="flex items-center gap-2 text-[11px] text-rose-800 dark:text-rose-200 flex-wrap">
+        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+        <span>
+          {status?.crashed
+            ? `The ${what} model stopped unexpectedly. Open Local Models to see why.`
+            : `The ${what} model couldn't start. Open Local Models to see why.`}
+        </span>
+        <button
+          type="button"
+          onClick={() => onOpenModels(modality)}
+          className="text-md-primary font-bold hover:underline cursor-pointer"
+        >
+          Open Local Models
+        </button>
       </div>
     );
   }
@@ -332,7 +368,7 @@ const SynthesizePanel: React.FC<{
       setText('');
       onQueued();
     } catch (err) {
-      onError(errorMessage(err));
+      onError(errorMessage(err, "Couldn't send this text to be read aloud. Try again."));
     } finally {
       setIsQueueing(false);
     }
@@ -547,7 +583,7 @@ const PendingRow: React.FC<{
               <ProgressRing
                 fraction={job.chunks_total > 0 ? job.chunks_done / job.chunks_total : 0}
               />
-              {job.chunks_total > 0 ? `${job.chunks_done}/${job.chunks_total}` : '0/0'}
+              {job.chunks_total > 0 ? `${job.chunks_done}/${job.chunks_total}` : 'Working…'}
             </span>
           ) : (
             <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-md-surface-container-high text-md-on-surface-variant border-md-outline-variant">
@@ -569,9 +605,12 @@ const PendingRow: React.FC<{
         </div>
       </div>
 
-      {isFailed && job.error && (
+      {isFailed && (
         <p className="text-[10px] text-rose-900 dark:text-rose-100 leading-relaxed">
-          {job.error}
+          {job.error ||
+            (job.kind === 'transcription'
+              ? "Couldn't transcribe this recording. Try again."
+              : "Couldn't finish this clip. Try again.")}
         </p>
       )}
     </div>
@@ -608,7 +647,7 @@ const ClipRow: React.FC<{ clip: AudioItem; onDelete: (item: AudioItem) => void }
     <audio controls preload="none" src={api.audioFileUrl(clip.id)} className="w-full h-8" />
 
     <div className="flex items-center gap-2 text-[10px] text-md-on-surface-variant flex-wrap">
-      <span className="font-mono">{clip.model_id}</span>
+      <span title={clip.model_id}>{shortModelName(clip.model_id)}</span>
       {clip.voice && <Tag>{clip.voice}</Tag>}
       {clip.duration_seconds ? <Tag>{formatDuration(clip.duration_seconds)}</Tag> : null}
       <Tag>{formatBytes(clip.size_bytes)}</Tag>
@@ -656,7 +695,7 @@ const TranscribePanel: React.FC<{
       if (inputRef.current) inputRef.current.value = '';
       onQueued();
     } catch (err) {
-      onError(errorMessage(err));
+      onError(errorMessage(err, "Couldn't send these recordings to be transcribed. Try again."));
     } finally {
       setIsQueueing(false);
     }
@@ -838,7 +877,7 @@ const TranscriptRow: React.FC<{
       <div className="flex items-center gap-2 text-[10px] text-md-on-surface-variant flex-wrap">
         {item.source_filename && <Tag>{item.source_filename}</Tag>}
         {item.language && <Tag>{item.language}</Tag>}
-        <span className="font-mono">{item.model_id}</span>
+        <span title={item.model_id}>{shortModelName(item.model_id)}</span>
         <span className="ml-auto">{formatWhen(item.created_at)}</span>
       </div>
     </div>

@@ -36,6 +36,9 @@ TTL_SECONDS = 24 * 60 * 60
 #: How often expired entries are swept off disk.
 SWEEP_INTERVAL_SECONDS = 60 * 60
 
+#: Said when reading a message aloud fails for a reason nothing more specific names.
+FAILED = "Couldn't read this aloud. Try again."
+
 
 @dataclass
 class SpeechEntry:
@@ -75,17 +78,46 @@ class SpeechCache:
         #: Text waiting to be spoken, by message. Held apart from the entry so the
         #: entry stays a description of state rather than a copy of the message.
         self._texts: Dict[str, tuple] = {}
+        #: The message being spoken right now, so a worker that dies mid-way does
+        #: not leave it "pending" forever.
+        self._current: Optional[str] = None
+        self._stopping = False
 
     # --- lifecycle -------------------------------------------------------
 
     def start(self) -> None:
+        self._stopping = False
         if not self._worker or self._worker.done():
             self._worker = asyncio.create_task(self._run())
+            self._worker.add_done_callback(self._on_worker_done)
         if not self._sweeper or self._sweeper.done():
             self._sweeper = asyncio.create_task(self._sweep_forever())
         self._load_from_disk()
 
+    def _on_worker_done(self, worker: "asyncio.Task") -> None:
+        """Restarts a worker that ended while Kayak was still running.
+
+        Without this, one uncaught failure ended read-aloud for the rest of the
+        session: every later request stayed "Preparing…" with nothing to serve it.
+        """
+        if self._stopping:
+            return
+        logger.error(
+            "The read-aloud worker stopped; restarting it",
+            exc_info=None if worker.cancelled() else worker.exception(),
+        )
+        entry = self._entries.get(self._current or "")
+        if entry is not None and entry.state == "pending":
+            self._mark_failed(entry, FAILED)
+        self._current = None
+        try:
+            self._worker = worker.get_loop().create_task(self._run())
+        except RuntimeError:
+            return
+        self._worker.add_done_callback(self._on_worker_done)
+
     async def shutdown(self) -> None:
+        self._stopping = True
         for task in (self._worker, self._sweeper):
             if task and not task.done():
                 task.cancel()
@@ -128,6 +160,20 @@ class SpeechCache:
             json.dumps(entry.__dict__), encoding="utf-8"
         )
 
+    def _mark_failed(self, entry: SpeechEntry, message: str) -> None:
+        """Records a failure, keeping it in memory even if it cannot be saved.
+
+        The record on disk only matters after a restart; the page asking right now
+        reads the entry in memory. A full disk -- the likeliest reason a write fails
+        -- must not turn a reported failure into a worker that dies.
+        """
+        entry.state = "failed"
+        entry.error = message
+        try:
+            self._persist(entry)
+        except OSError:
+            logger.warning("Could not save the failure for message %s", entry.message_id, exc_info=True)
+
     def _forget(self, message_id: str) -> None:
         self._entries.pop(message_id, None)
         self._texts.pop(message_id, None)
@@ -159,7 +205,7 @@ class SpeechCache:
         entry = self.get(message_id)
         path = self._audio_path(message_id)
         if not entry or entry.state != "ready" or not path.is_file():
-            raise FileNotFoundError(f"No speech stored for message '{message_id}'.")
+            raise FileNotFoundError(f"No speech stored for message {message_id!r}.")
         return path
 
     def request(self, message_id: str, text: str, voice: Optional[str]) -> SpeechEntry:
@@ -197,15 +243,18 @@ class SpeechCache:
             entry = self._entries.get(message_id)
             if not entry or entry.state != "pending":
                 continue
+            self._current = message_id
             try:
                 await self._synthesise(entry)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
                 logger.exception("Speech for message %s failed", message_id)
-                entry.state = "failed"
-                entry.error = str(error)
-                self._persist(entry)
+                self._mark_failed(
+                    entry, server.describe_failure(error, Modality.SPEECH, FAILED)
+                )
+            finally:
+                self._current = None
 
     async def _synthesise(self, entry: SpeechEntry) -> None:
         text, voice = self._texts.get(entry.message_id, ("", None))
@@ -218,17 +267,20 @@ class SpeechCache:
         )
 
         if response.status_code != 200:
-            entry.state = "failed"
-            entry.error = server.upstream_detail(response, "Synthesis failed")
-            self._persist(entry)
+            self._mark_failed(entry, server.upstream_detail(response, server.SYNTHESIS_FAILED))
             return
 
         self._audio_path(entry.message_id).write_bytes(response.content)
         entry.state = "ready"
         if entry.chunks_total:
             entry.chunks_done = entry.chunks_total
-        self._persist(entry)
         self._texts.pop(entry.message_id, None)
+        try:
+            self._persist(entry)
+        except OSError:
+            # The audio is saved and plays now; only remembering it across a
+            # restart is lost, which is no reason to report the work as failed.
+            logger.warning("Could not save the record for message %s", entry.message_id, exc_info=True)
 
     async def _sweep_forever(self) -> None:
         while True:

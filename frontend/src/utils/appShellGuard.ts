@@ -48,7 +48,8 @@ function runningEntryScript(): string | null {
   return script?.src ?? null;
 }
 
-async function checkForNewShell(): Promise<void> {
+/** Reloads if the server is now offering a different build of the app. */
+export async function checkForNewShell(): Promise<void> {
   let served: string | null = null;
   try {
     const response = await fetch('/', { cache: 'no-store' });

@@ -8,8 +8,9 @@ from fastapi.responses import StreamingResponse
 
 from backend.app import sse
 from backend.app.config import settings
-from backend.app.inference import metal, registry
+from backend.app.inference import failures, metal, registry
 from backend.app.inference.cache import CachePathError
+from backend.app.inference.manager import metal_unavailable_message
 from backend.app.inference.models import (
     DeployRequest,
     DeploymentProgress,
@@ -33,7 +34,7 @@ def _manager(modality: Modality):
     except KeyError:
         raise HTTPException(
             status_code=404,
-            detail=f"No local runtime serves '{modality.value}' models.",
+            detail="Kayak can't run this kind of model on this Mac.",
         )
 
 
@@ -50,40 +51,115 @@ async def list_runtimes() -> List[RuntimeDescriptor]:
 
 @router.get("/classify", response_model=ModelClassification)
 async def classify_model(repo_id: str = Query(..., min_length=1)) -> ModelClassification:
-    """Which local runtime should serve a repository.
+    """Which local runtime should serve a repository, and whether it can be fetched.
 
     Asked before starting a model whose task is not already known -- a cached model
     is only a name and a size on disk. Answered from the Hub rather than guessed from
     the name: starting a cached Kokoro used to go to vLLM, which spent minutes on a
     model it could never load.
+
+    It also answers the question a start would otherwise answer the slow way: a model
+    whose makers require accepting their terms, or one that does not exist, used to
+    fail only after the engine and part of the weights had downloaded. Such a model
+    comes back with ``message`` set, saying what to do instead.
     """
     url = f"https://huggingface.co/api/models/{repo_id}"
+    token = settings.HUGGINGFACE_API_KEY or ""
     headers: Dict[str, str] = {}
-    if settings.HUGGINGFACE_API_KEY:
-        headers["Authorization"] = f"Bearer {settings.HUGGINGFACE_API_KEY}"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
 
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             response = await client.get(url, headers=headers)
+            if response.status_code == 200:
+                try:
+                    payload = response.json()
+                except ValueError:
+                    return ModelClassification(repo_id=repo_id, unknown=True)
+                if not isinstance(payload, dict):
+                    return ModelClassification(repo_id=repo_id, unknown=True)
+                result = registry.classify(
+                    repo_id,
+                    pipeline_tag=payload.get("pipeline_tag"),
+                    library_name=payload.get("library_name"),
+                    tags=[tag for tag in (payload.get("tags") or []) if isinstance(tag, str)],
+                )
+                if result.runtime_key == "vllm" and only_gguf_weights(payload.get("siblings")):
+                    result.supported = False
+                    result.message = failures.WRONG_FORMAT
+                    return result
+                if payload.get("gated"):
+                    result.gated = True
+                    await _check_gated_access(client, result, token)
+                return result
     except httpx.HTTPError:
         # Unreachable is not the same as unsupported. The caller falls back rather
         # than refusing to start a model because the Hub was down.
         return ModelClassification(repo_id=repo_id, unknown=True)
 
-    if response.status_code != 200:
-        return ModelClassification(repo_id=repo_id, unknown=True)
+    if response.status_code == 404:
+        return ModelClassification(
+            repo_id=repo_id, not_found=True, message=failures.NOT_FOUND
+        )
+    if response.status_code == 401:
+        # With a token, a 401 is the token being refused. Without one, Hugging Face
+        # answers 401 alike for a private repository and one that does not exist,
+        # and the "not found" sentence covers both.
+        if token:
+            return ModelClassification(
+                repo_id=repo_id, needs_token=True, message=failures.TOKEN_REJECTED
+            )
+        return ModelClassification(
+            repo_id=repo_id, not_found=True, message=failures.NOT_FOUND
+        )
+    return ModelClassification(repo_id=repo_id, unknown=True)
 
+
+def only_gguf_weights(siblings: object) -> bool:
+    """Whether a repository holds GGUF files and nothing the text engine can load.
+
+    The Hub tags such a repository as an ordinary text-generation model, so it was
+    offered a Start button that downloaded the engine and started it only to fail
+    on the missing config.json. Its file list says so before anything downloads.
+    """
+    if not isinstance(siblings, list):
+        return False
+    names = [
+        entry.get("rfilename")
+        for entry in siblings
+        if isinstance(entry, dict) and isinstance(entry.get("rfilename"), str)
+    ]
+    has_gguf = any(name.lower().endswith(".gguf") for name in names)
+    return has_gguf and "config.json" not in names
+
+
+async def _check_gated_access(
+    client: httpx.AsyncClient, result: ModelClassification, token: str
+) -> None:
+    """Fills in whether this Mac may download a gated model, and what to say if not.
+
+    The model's own page cannot say whether this particular account has accepted
+    the terms; asking for one of its files can. Anything inconclusive is left alone:
+    a start that might work is not refused on a guess.
+    """
+    if not token:
+        result.needs_token = True
+        result.message = failures.GATED_NEEDS_TOKEN
+        return
     try:
-        payload = response.json()
-    except ValueError:
-        return ModelClassification(repo_id=repo_id, unknown=True)
-
-    return registry.classify(
-        repo_id,
-        pipeline_tag=payload.get("pipeline_tag"),
-        library_name=payload.get("library_name"),
-        tags=[tag for tag in (payload.get("tags") or []) if isinstance(tag, str)],
-    )
+        probe = await client.head(
+            f"https://huggingface.co/{result.repo_id}/resolve/main/config.json",
+            headers={"Authorization": f"Bearer {token}"},
+            follow_redirects=False,
+        )
+    except httpx.HTTPError:
+        return
+    if probe.status_code == 401:
+        result.needs_token = True
+        result.message = failures.TOKEN_REJECTED
+    elif probe.status_code == 403:
+        result.message = failures.GATED_NO_ACCESS
 
 
 @router.get("/status", response_model=Dict[str, DeploymentProgress])
@@ -130,17 +206,26 @@ async def delete_cached_model(repo_id: str) -> Dict[str, object]:
     if registry.is_serving(repo_id):
         raise HTTPException(
             status_code=409,
-            detail="This model is currently being served. Stop the server before deleting its weights.",
+            detail="This model is running. Stop it before deleting it.",
         )
 
     try:
         freed = await registry.delete_cached_model(repo_id)
     except CachePathError as error:
-        raise HTTPException(status_code=400, detail=str(error))
-    except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error))
-    except OSError as error:
-        raise HTTPException(status_code=500, detail=f"Could not delete weights: {error}")
+        logger.warning("Refused to delete %r from the model cache: %s", repo_id, error)
+        raise HTTPException(
+            status_code=400, detail="Kayak couldn't find this model's files on this Mac."
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="This model's files are already gone from this Mac.",
+        )
+    except OSError:
+        logger.exception("Could not delete %s from the model cache", repo_id)
+        raise HTTPException(
+            status_code=500, detail="Kayak couldn't delete this model's files. Try again."
+        )
 
     return {"status": "deleted", "repo_id": repo_id, "freed_bytes": freed}
 
@@ -166,17 +251,14 @@ async def deploy_model(modality: Modality, request: DeployRequest) -> Deployment
         Initial deployment state. The caller watches the event stream for the rest.
     """
     if not request.model_id.strip():
-        raise HTTPException(status_code=400, detail="Model ID is required.")
+        raise HTTPException(status_code=400, detail="Choose a model to start.")
 
     manager = _manager(modality)
 
     if manager.runtime.supports_metal and metal.is_mlx_model(request.model_id):
         status = metal.read_status()
         if not status.supported:
-            raise HTTPException(
-                status_code=400,
-                detail="Metal inference needs the Kayak launcher running on an Apple Silicon Mac.",
-            )
+            raise HTTPException(status_code=400, detail=metal_unavailable_message(status))
 
     return await manager.deploy_model(request)
 

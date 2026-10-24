@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AgentConfig, Skill, ToolDefinition } from '../../types';
-import { api } from '../../api/client';
+import { api, errorMessage } from '../../api/client';
 import { AgentEditor } from './AgentEditor';
 import { getProviderIcon } from './agentDisplay';
 import {
@@ -88,6 +88,12 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
     setIsReloading(true);
     try {
       await Promise.all([loadMetadata(), onRefresh()]);
+    } catch (error) {
+      dialog.alert({
+        title: "Couldn't refresh the agents",
+        message: errorMessage(error, "Couldn't refresh the agents. Try again."),
+        variant: 'danger',
+      });
     } finally {
       setIsReloading(false);
     }
@@ -95,21 +101,29 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
 
   const handleDelete = async (agent: AgentConfig) => {
     const confirmed = await dialog.confirm({
-      title: 'Delete Agent Profile',
-      message: `Delete the "${agent.id}" profile? Conversations already using it will fall back to the general agent.`,
+      title: 'Delete this agent?',
+      message: `Delete "${agent.name}"? Conversations that use it will switch to the general agent. This can't be undone.`,
       confirmText: 'Delete',
       variant: 'danger',
     });
     if (!confirmed) return;
 
-    await api.deleteAgent(agent.id);
-    // Pick the next selection from a freshly fetched list; the `agents` prop is a
-    // snapshot and still contains the agent we just deleted.
-    const remaining = await api.listAgents();
-    const next = remaining[0] ?? null;
-    setSelectedAgent(next);
-    setIsEditing(false);
-    onSelectId?.(next?.id ?? null);
+    try {
+      await api.deleteAgent(agent.id);
+      // Pick the next selection from a freshly fetched list; the `agents` prop is a
+      // snapshot and still contains the agent we just deleted.
+      const remaining = await api.listAgents();
+      const next = remaining[0] ?? null;
+      setSelectedAgent(next);
+      setIsEditing(false);
+      onSelectId?.(next?.id ?? null);
+    } catch (error) {
+      dialog.alert({
+        title: "Couldn't delete the agent",
+        message: errorMessage(error, "Couldn't delete the agent. Try again."),
+        variant: 'danger',
+      });
+    }
     onRefresh();
   };
 
@@ -179,7 +193,7 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
               onClick={handleReload}
               disabled={isReloading}
               className="p-1.5 rounded-lg text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors cursor-pointer"
-              title="Reload agents from disk"
+              title="Refresh"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isReloading ? 'animate-spin' : ''}`} />
             </button>
@@ -327,8 +341,8 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
                     {selectedAgent.model}
                   </div>
                   <div className="text-[11px] text-md-on-surface-variant mt-0.5">
-                    Temperature {selectedAgent.temperature.toFixed(2)} ·{' '}
-                    {selectedAgent.model.startsWith('vllm/') ? 'Local server' : 'Cloud provider'}
+                    Creativity {selectedAgent.temperature.toFixed(2)} ·{' '}
+                    {selectedAgent.model.startsWith('vllm/') ? 'Runs on this Mac' : 'Online service'}
                   </div>
                 </div>
               </div>
@@ -336,10 +350,10 @@ export const AgentsView: React.FC<AgentsViewProps> = ({
               {/* System prompt */}
               <div className="space-y-2">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-md-on-surface">
-                  System Prompt
+                  Instructions
                 </h3>
                 <pre className="bg-md-surface-container-lowest p-4 rounded-xl border border-md-outline-variant text-[12px] text-md-on-surface font-mono whitespace-pre-wrap leading-relaxed overflow-x-auto">
-                  {selectedAgent.system_prompt || '(no system prompt set)'}
+                  {selectedAgent.system_prompt || '(no instructions yet)'}
                 </pre>
               </div>
 

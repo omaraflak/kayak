@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import yaml
 from backend.app.config import settings
+from backend.app.user_errors import UserFacingError
 from backend.app.fs_cache import DirectorySignature, directory_signature
 from backend.app.identifiers import clean_identifier
 from backend.app.models import AgentConfig
@@ -83,6 +84,9 @@ class AgentManager:
 
     def save_agent(self, agent: AgentConfig):
         clean_id = clean_identifier(agent.id)
+        if not clean_id:
+            # An empty id was written to a file named ".yaml".
+            raise UserFacingError("Give the agent a name first.")
         agent.id = clean_id
         file_path = settings.AGENTS_DIR / f"{clean_id}.yaml"
 

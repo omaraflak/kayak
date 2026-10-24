@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
+import logging
+import sqlite3
 from typing import Any, Dict, List, Optional
 import uuid
 import aiosqlite
@@ -14,6 +16,11 @@ from backend.app.models import (
     TaskStatus,
     TaskType,
 )
+
+logger = logging.getLogger(__name__)
+
+#: Appended to a background task that was still running when Kayak stopped.
+TASK_INTERRUPTED_NOTE = "\n[Stopped because Kayak was closed.]\n"
 
 
 def _utc_now_iso() -> str:
@@ -40,7 +47,39 @@ async def get_db_connection():
 
 
 async def init_db() -> None:
-    """Initializes the SQLite schema with tables and indices."""
+    """Initializes the SQLite schema, setting aside a database that cannot be read.
+
+    A damaged database file used to stop the server from starting at all, which left
+    the user with a window that never loaded and no way to reach Report a problem.
+    The file is renamed rather than deleted, so nothing is lost for good, and Kayak
+    starts with an empty history instead of not starting.
+    """
+    try:
+        await _create_schema()
+    except sqlite3.DatabaseError as error:
+        # Only a file SQLite cannot read as a database. An OperationalError -- the
+        # disk full, the file locked by a server still shutting down -- says nothing
+        # about the data, and setting a healthy history aside over it would be the
+        # worst outcome there is.
+        if isinstance(error, sqlite3.OperationalError):
+            raise
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        logger.error(
+            "The database at %s could not be read (%s); moving it aside as"
+            " *.damaged-%s and starting a new one.",
+            settings.DB_PATH,
+            error,
+            stamp,
+        )
+        for suffix in ("", "-wal", "-shm"):
+            damaged = settings.DB_PATH.with_name(settings.DB_PATH.name + suffix)
+            if damaged.exists():
+                damaged.rename(damaged.with_name(f"{damaged.name}.damaged-{stamp}"))
+        await _create_schema()
+
+
+async def _create_schema() -> None:
+    """Creates every table and index that does not exist yet."""
     async with get_db_connection() as db:
         await db.execute("""
         CREATE TABLE IF NOT EXISTS conversations (
@@ -70,10 +109,14 @@ async def init_db() -> None:
             tool_calls TEXT,
             tool_call_id TEXT,
             name TEXT,
+            -- A tool result that reports a failure, or an agent turn that failed
+            -- and was recorded so the user can see why. See add_message.
+            is_error INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
         """)
+        await _add_missing_column(db, "messages", "is_error", "INTEGER NOT NULL DEFAULT 0")
 
         await db.execute("""
         CREATE TABLE IF NOT EXISTS tasks (
@@ -111,12 +154,26 @@ async def init_db() -> None:
         await db.commit()
 
 
+async def _add_missing_column(db, table: str, column: str, definition: str) -> None:
+    """Adds a column to a table created by an older Kayak.
+
+    ``CREATE TABLE IF NOT EXISTS`` leaves an existing table exactly as it was, so a
+    column introduced later has to be added to databases that predate it.
+    """
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    if any(row["name"] == column for row in await cursor.fetchall()):
+        return
+    await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 async def reconcile_interrupted_state() -> None:
     """Clears state left behind by a server that stopped mid-turn.
 
     A conversation whose turn was interrupted stays marked RUNNING forever, which
     pins the composer into its "generating" state with no way out. The same applies
-    to background tasks whose owning process no longer exists.
+    to background tasks whose owning process no longer exists: they are reported as
+    stopped, with a note saying why, rather than as having failed -- nothing went
+    wrong with the command itself.
     """
     async with get_db_connection() as db:
         await db.execute(
@@ -124,8 +181,14 @@ async def reconcile_interrupted_state() -> None:
             (ConversationStatus.ACTIVE.value, ConversationStatus.RUNNING.value),
         )
         await db.execute(
-            "UPDATE tasks SET status = ?, updated_at = ? WHERE status = ?",
-            (TaskStatus.FAILED.value, _utc_now_iso(), TaskStatus.RUNNING.value),
+            "UPDATE tasks SET status = ?, stdout = stdout || ?, updated_at = ?"
+            " WHERE status = ?",
+            (
+                TaskStatus.STOPPED.value,
+                TASK_INTERRUPTED_NOTE,
+                _utc_now_iso(),
+                TaskStatus.RUNNING.value,
+            ),
         )
         await db.commit()
 
@@ -185,6 +248,7 @@ def _row_to_message(row: aiosqlite.Row) -> Message:
         tool_calls=tool_calls,
         tool_call_id=row["tool_call_id"],
         name=row["name"],
+        is_error=bool(row["is_error"]),
         created_at=row["created_at"],
     )
 
@@ -347,6 +411,7 @@ async def add_message(
     tool_calls: Optional[List[Dict[str, Any]]] = None,
     tool_call_id: Optional[str] = None,
     name: Optional[str] = None,
+    is_error: bool = False,
 ) -> Message:
     """Inserts a new message into the conversation history.
 
@@ -358,6 +423,9 @@ async def add_message(
         tool_calls: Optional list of structured tool calls requested by assistant.
         tool_call_id: Optional ID of the tool call this message responds to.
         name: Optional function or tool name.
+        is_error: On a tool result, that the step failed. On an assistant message,
+            that it explains why a turn failed rather than being anything the
+            model said -- it is shown to the user and never sent to the model.
 
     Returns:
         Message: The created Message record.
@@ -370,8 +438,8 @@ async def add_message(
     async with get_db_connection() as db:
         await db.execute(
             """
-        INSERT INTO messages (id, conversation_id, role, content, thinking, tool_calls, tool_call_id, name, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO messages (id, conversation_id, role, content, thinking, tool_calls, tool_call_id, name, is_error, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 mid,
@@ -382,6 +450,7 @@ async def add_message(
                 tool_calls_json,
                 tool_call_id,
                 name,
+                int(is_error),
                 now,
             ),
         )
@@ -400,6 +469,7 @@ async def add_message(
         tool_calls=tool_calls,
         tool_call_id=tool_call_id,
         name=name,
+        is_error=is_error,
         created_at=now,
     )
 
@@ -421,6 +491,18 @@ async def get_messages(conversation_id: str) -> List[Message]:
         )
         rows = await cursor.fetchall()
         return [_row_to_message(row) for row in rows]
+
+
+async def get_last_message_id(conversation_id: str) -> Optional[str]:
+    """The id of the newest message in a conversation, if it has any."""
+    async with get_db_connection() as db:
+        cursor = await db.execute(
+            "SELECT id FROM messages WHERE conversation_id = ? ORDER BY"
+            " created_at DESC, rowid DESC LIMIT 1",
+            (conversation_id,),
+        )
+        row = await cursor.fetchone()
+        return row["id"] if row else None
 
 
 async def _message_rowid(db, conversation_id: str, message_id: str) -> Optional[int]:
@@ -517,8 +599,8 @@ async def copy_messages_through(
         for row in rows:
             await db.execute(
                 """
-            INSERT INTO messages (id, conversation_id, role, content, thinking, tool_calls, tool_call_id, name, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (id, conversation_id, role, content, thinking, tool_calls, tool_call_id, name, is_error, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     str(uuid.uuid4()),
@@ -529,6 +611,7 @@ async def copy_messages_through(
                     row["tool_calls"],
                     row["tool_call_id"],
                     row["name"],
+                    row["is_error"],
                     row["created_at"],
                 ),
             )

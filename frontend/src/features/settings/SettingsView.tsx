@@ -57,7 +57,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => 
       setDraft(draftFromSettings(data));
       setLoadError(null);
     } catch (error) {
-      setLoadError(errorMessage(error));
+      setLoadError(errorMessage(error, "Couldn't load the settings. Try again."));
     }
   }, []);
 
@@ -114,7 +114,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => 
     } catch (error) {
       dialog.alert({
         title: 'Settings not saved',
-        message: `${errorMessage(error)} Your changes are still here — you can try again.`,
+        message: `${errorMessage(error, "Couldn't save the settings.")} Your changes are still here, so you can try again.`,
         variant: 'danger',
       });
     } finally {
@@ -133,13 +133,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => 
     {
       mode: 'dark',
       label: 'Dark',
-      description: 'Low-light theme, easier on OLED displays.',
+      description: 'Easier on the eyes in low light.',
       icon: <Moon className="w-4 h-4 text-md-primary" />,
     },
     {
       mode: 'system',
       label: 'System',
-      description: 'Follows your operating system appearance.',
+      description: "Follows your Mac's light or dark setting.",
       icon: <Monitor className="w-4 h-4 text-md-on-surface-variant" />,
     },
   ];
@@ -186,7 +186,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => 
               )}
             </h1>
             <p className="text-xs text-md-on-surface-variant">
-              Appearance, model provider credentials, and what each agent sandbox may use.
+              Appearance, keys for online AI services, and how much of your Mac agents may use.
             </p>
           </div>
         </div>
@@ -217,7 +217,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => 
         <Section
           icon={<Palette className="w-4 h-4 text-md-primary" />}
           title="Appearance"
-          subtitle="Stored in this browser and applied immediately — the Save button above does not apply to it."
+          subtitle="Applied right away. The Save button isn't needed for this."
         >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {themeOptions.map((option) => {
@@ -252,8 +252,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => 
         {/* ----------------------------------------------------------- Credentials */}
         <Section
           icon={<Key className="w-4 h-4 text-md-primary" />}
-          title="Model provider credentials"
-          subtitle="Stored on this Mac, never sent back to the browser."
+          title="AI service keys"
+          subtitle="Needed only for online models, like Gemini or ChatGPT. Keys stay on this Mac."
         >
           <div className="space-y-4">
             {settings.providers.map((provider) => (
@@ -271,7 +271,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onDirtyChange }) => 
         <Section
           icon={<Container className="w-4 h-4 text-md-primary" />}
           title="Agent sandboxes"
-          subtitle="How much of Docker Desktop each conversation's container may use. A change reaches a conversation the next time it runs."
+          subtitle="How much of this Mac each conversation's sandbox may use. A change applies the next time an agent works in a conversation."
           action={
             // Always laid out, and only shown when there is something to reset:
             // appearing on the first slider move pushed the sliders down mid-drag.
@@ -339,8 +339,8 @@ const SandboxControls: React.FC<{
   if (!sandbox.total_memory_gb || !sandbox.total_cpus) {
     return (
       <p className="text-[11px] text-md-on-surface-variant leading-relaxed">
-        Start Docker Desktop to choose how much each sandbox may use. Until you do, a
-        sandbox gets half of Docker&apos;s memory and every core.
+        Open Docker Desktop to choose how much each sandbox may use. Until then, a
+        sandbox gets half of the memory Docker Desktop has, and every core.
       </p>
     );
   }
@@ -353,17 +353,17 @@ const SandboxControls: React.FC<{
     <div className="space-y-5">
       <RangeField
         label={`Memory — ${memory} GB${draft.memory_gb === null ? ' (recommended)' : ''}`}
-        hint="A command that needs more is stopped with an out-of-memory error. Docker Desktop's own total is set in its Settings > Resources."
+        hint="If the agent needs more than this, what it is doing is stopped. The overall limit is set in Docker Desktop, under Settings › Resources."
         min={1}
         max={maxMemory}
         value={memory}
         onChange={(value) => onChange({ ...draft, memory_gb: value })}
         minLabel="1 GB"
-        maxLabel={`${maxMemory} GB available to Docker`}
+        maxLabel={`${maxMemory} GB available`}
       />
       <RangeField
-        label={`CPU — ${cpus} core${cpus === 1 ? '' : 's'}${draft.cpus === null ? ' (recommended)' : ''}`}
-        hint="Cores one conversation's commands may use at once. Fewer keeps the Mac responsive while an agent builds or runs tests."
+        label={`Processor — ${cpus} core${cpus === 1 ? '' : 's'}${draft.cpus === null ? ' (recommended)' : ''}`}
+        hint="How many processor cores one conversation may use at once. Fewer keeps the Mac responsive while an agent works."
         min={1}
         max={sandbox.total_cpus}
         value={cpus}
@@ -438,21 +438,24 @@ const SecurityCard: React.FC<{ settings: AppSettings }> = ({ settings }) => {
 
       <div className="min-w-0 space-y-1">
         <h2 className="text-sm font-bold text-md-on-surface">
-          {isRisky ? 'This server is exposed' : 'Access'}
+          {isRisky ? 'Kayak can be reached from other computers' : 'Private to this Mac'}
         </h2>
         <p className="text-[11px] text-md-on-surface-variant leading-relaxed">
           {security.warning ??
-            `Reachable only from this Mac (${security.host}).${
-              security.auth_required ? ' An access token is required.' : ''
-            }`}
+            security.auth_required
+              ? 'Only the Kayak app on this Mac can open Kayak. Models and agents can still use the internet, but not Kayak itself.'
+              : 'Only this Mac can open Kayak.'}
         </p>
-        <div className="flex items-center gap-1.5 pt-1 flex-wrap">
-          <Pill label={`Host ${security.host}`} />
-          <Pill
-            label={security.auth_required ? 'Token required' : 'No token'}
-            tone={security.auth_required ? 'good' : security.is_loopback ? 'neutral' : 'bad'}
-          />
-        </div>
+        {/* The details matter only when something needs changing. */}
+        {!security.is_loopback && (
+          <div className="flex items-center gap-1.5 pt-1 flex-wrap">
+            <Pill label={`Host ${security.host}`} />
+            <Pill
+              label={security.auth_required ? 'Token required' : 'No token'}
+              tone={security.auth_required ? 'good' : 'bad'}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

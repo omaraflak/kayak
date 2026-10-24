@@ -4,6 +4,7 @@ import { api } from '../../api/client';
 import { activeModelOf, isLoadingState, useVLLMStatus } from '../../context/VLLMStatusContext';
 import { HuggingFaceCatalog } from './HuggingFaceCatalog';
 import { isMlxModel } from './metalModels';
+import { shortModelName } from './serverStatus';
 import { X, Search, Check, Cpu, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 
 /** The tab for open-weights models, alongside one tab per cloud provider. */
@@ -104,7 +105,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
               <div>
                 <h2 className="text-sm font-bold text-md-on-surface">Select Language Model</h2>
                 <p className="text-[11px] text-md-on-surface-variant">
-                  Select a model candidate below, then click Confirm Selection to apply.
+                  Pick a model below, then choose Confirm Selection.
                 </p>
               </div>
             </div>
@@ -144,7 +145,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                       className={`w-2 h-2 rounded-full ${
                         isConfigured ? 'bg-emerald-500' : 'bg-md-outline-variant'
                       }`}
-                      title={isConfigured ? 'Provider configured' : 'Provider missing API key or server offline'}
+                      title={isConfigured ? 'Ready to use' : 'Add a key for this provider in Platform Settings'}
                     />
                   )}
                 </button>
@@ -173,7 +174,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
             <div className="px-6 py-2.5 bg-emerald-100 dark:bg-emerald-950/80 border-b border-emerald-300 dark:border-emerald-800/80 flex items-center space-x-2 text-xs shrink-0 transition-colors">
               <CheckCircle2 className="w-4 h-4 text-emerald-700 dark:text-emerald-300 stroke-[2.5]" />
               <span className="font-medium text-emerald-950 dark:text-emerald-100">
-                Serving locally: <code className="font-mono font-bold">{vllmStatus.model_id}</code>
+                Running on this Mac: <span className="font-bold">{shortModelName(vllmStatus.model_id)}</span>
               </span>
             </div>
           )}
@@ -183,7 +184,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
             {isLoading ? (
               <div className="py-20 text-center text-md-on-surface-variant text-xs flex flex-col items-center justify-center space-y-2">
                 <Loader2 className="w-6 h-6 animate-spin text-md-primary" />
-                <span>Probing available models and local servers...</span>
+                <span>Loading models…</span>
               </div>
             ) : activeTab !== HUB_TAB.id ? (
               /* Cloud providers' curated models */
@@ -234,7 +235,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                           <code className="text-[10px] text-md-on-surface-variant font-mono">{model.id}</code>
                           {isCandidate ? (
                             <span className="inline-flex items-center gap-1 text-md-primary font-bold text-xs">
-                              <Check className="w-3.5 h-3.5 stroke-[3]" /> Staged
+                              <Check className="w-3.5 h-3.5 stroke-[3]" /> Selected
                             </span>
                           ) : isCurrentActive ? (
                             <span className="text-md-on-surface-variant text-xs font-semibold">
@@ -266,6 +267,7 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                 activeVllmModelId={activeModelOf(vllmStatus)}
                 isVllmLoading={isLoadingState(vllmStatus?.state)}
                 metalSupported={metalStatus?.supported ?? false}
+                metalDetail={metalStatus?.detail ?? null}
               />
             )}
           </div>
@@ -280,8 +282,8 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
               {candidateHfMode === 'vllm' && (
                 <span className="text-[11px] font-semibold text-md-on-tertiary-container bg-md-tertiary-container px-2 py-0.5 rounded-lg border border-md-outline-variant">
                   {metalStatus?.supported && isMlxModel(candidateModel.replace(/^vllm\//, ''))
-                    ? '(Runs on the Apple GPU)'
-                    : '(Runs on the CPU in Docker)'}
+                    ? "(Runs on your Mac's GPU)"
+                    : "(Runs on this Mac's processor)"}
                 </span>
               )}
             </div>

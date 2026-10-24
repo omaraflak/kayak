@@ -138,7 +138,7 @@ def test_a_stale_status_is_not_trusted(control):
 
     assert status.supported is False
     assert status.state == "stopped"
-    assert "stopped reporting" in (status.detail or "")
+    assert "stopped responding" in (status.detail or "")
 
 
 def test_request_echo_is_parsed(control):

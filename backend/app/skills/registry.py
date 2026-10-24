@@ -4,6 +4,7 @@ import shutil
 from typing import Dict, List, Optional, Tuple
 import yaml
 from backend.app.config import settings
+from backend.app.user_errors import UserFacingError
 from backend.app.fs_cache import DirectorySignature, directory_signature
 from backend.app.identifiers import clean_identifier
 from backend.app.models import Skill
@@ -128,6 +129,9 @@ class SkillRegistry:
         self, name: str, description: str, instructions: str
     ) -> Skill:
         clean_name = clean_identifier(name)
+        if not clean_name:
+            # An empty name made the folder the skills directory itself.
+            raise UserFacingError("Give the skill a name first.")
         folder = settings.SKILLS_DIR / clean_name
         folder.mkdir(parents=True, exist_ok=True)
 

@@ -57,20 +57,19 @@ class ToolRegistry:
             if name in self._builtins:
                 logger.warning("Ignoring custom tool '%s': a built-in has that name.", name)
                 continue
+            # Everything read from the folder is read inside the guard: one tool with
+            # a file that is not UTF-8 used to stop Kayak from starting at all.
             try:
                 source = tool_file.read_text(encoding="utf-8")
                 tool = read_custom_tool(name, source)
-            except (OSError, ToolSourceError) as error:
+                verify_file = folder / "verify.py"
+                verify_source = (
+                    verify_file.read_text(encoding="utf-8") if verify_file.exists() else None
+                )
+            except (OSError, ValueError, ToolSourceError) as error:
                 logger.warning("Ignoring custom tool '%s': %s", name, error)
                 continue
-            verify_file = folder / "verify.py"
-            loaded[name] = _InstalledTool(
-                tool=tool,
-                source=source,
-                verify_source=(
-                    verify_file.read_text(encoding="utf-8") if verify_file.exists() else None
-                ),
-            )
+            loaded[name] = _InstalledTool(tool=tool, source=source, verify_source=verify_source)
 
         self._custom = loaded
 

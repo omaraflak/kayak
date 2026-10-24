@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { isLoadingState, useVLLMStatus } from '../../context/VLLMStatusContext';
 import { READY_TOAST_TIMEOUT_MS, shouldShowVllmToast } from './vllmToast';
+import { failureTitle, formatElapsed, shortModelName } from './serverStatus';
 import { Loader2, CheckCircle2, AlertCircle, X, ArrowUpRight } from 'lucide-react';
 
 /**
@@ -12,7 +13,7 @@ import { Loader2, CheckCircle2, AlertCircle, X, ArrowUpRight } from 'lucide-reac
 export const GlobalVLLMStatusWidget: React.FC<{ onOpenModels: () => void }> = ({
   onOpenModels,
 }) => {
-  const { status } = useVLLMStatus();
+  const { status, isStale } = useVLLMStatus();
   const [isDismissed, setIsDismissed] = useState(false);
   const [readyExpired, setReadyExpired] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
@@ -57,9 +58,7 @@ export const GlobalVLLMStatusWidget: React.FC<{ onOpenModels: () => void }> = ({
   });
   if (!showFloatingBar) return null;
 
-  const modelShortName = status?.model_id
-    ? status.model_id.split('/').pop() || status.model_id
-    : 'Local model';
+  const modelShortName = status?.model_id ? shortModelName(status.model_id) : 'Local model';
 
   return (
     <aside
@@ -96,12 +95,18 @@ export const GlobalVLLMStatusWidget: React.FC<{ onOpenModels: () => void }> = ({
                   ? `Starting ${modelShortName}`
                   : isReady
                   ? `${modelShortName} is ready`
-                  : `${modelShortName} failed to start`}
+                  : failureTitle(status)}
               </span>
               <ArrowUpRight className="w-3.5 h-3.5 shrink-0 opacity-60" />
             </div>
             <p className="text-[10.5px] text-md-inverse-on-surface/70 truncate">
-              {isBusy ? `${status?.message || 'Starting...'} (${elapsedSeconds}s)` : status?.message}
+              {isStale
+                ? 'Checking…'
+                : isBusy
+                ? `${status?.message || 'Starting…'} · ${formatElapsed(elapsedSeconds)}`
+                : isError
+                ? status?.error || status?.message
+                : 'Agents that use it can answer now.'}
             </p>
           </div>
         </button>

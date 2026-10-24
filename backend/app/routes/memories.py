@@ -43,7 +43,29 @@ async def teach(request: NewMemory) -> MemoryList:
         raise HTTPException(status_code=400, detail=str(error))
 
 
+class MemoryEdit(BaseModel):
+    """Changes one memory; an empty replacement forgets it."""
+    previous: str
+    replacement: str
+
+
 @router.put("", response_model=MemoryList)
 async def replace_memories(request: MemoryList) -> MemoryList:
-    """Overwrites the whole list, for editing and forgetting."""
+    """Overwrites the whole list."""
     return MemoryList(memories=memory_store.replace(request.memories))
+
+
+@router.patch("", response_model=MemoryList)
+async def edit_memory(request: MemoryEdit) -> MemoryList:
+    """Rewrites or forgets one memory, leaving every other one as it is now.
+
+    Raises:
+        HTTPException: 409 if that memory changed since the page loaded it.
+    """
+    try:
+        return MemoryList(memories=memory_store.edit(request.previous, request.replacement))
+    except LookupError:
+        raise HTTPException(
+            status_code=409,
+            detail="This memory changed since the page loaded. It has been refreshed; try again.",
+        )

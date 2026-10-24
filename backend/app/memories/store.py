@@ -124,11 +124,33 @@ class MemoryStore:
         """
         text = _normalise(content)
         if not text:
-            raise ValueError("A memory cannot be empty.")
+            raise ValueError("Write something to remember first.")
 
         memories = [entry for entry in self.list_memories() if entry != text]
         memories.append(text)
         return self.replace(trim_to_budget(memories))
+
+    def edit(self, previous: str, replacement: str) -> List[str]:
+        """Rewrites one memory, or forgets it when the replacement is empty.
+
+        Addressed by its text rather than by sending the whole list back: agents add
+        memories while the page is open, and a list written from what the page had
+        loaded silently deleted every one added since.
+
+        Raises:
+            LookupError: If no memory reads `previous` any more.
+        """
+        memories = self.list_memories()
+        target = _normalise(previous)
+        if target not in memories:
+            raise LookupError(previous)
+        text = _normalise(replacement)
+        index = memories.index(target)
+        if text:
+            memories[index] = text
+        else:
+            del memories[index]
+        return self.replace(memories)
 
     def prompt_section(self) -> str:
         """The memories as they appear in every agent's system prompt.

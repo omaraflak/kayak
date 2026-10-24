@@ -89,7 +89,12 @@ class TestDoneIsAlwaysSent:
             for message in await get_messages(conversation.id)
             if message.role == MessageRole.ASSISTANT
         ]
-        assert [message.content for message in assistant] == ["half an answer"]
+        assert [message.content for message in assistant if not message.is_error] == [
+            "half an answer"
+        ]
+        # Followed by why it stopped, kept for whoever opens the conversation later.
+        assert assistant[-1].is_error
+        assert assistant[-1].content == "provider exploded"
 
     async def test_a_failure_before_the_first_token_still_ends(self, agent_env, monkeypatch):
         _stub_stream(monkeypatch, [{"type": "error", "error": "no credentials"}])
@@ -100,17 +105,24 @@ class TestDoneIsAlwaysSent:
 
         assert [event["type"] for event in events] == ["error", "done"]
 
-    async def test_nothing_empty_is_written_for_a_failure_with_no_output(
+    async def test_a_failure_with_no_output_is_recorded_as_its_reason(
         self, agent_env, monkeypatch
     ):
+        # A fast failure is usually over before the page is listening, so the reason
+        # has to be in the history -- and it must be the reason, not an empty answer.
         _stub_stream(monkeypatch, [{"type": "error", "error": "no credentials"}])
         conversation = await create_conversation(title="t", agent_id="tester")
         await add_message(conversation.id, MessageRole.USER, content="go")
 
         await _run(conversation.id)
 
-        roles = [message.role for message in await get_messages(conversation.id)]
-        assert roles == [MessageRole.USER]
+        messages = await get_messages(conversation.id)
+        assert [message.role for message in messages] == [
+            MessageRole.USER,
+            MessageRole.ASSISTANT,
+        ]
+        assert messages[-1].is_error
+        assert messages[-1].content == "no credentials"
 
     async def test_an_unresolvable_conversation_still_ends(self, agent_env):
         events = await _run("does-not-exist")

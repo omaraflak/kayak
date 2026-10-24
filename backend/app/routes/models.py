@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import logging
 from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 import httpx
@@ -6,6 +7,8 @@ import litellm
 from pydantic import BaseModel
 from backend.app.config import settings
 from backend.app.providers import ProviderInfo, require_provider
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/models", tags=["models"])
 
@@ -178,43 +181,61 @@ async def search_huggingface_models(
 
     # A swallowed failure here is indistinguishable from a search that genuinely
     # matched nothing, so the UI told users to try another keyword when the keyword
-    # was never the problem. Upstream trouble is reported as upstream trouble.
+    # was never the problem. Upstream trouble is reported as upstream trouble -- in
+    # words for the person searching, with the raw cause kept in the server log.
     try:
         async with httpx.AsyncClient(timeout=HUGGINGFACE_TIMEOUT_SECONDS) as client:
             response = await client.get(url, params=params, headers=headers)
     except httpx.TimeoutException:
+        logger.warning("Hugging Face search timed out for %r", query)
         raise HTTPException(
             status_code=504,
-            detail="Hugging Face Hub did not respond in time. Try again in a moment.",
+            detail="Hugging Face took too long to answer. Try again in a moment.",
         )
     except httpx.HTTPError as error:
+        logger.warning("Could not reach Hugging Face to search for %r: %s", query, error)
         raise HTTPException(
             status_code=502,
-            detail=f"Could not reach Hugging Face Hub: {error}",
+            detail=(
+                "Kayak couldn't reach Hugging Face. Check your internet connection, "
+                "then try again."
+            ),
         )
 
     if response.status_code == 401:
         raise HTTPException(
             status_code=502,
-            detail="Hugging Face rejected the configured API key. Check it in Settings.",
+            detail="Hugging Face didn't accept your key. Check it in Platform Settings.",
         )
     if response.status_code == 429:
         raise HTTPException(
             status_code=502,
-            detail="Hugging Face Hub is rate limiting this machine. Add an API key in Settings or retry shortly.",
+            detail=(
+                "Hugging Face is limiting searches from this Mac. Wait a minute, or add a "
+                "Hugging Face key in Platform Settings."
+            ),
         )
     if response.status_code != 200:
+        logger.warning("Hugging Face search answered %s", response.status_code)
         raise HTTPException(
             status_code=502,
-            detail=f"Hugging Face Hub returned {response.status_code}.",
+            detail="Hugging Face isn't answering properly right now. Try again in a few minutes.",
         )
 
     try:
         payload = response.json()
     except ValueError:
-        raise HTTPException(status_code=502, detail="Hugging Face Hub returned an unreadable response.")
+        logger.warning("Hugging Face search answered with something that is not JSON")
+        raise HTTPException(
+            status_code=502,
+            detail="Hugging Face isn't answering properly right now. Try again in a few minutes.",
+        )
+    if not isinstance(payload, list):
+        payload = []
 
     for item in payload:
+        if not isinstance(item, dict):
+            continue
         model_id = item.get("id", "")
         if model_id:
             results.append(

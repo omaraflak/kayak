@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { HostCapability, Modality, VLLMDeployRequest } from '../../types';
 import { estimateModelSize, judgeFit, maxWorkingMemoryGB } from './modelSizing';
+import { shortModelName } from './serverStatus';
 import { AlertTriangle, Cpu, Rocket, ShieldAlert, X, Zap } from 'lucide-react';
 
 /**
@@ -13,13 +14,13 @@ import { AlertTriangle, Cpu, Rocket, ShieldAlert, X, Zap } from 'lucide-react';
  */
 
 const DTYPE_OPTIONS = [
-  { value: 'auto', label: 'Auto', hint: 'bfloat16, which the CPU runtime uses unless told otherwise.' },
-  { value: 'bfloat16', label: 'bfloat16', hint: 'Half the memory of full precision.' },
-  { value: 'float32', label: 'float32', hint: 'Full precision, at twice the memory of bfloat16.' },
+  { value: 'auto', label: 'Auto', hint: 'Lets Kayak choose. Right for almost every model.' },
+  { value: 'bfloat16', label: 'Compact', hint: 'Uses half the memory of Precise, with no noticeable difference in answers.' },
+  { value: 'float32', label: 'Precise', hint: 'Uses twice the memory of Compact. Only worth it if a model misbehaves.' },
 ];
 
 const CONTEXT_PRESETS = [
-  { value: null, label: 'Model default' },
+  { value: null, label: "Model's default" },
   { value: 4096, label: '4K' },
   { value: 8192, label: '8K' },
   { value: 16384, label: '16K' },
@@ -134,7 +135,7 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
               <Rocket className="w-4 h-4" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-sm font-bold text-md-on-surface">Start local server</h2>
+              <h2 className="text-sm font-bold text-md-on-surface">Start a model on this Mac</h2>
               <p className="text-[11px] text-md-on-surface-variant font-mono truncate" title={modelId}>
                 {modelId}
               </p>
@@ -154,37 +155,37 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
           <div className="space-y-2">
             {replacingModelId && (
               <Notice tone="warning" icon={<AlertTriangle className="w-3.5 h-3.5" />}>
-                This stops the server currently running{' '}
-                <code className="font-mono font-semibold">{replacingModelId}</code>. Conversations
-                using it will fail until the new model is ready.
+                This stops <span className="font-semibold">{shortModelName(replacingModelId)}</span>,
+                which is running now. Agents using it can't answer until the new model is ready.
               </Notice>
             )}
 
             {modality === 'text' && (
               <Notice tone="neutral" icon={<Cpu className="w-3.5 h-3.5" />}>
-                Runs on the CPU inside Docker, which is slow for anything but small models.
-                On an Apple Silicon Mac, MLX models run on the GPU instead.
+                Runs on this Mac's processor, which is slow for all but small models. Models
+                marked GPU run much faster.
               </Notice>
             )}
 
             {fit === 'too-large' && estimate && (
               <Notice tone="danger" icon={<AlertTriangle className="w-3.5 h-3.5" />}>
-                This model needs roughly {estimate.requiredGB} GB but the container has{' '}
-                {effectiveContainerMemoryGB} GB. It will most likely fail to load — try a
-                quantized build or a smaller model, or give Docker Desktop more memory.
+                This model needs roughly {estimate.requiredGB} GB but Kayak can give it{' '}
+                {effectiveContainerMemoryGB} GB. It will most likely not start — try a smaller
+                model, or give Docker Desktop more memory in its Settings, under Resources.
               </Notice>
             )}
 
             {fit === 'tight' && estimate && (
               <Notice tone="warning" icon={<AlertTriangle className="w-3.5 h-3.5" />}>
-                About {estimate.requiredGB} GB needed against {effectiveContainerMemoryGB} GB
-                available. It may load, but a shorter context length gives it room.
+                About {estimate.requiredGB} GB needed, and Kayak can give it{' '}
+                {effectiveContainerMemoryGB} GB. It may start, but letting it read less text at
+                once gives it room.
               </Notice>
             )}
 
             {!isCached && (
               <Notice tone="neutral" icon={<Zap className="w-3.5 h-3.5" />}>
-                These weights are not on this Mac yet
+                This model isn't on this Mac yet
                 {estimate ? `, so roughly ${estimate.weightsGB} GB will be downloaded` : ''}. The
                 first start takes as long as the download does.
               </Notice>
@@ -194,7 +195,7 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
           {offers('max_model_len') && (
           <Field
             label="Context length"
-            hint="How much of a conversation the model can take into account at once. Shorter needs less memory, and is the first thing to reduce if a model will not start."
+            hint="How much text the model can read at once — the conversation so far, plus files and tool results. Less needs less memory, and is the first thing to lower if a model won't start."
           >
             <div className="flex flex-wrap gap-1.5">
               {CONTEXT_PRESETS.map((preset) => (
@@ -216,7 +217,7 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
           )}
 
           {offers('dtype') && (
-          <Field label="Weight precision" hint={DTYPE_OPTIONS.find((o) => o.value === dtype)?.hint}>
+          <Field label="Precision" hint={DTYPE_OPTIONS.find((o) => o.value === dtype)?.hint}>
             <div className="flex gap-1.5">
               {DTYPE_OPTIONS.map((option) => (
                 <button
@@ -238,15 +239,14 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
 
           {offers('memory_limit_gb') && systemMemoryGB > 0 && (
             <Field
-              label={`Container memory — ${effectiveContainerMemoryGB} GB${
+              label={`Memory — ${effectiveContainerMemoryGB} GB${
                 effectiveContainerMemoryGB >= maxContainerMemoryGB ? ' (all of it)' : ''
               }`}
               hint={
-                'RAM the model container is allowed to use. Giving it everything is the ' +
-                'right choice while serving; lower it to keep room for agent sandboxes ' +
-                'and anything else running in Docker. Docker Desktop caps its own total ' +
-                'memory independently of the machine — raise it under Settings > ' +
-                'Resources > Memory if the maximum here looks low.'
+                'How much memory the model may use. Giving it everything is usually right; ' +
+                "lower it to leave room for your agents' workspaces. Docker Desktop sets its " +
+                "own limit, separate from your Mac's — if the most here looks low, raise it in " +
+                'Docker Desktop under Settings, Resources, Memory.'
               }
             >
               <input
@@ -263,17 +263,17 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
               />
               <div className="flex items-center justify-between text-[10px] text-md-on-surface-variant font-mono pt-1">
                 <span>1 GB</span>
-                <span>{maxContainerMemoryGB} GB available to Docker</span>
+                <span>{maxContainerMemoryGB} GB available</span>
               </div>
             </Field>
           )}
 
           {offers('cpu_limit') && totalCpus > 0 && (
             <Field
-              label={`Container CPU — ${effectiveContainerCpus} core${
-                effectiveContainerCpus === 1 ? '' : 's'
-              }${effectiveContainerCpus >= totalCpus ? ' (all of them)' : ''}`}
-              hint="Cores the model may use. More cores generate faster; lower it to keep the machine responsive while a model is serving."
+              label={`Processor cores — ${effectiveContainerCpus}${
+                effectiveContainerCpus >= totalCpus ? ' (all of them)' : ''
+              }`}
+              hint="How many of the processor's cores the model may use. More answers faster; fewer keeps the rest of your Mac responsive while it runs."
             >
               <input
                 type="range"
@@ -296,10 +296,10 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
             <Field
               label={`Conversation memory — ${effectiveKvCacheGB} GB`}
               hint={
-                'Space set aside for the model to remember the conversation as it runs. ' +
-                'More lets it handle longer conversations at once; the slider stops where ' +
-                'the container runs out of room, because asking for more than that ' +
-                'prevents the model from starting at all.'
+                'Space set aside for the model to keep track of the conversation as it ' +
+                'answers. More lets it handle longer conversations; the slider stops where ' +
+                'its memory runs out, because asking for more than that stops the model ' +
+                'from starting at all.'
               }
             >
               <input
@@ -318,8 +318,7 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
                 <span>1 GB</span>
                 <span>
                   {memoryCeilingGB} GB max
-                  {systemMemoryGB > 0 &&
-                    ` · ${effectiveContainerMemoryGB} GB allocated to the container`}
+                  {systemMemoryGB > 0 && ` · ${effectiveContainerMemoryGB} GB for the model`}
                 </span>
               </div>
             </Field>
@@ -330,9 +329,9 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
               <Toggle
                 checked={trustRemoteCode}
                 onChange={setTrustRemoteCode}
-                label="Trust remote code"
+                label="Allow the model's own code"
                 danger
-                hint="Runs Python published in the model repository inside the container, with your Hugging Face token in its environment. Only needed for architectures the runtime does not ship support for."
+                hint="Lets the model run code its publisher included. Only turn this on for models from people you trust."
               />
             )}
           </div>
@@ -342,12 +341,10 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
           {trustRemoteCode ? (
             <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 dark:text-amber-200">
               <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
-              Remote code execution enabled
+              The model's own code is allowed
             </span>
           ) : (
-            <span className="text-[11px] text-md-on-surface-variant">
-              Weights cache to <code className="font-mono">data/huggingface_cache/</code>
-            </span>
+            <span />
           )}
 
           <div className="flex items-center gap-2 shrink-0">
@@ -364,7 +361,7 @@ export const VLLMLaunchDialog: React.FC<VLLMLaunchDialogProps> = ({
               className="px-5 py-2 rounded-xl bg-md-primary hover:opacity-90 text-md-on-primary text-xs font-bold inline-flex items-center gap-1.5 shadow-xs transition-opacity cursor-pointer"
             >
               <Rocket className="w-3.5 h-3.5" />
-              <span>Start server</span>
+              <span>Start</span>
             </button>
           </div>
         </div>

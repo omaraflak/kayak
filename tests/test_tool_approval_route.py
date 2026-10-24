@@ -75,10 +75,14 @@ class TestResolvingAnApproval:
         assert response.json() == {"status": "rejected"}
         assert pending.approved is False
 
-    def test_deciding_on_a_call_nothing_is_waiting_for_is_a_404(self, client):
+    def test_deciding_on_a_call_nothing_is_waiting_for_is_gone(self, client):
         response = client.post(
             "/api/conversations/conv_a/tool-approvals",
             json={"call_id": "never_registered", "approved": True},
         )
 
-        assert response.status_code == 404
+        # Gone rather than not found: the page shows this, and the request it was
+        # answering expired. The id is not echoed; Gemini's are thousands of
+        # characters long.
+        assert response.status_code == 410
+        assert "never_registered" not in response.json()["detail"]

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { LifeBuoy, Loader2 } from 'lucide-react';
-import { api, errorMessage } from '../../api/client';
+import { api } from '../../api/client';
 import { InstalledVersions } from '../../types';
 import { SupportDialog } from './SupportDialog';
 
@@ -49,7 +49,8 @@ export const AboutFooter: React.FC = () => {
         [
           'The report could not be built.',
           '',
-          `Error: ${errorMessage(error)}`,
+          // The raw text, on purpose: this is read by whoever answers the report.
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
           `Page:  ${window.location.href}`,
           `Time:  ${new Date().toISOString()}`,
         ].join('\n')

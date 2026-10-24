@@ -47,7 +47,5 @@ async def delete_agent_config(agent_id: str) -> Dict[str, str]:
     """
     success = agent_manager.delete_agent(agent_id)
     if not success:
-        raise HTTPException(
-            status_code=404, detail=f"Agent '{agent_id}' not found"
-        )
+        raise HTTPException(status_code=404, detail="This agent was already deleted.")
     return {"status": "deleted"}

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { api, errorMessage } from '../../api/client';
+import { ApiError, api, errorMessage } from '../../api/client';
 import { ToolDefinition, VerifyToolResponse } from '../../types';
 import { CodeBlock } from '../../ui/CodeBlock';
 import { AgentChatPrompt } from '../chat/AgentChatPrompt';
@@ -97,8 +97,8 @@ export const ToolEditor: React.FC<ToolEditorProps> = ({
   const handleVerify = async () => {
     if (!canSubmit) {
       dialog.alert({
-        title: 'Missing Tool Implementation',
-        message: 'A tool name, tool.py source, and verify.py test suite are all required.',
+        title: 'Something is missing',
+        message: 'A tool needs a name, its code (tool.py) and its tests (verify.py).',
         variant: 'info',
       });
       return;
@@ -115,13 +115,8 @@ export const ToolEditor: React.FC<ToolEditorProps> = ({
         })
       );
     } catch (error) {
-      const reason = errorMessage(error);
-      setVerifyResult({
-        success: false,
-        stdout: '',
-        stderr: reason || 'Verification execution failed',
-        error: reason,
-      });
+      const reason = errorMessage(error, "Couldn't run the tests. Try again.");
+      setVerifyResult({ success: false, stdout: '', stderr: reason, error: reason });
     } finally {
       setIsVerifying(false);
     }
@@ -141,18 +136,16 @@ export const ToolEditor: React.FC<ToolEditorProps> = ({
       });
       onSaved(saved.name);
     } catch (error) {
-      const reason = errorMessage(error);
-      setVerifyResult({
-        success: false,
-        stdout: '',
-        stderr: reason || 'Activation failed',
-        error: reason,
-      });
+      // Only a refusal from the tests is the tests' fault; a lost connection or a
+      // bad name was blamed on them too, which sent people debugging passing code.
+      const testsFailed = error instanceof ApiError && error.status === 422;
+      const reason = errorMessage(error, "Couldn't install the tool. Try again.");
+      setVerifyResult({ success: false, stdout: '', stderr: reason, error: reason });
       dialog.alert({
-        title: 'Not Installed',
-        message:
-          'The tool was not installed because its verification tests did not pass. ' +
-          'See the verification output for details.',
+        title: 'Tool not installed',
+        message: testsFailed
+          ? "The tool wasn't installed because its tests didn't pass. The test output is below."
+          : reason,
         variant: 'danger',
       });
     } finally {
@@ -170,7 +163,7 @@ export const ToolEditor: React.FC<ToolEditorProps> = ({
               {isNew ? 'New Tool' : `Editing ${tool?.name}`}
             </h2>
             <p className="text-[11px] text-md-on-surface-variant">
-              Tools run inside the Kayak server process, so verify.py must pass before a tool is installed.
+              Kayak runs a tool's tests (verify.py) before installing it, and agents run tools in their sandbox.
             </p>
           </div>
         </div>

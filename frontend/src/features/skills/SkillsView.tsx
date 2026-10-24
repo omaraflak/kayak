@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Skill } from '../../types';
-import { api } from '../../api/client';
+import { api, errorMessage } from '../../api/client';
 import { MarkdownContent } from '../../ui/Markdown';
 import { SkillEditor } from './SkillEditor';
 import { Sparkles, Plus, RefreshCw, Trash2, Pencil, FileText, Paperclip } from 'lucide-react';
@@ -30,17 +30,20 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
   const [isCreating, setIsCreating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const loadSkills = async () => {
     try {
       const data = await api.listSkills();
       setSkills(data);
+      setLoadFailed(false);
       if (data.length > 0 && !selectedSkill && !isCreating && !selectedId) {
         setSelectedSkill(data[0]);
         onSelectId?.(data[0].name);
       }
     } catch (error) {
       console.error('Failed to load skills:', error);
+      setLoadFailed(true);
     }
   };
 
@@ -79,16 +82,23 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
 
   const handleDelete = async (skillName: string) => {
     const confirmed = await dialog.confirm({
-      title: 'Delete Skill',
-      message: `Are you sure you want to delete the skill "${skillName}" and its SKILL.md definition? This cannot be undone.`,
+      title: 'Delete this skill?',
+      message: `Agents will no longer be able to use "${skillName}". This can't be undone.`,
       confirmText: 'Delete',
       variant: 'danger',
     });
-    if (confirmed) {
+    if (!confirmed) return;
+    try {
       await api.deleteSkill(skillName);
-      await loadSkills();
       setSelectedSkill(null);
       onSelectId?.(null);
+      await loadSkills();
+    } catch (error) {
+      dialog.alert({
+        title: "Couldn't delete the skill",
+        message: errorMessage(error, "Couldn't delete the skill. Try again."),
+        variant: 'danger',
+      });
     }
   };
 
@@ -109,7 +119,7 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
               onClick={handleReload}
               disabled={isReloading}
               className="p-1.5 rounded-lg text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors cursor-pointer"
-              title="Reload skills from disk"
+              title="Refresh"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isReloading ? 'animate-spin' : ''}`} />
             </button>
@@ -129,11 +139,22 @@ export const SkillsView: React.FC<SkillsViewProps> = ({
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-          {skills.length === 0 ? (
+          {loadFailed && skills.length === 0 ? (
+            <div className="text-center py-10 px-4 text-md-on-surface-variant text-xs space-y-2">
+              <p>Couldn't load the skills.</p>
+              <button
+                type="button"
+                onClick={loadSkills}
+                className="font-bold text-md-primary underline cursor-pointer"
+              >
+                Try again
+              </button>
+            </div>
+          ) : skills.length === 0 ? (
             <div className="text-center py-10 px-4 text-md-on-surface-variant text-xs leading-relaxed">
-              No skills found in <code className="font-mono">data/skills</code>.
+              No skills yet.
               <br />
-              Click + New to write one, or ask the Skill Architect agent in a chat.
+              Click New to write one, or ask the Skill Architect agent in a chat.
             </div>
           ) : (
             skills.map((skill) => {

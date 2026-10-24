@@ -28,11 +28,21 @@ export interface GroupedTurn {
   content?: string;
   thinking?: string;
   toolCalls: TurnToolCall[];
+  /** Why this turn failed, already worded for the user. */
+  error?: string;
 }
 
-/** Reports whether a tool result records a failure. */
-function isErrorOutput(content: string | null | undefined): boolean {
-  return Boolean(content?.startsWith('Error:') || content?.startsWith('✗'));
+/**
+ * Reports whether a tool result records a failure.
+ *
+ * The server stores the flag now. Results saved before it did are still read from
+ * their text, as loosely as the server judged them while they ran ("Error (1):"
+ * counts), so a step does not read as failed live and completed after a reload.
+ */
+function isErrorResult(message: Message): boolean {
+  if (message.is_error) return true;
+  const content = message.content;
+  return Boolean(content?.startsWith('Error') || content?.startsWith('✗'));
 }
 
 export function groupMessagesIntoTurns(messages: Message[]): GroupedTurn[] {
@@ -46,7 +56,7 @@ export function groupMessagesIntoTurns(messages: Message[]): GroupedTurn[] {
       toolOutputsMap[msg.tool_call_id] = {
         output: msg.content || '',
         name: msg.name || undefined,
-        isError: isErrorOutput(msg.content),
+        isError: isErrorResult(msg),
       };
     }
   }
@@ -67,6 +77,19 @@ export function groupMessagesIntoTurns(messages: Message[]): GroupedTurn[] {
         content: msg.content || '',
         toolCalls: [],
       });
+      continue;
+    }
+
+    // Why a turn failed belongs to that turn, shown below whatever it managed to
+    // say first; a turn that failed before saying anything is just the reason.
+    if (msg.role === 'assistant' && msg.is_error) {
+      const id = msg.id || `assistant_${index}`;
+      if (!currentAssistantTurn) {
+        currentAssistantTurn = { id, lastMessageId: id, role: 'assistant', toolCalls: [] };
+      } else if (msg.id) {
+        currentAssistantTurn.lastMessageId = msg.id;
+      }
+      currentAssistantTurn.error = msg.content || undefined;
       continue;
     }
 

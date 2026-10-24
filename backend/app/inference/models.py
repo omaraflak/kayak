@@ -56,6 +56,10 @@ class DeployRequest(BaseModel):
     # model repository, inside the container, with the Hugging Face token in its
     # environment. It is occasionally required, but it is never a safe default.
     trust_remote_code: bool = Field(False, description="Execute custom modelling code published in the model repository")
+    #: Which vLLM tool-call parser to use, when the one chosen from the model's
+    #: family must be overridden. Set by the automatic retry after vLLM refuses a
+    #: parser; left empty, the runtime picks one from the model id.
+    tool_parser: Optional[str] = Field(None, description="Override the tool-call parser chosen for this model")
 
 
 class DeploymentProgress(BaseModel):
@@ -74,6 +78,10 @@ class DeploymentProgress(BaseModel):
     error: Optional[str] = None
     #: Exit code of the container, when it has stopped on its own.
     exit_code: Optional[int] = None
+    #: Set when an ERROR describes a model that had been serving and then stopped,
+    #: rather than one that never started. The two need different words: "couldn't
+    #: start" for a model that answered questions a minute ago reads as a lie.
+    crashed: bool = False
 
 
 class RuntimeDescriptor(BaseModel):
@@ -140,6 +148,9 @@ class MetalStatus(BaseModel):
     model: Optional[str] = None
     port: int = 0
     error: Optional[str] = None
+    #: The raw output behind `error`, for the model's Details drawer. Newer
+    #: launchers keep it apart so that `error` can be a sentence for a person.
+    error_detail: Optional[str] = None
     #: Why Metal is unavailable when the hardware could otherwise do it, such as
     #: an Intel build of the launcher running under Rosetta. Distinct from
     #: `error`, which describes a start that was attempted and failed.
@@ -152,6 +163,10 @@ class MetalStatus(BaseModel):
     #: Older launchers never write the key, and their statuses are matched by
     #: model id instead.
     acknowledges_requests: bool = False
+    #: Whether the launcher keeps raw output apart from `error`, which makes
+    #: `error` a sentence written for a person, shown as it is. Older launchers
+    #: never write the key and put raw output in `error`.
+    separates_error_detail: bool = False
 
 
 class ModelClassification(BaseModel):
@@ -173,6 +188,15 @@ class ModelClassification(BaseModel):
     #: Set when the Hub could not be reached, so the caller can fall back rather
     #: than treat "unknown" as "unsupported".
     unknown: bool = False
+    #: The makers ask people to accept terms before downloading it.
+    gated: bool = False
+    #: Hugging Face has no such repository -- or none this Mac may see.
+    not_found: bool = False
+    #: Downloading it needs a Hugging Face token that is missing or was refused.
+    needs_token: bool = False
+    #: Why it cannot be started as things stand, written for the person asking.
+    #: Set whenever the start would only fail after a long download.
+    message: Optional[str] = None
 
 
 class CachedModel(BaseModel):

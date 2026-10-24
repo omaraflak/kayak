@@ -91,8 +91,8 @@ export const MessageActions: React.FC<MessageActionsProps> = ({
             <Undo2 className="w-3 h-3" />
           )
         }
-        label="Revert"
-        title="Remove this reply and everything after it, and put the prompt back in the composer"
+        label="Rewind"
+        title="Remove this reply and everything after it, so you can change your message"
         disabled={disabled}
         onClick={() => onAction('revert')}
       />
@@ -106,8 +106,8 @@ export const MessageActions: React.FC<MessageActionsProps> = ({
               <RefreshCw className="w-3 h-3" />
             )
           }
-          label="Retry"
-          title="Generate this reply again from the same history"
+          label="Try again"
+          title="Ask the agent to answer this again"
           disabled={disabled}
           onClick={() => onAction('retry')}
         />
@@ -121,8 +121,8 @@ export const MessageActions: React.FC<MessageActionsProps> = ({
             <GitBranch className="w-3 h-3" />
           )
         }
-        label="Branch"
-        title="Continue from here in a new conversation, leaving this one untouched"
+        label="New chat from here"
+        title="Continue from this point in a new conversation, leaving this one as it is"
         disabled={disabled}
         onClick={() => onAction('branch')}
       />

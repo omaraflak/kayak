@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { summarizeToolCalls } from './toolCallSummary';
 
 describe('summarizeToolCalls', () => {
-  it('reports a clean group as completed', () => {
+  it('reports a clean group as done', () => {
     const summary = summarizeToolCalls([{}, {}, {}]);
-    expect(summary.label).toBe('3 tool calls executed');
-    expect(summary.badgeLabel).toBe('completed');
+    expect(summary.label).toBe('3 steps');
+    expect(summary.badgeLabel).toBe('done');
     expect(summary.tone).toBe('clean');
   });
 
@@ -16,16 +16,16 @@ describe('summarizeToolCalls', () => {
       {}, {}, { isError: true }, {}, {}, {}, {}, {},
     ]);
     expect(summary.errorCount).toBe(1);
-    expect(summary.badgeLabel).toBe('1 error');
+    expect(summary.badgeLabel).toBe("1 didn't work");
     expect(summary.tone).toBe('partial');
   });
 
-  it('pluralises both counts', () => {
-    expect(summarizeToolCalls([{}]).label).toBe('1 tool call executed');
-    expect(summarizeToolCalls([{ isError: true }]).badgeLabel).toBe('1 error');
+  it('pluralises the count of steps', () => {
+    expect(summarizeToolCalls([{}]).label).toBe('1 step');
+    expect(summarizeToolCalls([{ isError: true }]).badgeLabel).toBe("1 didn't work");
     expect(
       summarizeToolCalls([{ isError: true }, { isError: true }]).badgeLabel
-    ).toBe('2 errors');
+    ).toBe("2 didn't work");
   });
 
   it('still reads as partial when every call errored', () => {
@@ -33,7 +33,7 @@ describe('summarizeToolCalls', () => {
     // reported elsewhere, and this line only describes the steps.
     const summary = summarizeToolCalls([{ isError: true }, { isError: true }]);
     expect(summary.tone).toBe('partial');
-    expect(summary.badgeLabel).toBe('2 errors');
+    expect(summary.badgeLabel).toBe("2 didn't work");
   });
 
   it('treats a missing flag as a success', () => {
@@ -45,7 +45,7 @@ describe('summarizeToolCalls', () => {
   it('handles an empty group without inventing a status', () => {
     const summary = summarizeToolCalls([]);
     expect(summary.total).toBe(0);
-    expect(summary.label).toBe('0 tool calls executed');
+    expect(summary.label).toBe('0 steps');
     expect(summary.tone).toBe('clean');
   });
 });

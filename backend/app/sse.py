@@ -14,6 +14,26 @@ from fastapi.responses import StreamingResponse
 #: How long an idle stream waits before sending a keep-alive.
 PING_SECONDS = 20.0
 
+#: Put on a listener's queue in place of the events it fell too far behind to keep.
+#: Its stream ends, the browser reconnects, and the snapshot every stream opens with
+#: replaces whatever was dropped.
+RESYNC: Dict[str, Any] = {"type": "resync"}
+
+
+def overflow(queue: "asyncio.Queue[Any]") -> None:
+    """Empties the queue of a listener that fell behind, and tells its stream to end.
+
+    Unsubscribing it alone left the stream open and pinging with nothing ever to
+    deliver: the page never heard that its turn finished, so its spinner and its
+    locked composer stayed until someone reloaded.
+    """
+    while True:
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+    queue.put_nowait(RESYNC)
+
 
 def frame(data: Mapping[str, Any], event: Optional[str] = None) -> str:
     """Formats one SSE frame, optionally with a named event type."""
@@ -30,6 +50,8 @@ async def drain(
             event = await asyncio.wait_for(queue.get(), timeout=PING_SECONDS)
         except asyncio.TimeoutError:
             event = ping
+        if event is RESYNC:
+            return
         yield frame(event)
 
 

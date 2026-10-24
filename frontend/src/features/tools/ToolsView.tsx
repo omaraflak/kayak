@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ToolDefinition } from '../../types';
-import { api } from '../../api/client';
+import { api, errorMessage } from '../../api/client';
 import { Wrench, Plus, RefreshCw, Trash2, ShieldCheck, FileCode, Pencil } from 'lucide-react';
 import { ToolEditor } from './ToolEditor';
 import { CodeBlock } from '../../ui/CodeBlock';
@@ -23,17 +23,20 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   const [isCreating, setIsCreating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const loadTools = async () => {
     try {
       const data = await api.listTools();
       setTools(data);
+      setLoadFailed(false);
       if (data.length > 0 && !selectedTool && !isCreating && !selectedId) {
         setSelectedTool(data[0]);
         onSelectId?.(data[0].name);
       }
     } catch (error) {
       console.error('Failed to load tools:', error);
+      setLoadFailed(true);
     }
   };
 
@@ -65,6 +68,12 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
     try {
       await api.reloadTools();
       await loadTools();
+    } catch (error) {
+      dialog.alert({
+        title: "Couldn't refresh the tools",
+        message: errorMessage(error, "Couldn't refresh the list of tools. Try again."),
+        variant: 'danger',
+      });
     } finally {
       setIsReloading(false);
     }
@@ -72,15 +81,22 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
 
   const handleDelete = async (toolName: string) => {
     const confirmed = await dialog.confirm({
-      title: 'Delete Custom Tool',
-      message: `Are you sure you want to delete tool "${toolName}" (including tool.py and verify.py)? This will remove it from the runtime registry.`,
+      title: 'Delete this tool?',
+      message: `Agents will no longer be able to use "${toolName}". This can't be undone.`,
       confirmText: 'Delete',
       variant: 'danger',
     });
-    if (confirmed) {
+    if (!confirmed) return;
+    try {
       await api.deleteTool(toolName);
-      await loadTools();
       setSelectedTool(null);
+      await loadTools();
+    } catch (error) {
+      dialog.alert({
+        title: "Couldn't delete the tool",
+        message: errorMessage(error, "Couldn't delete the tool. Try again."),
+        variant: 'danger',
+      });
     }
   };
 
@@ -101,7 +117,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
               onClick={handleReload}
               disabled={isReloading}
               className="p-1.5 rounded-lg text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high transition-colors cursor-pointer"
-              title="Reload tools from disk"
+              title="Refresh"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isReloading ? 'animate-spin' : ''}`} />
             </button>
@@ -121,9 +137,20 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-          {tools.length === 0 ? (
+          {loadFailed && tools.length === 0 ? (
+            <div className="text-center py-10 px-4 text-md-on-surface-variant text-xs space-y-2">
+              <p>Couldn't load the tools.</p>
+              <button
+                type="button"
+                onClick={loadTools}
+                className="font-bold text-md-primary underline cursor-pointer"
+              >
+                Try again
+              </button>
+            </div>
+          ) : tools.length === 0 ? (
             <div className="text-center py-10 px-4 text-md-on-surface-variant text-xs">
-              No registered tools found.<br />Click + New to write one, or ask the Tool Architect agent in a chat.
+              No tools yet.<br />Click New to write one, or ask the Tool Architect agent in a chat.
             </div>
           ) : (
             tools.map((tool) => {
@@ -172,10 +199,15 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
             onSaved={async (savedName) => {
               setIsCreating(false);
               setIsEditing(false);
-              const refreshed = await api.listTools();
-              setTools(refreshed);
-              setSelectedTool(refreshed.find((t) => t.name === savedName) ?? null);
               onSelectId?.(savedName);
+              try {
+                const refreshed = await api.listTools();
+                setTools(refreshed);
+                setSelectedTool(refreshed.find((t) => t.name === savedName) ?? null);
+              } catch {
+                // Installed; only the refresh failed. The list says so itself.
+                setLoadFailed(true);
+              }
             }}
             onCancel={() => {
               setIsCreating(false);

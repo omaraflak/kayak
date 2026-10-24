@@ -83,6 +83,15 @@ _TOOL_PARSER_RULES: Tuple[Tuple[str, str], ...] = (
 )
 
 
+#: The parser most open models' tool calls are written for, and the one every
+#: vLLM release knows.
+FALLBACK_TOOL_PARSER = "hermes"
+
+#: vLLM's refusal of a parser name it does not have:
+#: "KeyError: 'invalid tool call parser: kimi_k3 (chose from { ... })'".
+_UNKNOWN_PARSER = "invalid tool call parser"
+
+
 def tool_call_parser(model_id: str) -> str:
     """The vLLM tool-call parser for a model, by family.
 
@@ -94,7 +103,7 @@ def tool_call_parser(model_id: str) -> str:
     for needle, parser in _TOOL_PARSER_RULES:
         if needle in lowered:
             return parser
-    return "hermes"
+    return FALLBACK_TOOL_PARSER
 
 
 #: vLLM's own advice when a model's default context does not fit in the KV cache:
@@ -170,10 +179,10 @@ class VLLMRuntime(Runtime):
     modality = Modality.TEXT
     key = "vllm"
     label = "Text generation"
-    server_label = "vLLM"
-    description = (
-        "Chat and completion models served by vLLM, with tool calling enabled."
-    )
+    server_label = "The text model"
+    #: Shown to people choosing a model, so it says what the models do, not what
+    #: serves them.
+    description = "Models that chat, write, and use tools for your agents."
     container_name = "kayak-vllm-server"
     supports_metal = True
     pipeline_tags = ("text-generation",)
@@ -221,7 +230,7 @@ class VLLMRuntime(Runtime):
             "--host", "0.0.0.0",
         ]
 
-        spec.notes.append(f"ℹ Loading {request.model_id} on the CPU...")
+        spec.notes.append(f"ℹ Loading {request.model_id} on this Mac's processor...")
         # The CPU backend computes in bfloat16 unless told otherwise, and has no
         # CUDA graphs to capture, so eager mode is not a choice here.
         dtype = "bfloat16" if request.dtype in ("auto", "bfloat16") else request.dtype
@@ -243,8 +252,8 @@ class VLLMRuntime(Runtime):
 
         if effective_memory:
             spec.notes.append(
-                f"ℹ The container has {effective_memory / 1024 ** 3:.1f} GiB of memory to work with; "
-                f"reserving {kvcache_gib} GiB for the KV cache."
+                f"ℹ {effective_memory / 1024 ** 3:.1f} GiB of memory to work with; "
+                f"reserving {kvcache_gib} GiB for the conversation memory (KV cache)."
             )
 
         if request.trust_remote_code:
@@ -255,7 +264,7 @@ class VLLMRuntime(Runtime):
         # Enable auto tool calling support for the OpenAI-compatible endpoint.
         spec.command.extend([
             "--enable-auto-tool-choice",
-            "--tool-call-parser", tool_call_parser(request.model_id),
+            "--tool-call-parser", request.tool_parser or tool_call_parser(request.model_id),
         ])
 
         return spec
@@ -266,17 +275,30 @@ class VLLMRuntime(Runtime):
         status: DeploymentProgress,
         log_history: List[str],
     ) -> Optional[DeployRequest]:
-        """The follow-up request for a start that failed only on context length.
+        """The follow-up request for a start that failed in a way that can be fixed.
 
-        Only fires when the deployment errored, the user left the context length to
-        the model's default, and the log carries vLLM's estimate of what fits. The
-        retry sets max_model_len explicitly, so it can never fire twice.
+        Two failures qualify. A model whose default context needs more memory than
+        the machine has is restarted with the length vLLM says would fit -- only
+        when the user left the context to the model's default. And a parser name
+        this vLLM does not know is replaced with the general-purpose one, since the
+        family table can name a parser newer than the image.
+
+        Each retry sets the field it changes explicitly, so neither can fire twice.
         """
-        if status.state != ServerState.ERROR or request.max_model_len is not None:
+        if status.state != ServerState.ERROR:
             return None
-        fitted = extract_fitting_context(log_history)
-        if fitted is None:
-            return None
-        return request.model_copy(
-            update={"max_model_len": fitted, "force_restart": True}
-        )
+        if request.max_model_len is None:
+            fitted = extract_fitting_context(log_history)
+            if fitted is not None:
+                return request.model_copy(
+                    update={"max_model_len": fitted, "force_restart": True}
+                )
+        if (
+            request.tool_parser is None
+            and tool_call_parser(request.model_id) != FALLBACK_TOOL_PARSER
+            and any(_UNKNOWN_PARSER in line.lower() for line in log_history)
+        ):
+            return request.model_copy(
+                update={"tool_parser": FALLBACK_TOOL_PARSER, "force_restart": True}
+            )
+        return None

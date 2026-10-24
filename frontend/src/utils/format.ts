@@ -6,3 +6,14 @@ export function formatBytes(bytes: number): string {
   const value = bytes / 1024 ** exponent;
   return `${value >= 10 || exponent === 0 ? Math.round(value) : value.toFixed(1)} ${units[exponent]}`;
 }
+
+/**
+ * The short name of a model, as a person would say it.
+ *
+ * "vllm/Qwen/Qwen3-0.6B" -> "Qwen3-0.6B", "gemini/gemini-3.6-flash" -> "gemini-3.6-flash".
+ * The provider and organisation prefixes are how Kayak routes a model, not how
+ * anyone refers to it.
+ */
+export function shortModelName(model: string): string {
+  return model.split('/').pop() || model;
+}

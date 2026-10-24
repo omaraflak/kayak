@@ -36,8 +36,14 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
     highlightedHtml = cleanCode;
   }
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(cleanCode);
+  const handleCopy = async () => {
+    // "Copied" only once it is: the clipboard can be refused, and claiming success
+    // regardless left people pasting whatever they had copied before.
+    try {
+      await navigator.clipboard.writeText(cleanCode);
+    } catch {
+      return;
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

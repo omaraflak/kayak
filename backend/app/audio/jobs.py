@@ -47,25 +47,65 @@ class JobQueue(ABC):
     """Runs one kind of audio job at a time, tracking progress for each."""
 
     kind: JobKind
+    #: The server this queue's work goes to.
+    modality: Modality
+    #: Said when a job fails in a way nothing more specific explains.
+    failure_message: str
 
     def __init__(self) -> None:
         self._jobs: Dict[str, AudioJob] = {}
         self._pending: asyncio.Queue = asyncio.Queue()
         self._worker: Optional[asyncio.Task] = None
+        self._stopping = False
 
     def start(self) -> None:
         """Starts the worker, once, for the process lifetime."""
+        self._stopping = False
         if self._worker and not self._worker.done():
             return
         self._worker = asyncio.create_task(self._run())
+        self._worker.add_done_callback(self._on_worker_done)
 
     async def shutdown(self) -> None:
+        self._stopping = True
         if self._worker and not self._worker.done():
             self._worker.cancel()
             try:
                 await self._worker
             except (asyncio.CancelledError, Exception):
                 pass
+
+    def _on_worker_done(self, worker: "asyncio.Task") -> None:
+        """Restarts a worker that ended while Kayak was still running.
+
+        The worker is meant to run for the life of the process. One that ended
+        anyway -- an exception nothing caught -- used to take the queue with it:
+        every later job sat "waiting" forever, and the one it was working on stayed
+        "running".
+        """
+        if self._stopping:
+            return
+        if not worker.cancelled() and worker.exception() is not None:
+            logger.error(
+                "The %s queue's worker stopped; restarting it", self.kind.value,
+                exc_info=worker.exception(),
+            )
+        else:
+            logger.error("The %s queue's worker stopped; restarting it", self.kind.value)
+        for job in self._jobs.values():
+            if job.state == JobState.RUNNING:
+                self._fail(job, self.failure_message)
+        try:
+            self._worker = worker.get_loop().create_task(self._run())
+        except RuntimeError:
+            # The loop is closing: the process is on its way out anyway.
+            return
+        self._worker.add_done_callback(self._on_worker_done)
+
+    def _fail(self, job: AudioJob, message: str) -> None:
+        job.state = JobState.FAILED
+        job.error = message
+        job.finished_at = time.time()
 
     def _enqueue(self, job: AudioJob) -> AudioJob:
         self._jobs[job.id] = job
@@ -108,7 +148,11 @@ class JobQueue(ABC):
         return job
 
     def _discard(self, job: AudioJob) -> None:
-        """Releases anything the job was holding. Nothing, by default."""
+        """Releases anything the job was holding. Nothing, by default.
+
+        Must not raise: it runs in the worker's cleanup, and from the trimming that
+        follows every finished job.
+        """
         return None
 
     def _trim(self) -> None:
@@ -137,11 +181,16 @@ class JobQueue(ABC):
                 raise
             except Exception as error:
                 logger.exception("Audio job %s failed", job.id)
-                job.state = JobState.FAILED
-                job.error = str(error)
-                job.finished_at = time.time()
+                self._fail(job, server.describe_failure(error, self.modality, self.failure_message))
             finally:
-                self._discard(job)
+                # Cleanup failing must not end the worker with it: that is how one
+                # unwritable file used to stop every job queued after it.
+                try:
+                    self._discard(job)
+                except Exception:
+                    logger.exception("Could not clean up after audio job %s", job.id)
+                if job.state == JobState.RUNNING:
+                    self._fail(job, self.failure_message)
 
     @abstractmethod
     async def _process(self, job: AudioJob) -> None:
@@ -171,6 +220,8 @@ class SynthesisQueue(JobQueue):
     """Speaks queued text, one piece at a time."""
 
     kind = JobKind.SPEECH
+    modality = Modality.SPEECH
+    failure_message = "Couldn't finish this clip. Try again."
 
     def submit(self, request: SpeechRequest, model_id: str) -> AudioJob:
         """Queues one synthesis and returns its job straight away."""
@@ -196,9 +247,7 @@ class SynthesisQueue(JobQueue):
         )
 
         if response.status_code != 200:
-            job.state = JobState.FAILED
-            job.error = server.upstream_detail(response, "Synthesis failed")
-            job.finished_at = time.time()
+            self._fail(job, server.upstream_detail(response, server.SYNTHESIS_FAILED))
             return
 
         audio = response.content
@@ -218,6 +267,8 @@ class TranscriptionQueue(JobQueue):
     """Transcribes queued recordings, one at a time."""
 
     kind = JobKind.TRANSCRIPTION
+    modality = Modality.TRANSCRIPTION
+    failure_message = "Couldn't transcribe this recording. Try again."
 
     def __init__(self) -> None:
         super().__init__()
@@ -228,15 +279,27 @@ class TranscriptionQueue(JobQueue):
     def submit(
         self,
         *,
-        data: bytes,
         filename: str,
         model_id: str,
+        data: Optional[bytes] = None,
+        path: Optional[Path] = None,
         language: Optional[str] = None,
     ) -> AudioJob:
-        """Queues one recording and returns its job straight away."""
+        """Queues one recording and returns its job straight away.
+
+        Args:
+            filename: The name the user's file had, shown while it waits.
+            model_id: The transcription model it is for.
+            data: The recording, for callers that already hold it in memory.
+            path: A recording already written to disk with :func:`staging_path`,
+                which the job takes over. How uploads arrive: a two-hour recording
+                is not something to hold in memory while it waits its turn.
+            language: The language spoken, when the user said.
+        """
         job_id = uuid.uuid4().hex
-        path = store.upload_root() / f"{job_id}-{store.safe_upload_name(filename)}"
-        path.write_bytes(data)
+        if path is None:
+            path = store.upload_root() / f"{job_id}-{store.safe_upload_name(filename)}"
+            path.write_bytes(data or b"")
         self._uploads[job_id] = path
 
         return self._enqueue(
@@ -259,28 +322,41 @@ class TranscriptionQueue(JobQueue):
         """
         path = self._uploads.pop(job.id, None)
         if path is not None:
-            path.unlink(missing_ok=True)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not delete the upload at %s", path, exc_info=True)
 
     async def _process(self, job: AudioJob) -> None:
         path = self._uploads.get(job.id)
         if path is None or not path.is_file():
-            raise FileNotFoundError("The uploaded recording is no longer available.")
-
-        response = await server.post(
-            Modality.TRANSCRIPTION,
-            "/audio/transcriptions",
-            self._progress(job),
-            files={"file": (job.source_filename or "recording.wav", path.read_bytes())},
-            data={"language": job.language} if job.language else None,
-        )
-
-        if response.status_code != 200:
-            job.state = JobState.FAILED
-            job.error = server.upstream_detail(response, "Transcription failed")
-            job.finished_at = time.time()
+            self._fail(
+                job,
+                "This recording is no longer available. Add it again, then try again.",
+            )
             return
 
-        body = response.json()
+        # Sent from the file rather than read into memory first: a long recording
+        # is hundreds of megabytes.
+        with path.open("rb") as recording:
+            response = await server.post(
+                Modality.TRANSCRIPTION,
+                "/audio/transcriptions",
+                self._progress(job),
+                files={"file": (job.source_filename or "recording.wav", recording)},
+                data={"language": job.language} if job.language else None,
+            )
+
+        if response.status_code != 200:
+            self._fail(job, server.upstream_detail(response, server.TRANSCRIPTION_FAILED))
+            return
+
+        try:
+            body = response.json()
+        except ValueError:
+            logger.warning("The transcription server answered with something that is not JSON")
+            self._fail(job, server.TRANSCRIPTION_FAILED)
+            return
         item = store.save_transcript(
             text=body.get("text", ""),
             model_id=job.model_id,
@@ -289,6 +365,15 @@ class TranscriptionQueue(JobQueue):
         )
         job.text = item.text
         self._complete(job, item.id)
+
+
+def staging_path(filename: str) -> Path:
+    """Where an upload is written before its job is queued.
+
+    In the upload directory already, under a name of its own, so a job takes the
+    file over as it is rather than copying it again.
+    """
+    return store.upload_root() / f"{uuid.uuid4().hex}-{store.safe_upload_name(filename)}"
 
 
 synthesis_queue = SynthesisQueue()

@@ -137,7 +137,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
       setListError(null);
     } catch (err) {
       setEntries([]);
-      setListError(errorMessage(err));
+      setListError(errorMessage(err, "Couldn't show this folder. Try again."));
     }
   }, [conversationId, browserPath]);
 
@@ -163,17 +163,15 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
     setIsPreviewLoading(true);
     setPreviewError(null);
     api
-      .readWorkspaceFileText(conversationId, preview)
-      .then((text) => {
+      .readWorkspaceFileText(conversationId, preview, MAX_TEXT_PREVIEW_BYTES)
+      .then(({ text, truncated }) => {
         if (cancelled) return;
         setPreviewText(
-          text.length > MAX_TEXT_PREVIEW_BYTES
-            ? text.slice(0, MAX_TEXT_PREVIEW_BYTES) + '\n… [truncated preview]'
-            : text
+          truncated ? `${text}\n… [Only the beginning is shown. Download the file to see all of it.]` : text
         );
       })
       .catch((err) => {
-        if (!cancelled) setPreviewError(errorMessage(err));
+        if (!cancelled) setPreviewError(errorMessage(err, "Couldn't open this file. Try again."));
       })
       .finally(() => {
         if (!cancelled) setIsPreviewLoading(false);
@@ -198,7 +196,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
       await refreshListing();
       setListError(null);
     } catch (err) {
-      setListError(`Upload failed: ${errorMessage(err)}`);
+      setListError(errorMessage(err, "Couldn't upload the files. Try again."));
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';

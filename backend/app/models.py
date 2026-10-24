@@ -70,6 +70,8 @@ class Message(BaseModel):
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_call_id: Optional[str] = None
     name: Optional[str] = None
+    #: A failed tool step, or an assistant message explaining why a turn failed.
+    is_error: bool = False
     created_at: Optional[str] = None
 
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -19,11 +19,16 @@ interface ContainerTerminalProps {
 
 export const ContainerTerminal: React.FC<ContainerTerminalProps> = ({ conversationId }) => {
   const hostRef = useRef<HTMLDivElement>(null);
+  // Counted rather than toggled so that Reconnect always builds a fresh session.
+  const [session, setSession] = useState(0);
+  const [ended, setEnded] = useState(false);
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
 
+    setEnded(false);
+    let opened = false;
     const term = new Terminal({
       fontFamily: 'ui-monospace, Menlo, monospace',
       fontSize: 12,
@@ -48,6 +53,7 @@ export const ContainerTerminal: React.FC<ContainerTerminalProps> = ({ conversati
     };
 
     socket.onopen = () => {
+      opened = true;
       sendResize();
       term.focus();
     };
@@ -72,7 +78,12 @@ export const ContainerTerminal: React.FC<ContainerTerminalProps> = ({ conversati
     };
 
     socket.onclose = () => {
-      term.write('\r\n\x1b[90m[session ended — reopen the terminal to reconnect]\x1b[0m\r\n');
+      term.write(
+        opened
+          ? '\r\n\x1b[90m[The terminal disconnected.]\x1b[0m\r\n'
+          : "\r\n\x1b[90m[Couldn't open the terminal.]\x1b[0m\r\n"
+      );
+      setEnded(true);
     };
 
     const keystrokes = term.onData((chunk) => {
@@ -93,7 +104,20 @@ export const ContainerTerminal: React.FC<ContainerTerminalProps> = ({ conversati
       socket.close();
       term.dispose();
     };
-  }, [conversationId]);
+  }, [conversationId, session]);
 
-  return <div ref={hostRef} className="h-full w-full bg-[#0a0c0f] [&_.xterm]:h-full p-2" />;
+  return (
+    <div className="relative h-full w-full">
+      <div ref={hostRef} className="h-full w-full bg-[#0a0c0f] [&_.xterm]:h-full p-2" />
+      {ended && (
+        <button
+          type="button"
+          onClick={() => setSession((count) => count + 1)}
+          className="absolute bottom-3 right-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-md-primary text-md-on-primary shadow-lg hover:opacity-90 transition-opacity cursor-pointer"
+        >
+          Reconnect
+        </button>
+      )}
+    </div>
+  );
 };

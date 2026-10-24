@@ -15,6 +15,7 @@ import {
   Wrench
 } from 'lucide-react';
 import { CodeBlock } from '../../ui/CodeBlock';
+import { humanizeToolName, toolCallDetail } from './toolCallLabel';
 
 interface ToolCallCardProps {
   name: string;
@@ -62,6 +63,11 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({
     }
   };
 
+  const detail = toolCallDetail(argumentsStr);
+  // A step stored with no result was cut off -- Kayak stopped, or the turn was
+  // stopped -- and is not still running, whatever a spinner would suggest.
+  const interrupted = !isExecuting && !isError && output === undefined;
+
   let formattedArgs = argumentsStr;
   let isJsonArgs = false;
   try {
@@ -81,10 +87,14 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({
       >
         <div className="flex items-center space-x-2.5 min-w-0">
           <span className="p-1.5 rounded-lg bg-md-surface-container-high border border-md-outline-variant shrink-0">{getToolIcon(name)}</span>
-          <span className="font-semibold font-mono text-md-on-surface">{name}</span>
-          <span className="text-md-on-surface-variant font-mono text-[11px] truncate max-w-xs">
-            {argumentsStr.length > 55 ? argumentsStr.slice(0, 55) + '...' : argumentsStr}
+          <span className="font-semibold text-md-on-surface shrink-0" title={name}>
+            {humanizeToolName(name)}
           </span>
+          {detail && (
+            <span className="text-md-on-surface-variant font-mono text-[11px] truncate max-w-xs">
+              {detail}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center space-x-2.5 shrink-0">
@@ -96,12 +106,16 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({
           ) : isError ? (
             <div className="inline-flex items-center gap-1 text-[10px] uppercase font-bold tracking-wider text-md-error bg-md-error-container border border-md-outline-variant px-2 py-0.5 rounded-full">
               <AlertCircle className="w-3 h-3" />
-              <span>Failed</span>
+              <span>Didn't work</span>
             </div>
-          ) : output ? (
+          ) : output !== undefined ? (
             <div className="inline-flex items-center gap-1 text-[10px] uppercase font-bold tracking-wider text-emerald-800 dark:text-emerald-200 bg-emerald-100 dark:bg-emerald-950/80 border border-emerald-300 dark:border-emerald-800/80 px-2 py-0.5 rounded-full">
               <CheckCircle2 className="w-3 h-3 stroke-[2.5]" />
-              <span>Completed</span>
+              <span>Done</span>
+            </div>
+          ) : interrupted ? (
+            <div className="inline-flex items-center gap-1 text-[10px] uppercase font-bold tracking-wider text-md-on-surface-variant bg-md-surface-container-high border border-md-outline-variant px-2 py-0.5 rounded-full">
+              <span>Didn't finish</span>
             </div>
           ) : null}
 
@@ -116,7 +130,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({
         <div className="p-3.5 border-t border-md-outline-variant bg-md-surface-container-lowest space-y-2.5">
           <div>
             <div className="text-[10px] font-bold text-md-on-surface-variant uppercase tracking-wider mb-1">
-              Input Arguments
+              What it asked for
             </div>
             <CodeBlock
               code={formattedArgs || '{}'}
@@ -128,7 +142,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({
           {output && (
             <div>
               <div className="text-[10px] font-bold text-md-on-surface-variant uppercase tracking-wider mb-1">
-                Execution Output
+                Result
               </div>
               <CodeBlock
                 code={output}

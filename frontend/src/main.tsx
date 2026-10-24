@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { App } from './App';
 import { AuthGate } from './ui/AuthGate';
+import { ErrorBoundary } from './ui/ErrorBoundary';
 import { ConversationActivityProvider } from './context/ConversationActivityContext';
 import { DialogProvider } from './context/DialogContext';
 import { ThemeProvider } from './context/ThemeContext';
@@ -20,7 +21,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <AuthGate>
           <VLLMStatusProvider>
             <ConversationActivityProvider>
-              <App />
+              {/* The last line of defence: a crash anywhere still leaves a way
+                  back, rather than a blank window. */}
+              <ErrorBoundary>
+                <App />
+              </ErrorBoundary>
             </ConversationActivityProvider>
           </VLLMStatusProvider>
         </AuthGate>

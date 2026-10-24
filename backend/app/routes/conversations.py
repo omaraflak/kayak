@@ -20,7 +20,8 @@ from backend.app.agent import events, turns
 from backend.app.agent.approvals import approval_registry
 from backend.app.agent.events import ConversationEvent
 from backend.app.agent.sandbox import sandbox_manager
-from backend.app.agent.turns import SANDBOX_UNAVAILABLE_DETAIL, ensure_sandbox
+from backend.app.agent.task_manager import task_manager
+from backend.app.agent.turns import ensure_sandbox
 from backend.app.agents.manager import agent_manager
 from backend.app.config import settings
 from backend.app.database import (
@@ -34,9 +35,10 @@ from backend.app.database import (
     get_preceding_user_message,
     list_child_conversations,
     list_conversations,
+    list_tasks,
     update_conversation,
 )
-from backend.app.llm import excerpt_title, generate_title, missing_key_error
+from backend.app.llm import excerpt_title, generate_title, turn_blocker
 from backend.app.models import (
     Conversation,
     ConversationStatus,
@@ -44,8 +46,10 @@ from backend.app.models import (
     Message,
     MessageRole,
     SendMessageRequest,
+    TaskStatus,
 )
 from backend.app.realtime import conversation_events
+from backend.app.user_errors import describe_sandbox_error
 
 logger = logging.getLogger(__name__)
 
@@ -96,22 +100,23 @@ def resolve_conversation_model(agent_id: str) -> Optional[str]:
 
 
 def require_provider_key(agent_id: str) -> None:
-    """Refuses a turn whose model has no stored credential, before anything is created.
+    """Refuses a turn that cannot run, before anything is created.
 
-    The engine reports this too, but only as a stream event, and this failure is
-    instant: on a fresh install the turn is over before the browser has finished
-    subscribing, so the event went nowhere and the user was left looking at a prompt
-    that never got an answer. Refusing the request instead puts the reason in the
-    response, where both the composer and the new-conversation screen already show it.
+    A model with no stored key, or a local model that is not running. The engine
+    reports both too, but this failure is instant: on a fresh install the turn is
+    over before the browser has finished subscribing, so the event went nowhere and
+    the user was left looking at a prompt that never got an answer. Refusing the
+    request instead puts the reason in the response, where both the composer and
+    the new-conversation screen already show it.
 
     Raises:
-        HTTPException: 400 naming the provider whose key is missing.
+        HTTPException: 400 saying what is missing and where to fix it.
     """
     model = resolve_conversation_model(agent_id)
     if not model:
         return
 
-    message = missing_key_error(model)
+    message = turn_blocker(model)
     if message:
         raise HTTPException(status_code=400, detail=message)
 
@@ -124,7 +129,7 @@ async def _generate_title(conversation_id: str, prompt: str, model_name: str) ->
             await update_conversation(conversation_id, title=generated)
             conversation_events.publish(conversation_id, events.title_updated(generated))
     except Exception:
-        logger.debug("Title generation failed for %s", conversation_id, exc_info=True)
+        logger.warning("Title generation failed for %s", conversation_id, exc_info=True)
 
 
 def _schedule_title(conversation: Conversation, prompt: Optional[str], had_title: bool) -> None:
@@ -143,7 +148,7 @@ async def load_conversation(conversation_id: str) -> Conversation:
     """
     conversation = await get_conversation(conversation_id)
     if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise HTTPException(status_code=404, detail="This conversation no longer exists.")
     return conversation
 
 
@@ -161,7 +166,7 @@ async def _load_conversation_and_anchor(
     if not any(message.id == message_id for message in messages):
         raise HTTPException(
             status_code=404,
-            detail="That message is not part of this conversation.",
+            detail="That message is no longer in this conversation. Reload it and try again.",
         )
     return conversation
 
@@ -192,11 +197,8 @@ async def create_new_conversation(request: CreateConversationRequest) -> Convers
     try:
         await ensure_sandbox(conversation)
     except Exception as error:
-        logger.warning("Failed to create Docker sandbox: %s", error)
         await delete_conversation(conversation.id)
-        raise HTTPException(
-            status_code=503, detail=f"{SANDBOX_UNAVAILABLE_DETAIL} ({error})"
-        )
+        raise HTTPException(status_code=503, detail=describe_sandbox_error(error))
 
     _schedule_title(conversation, request.initial_message, had_title=bool(request.title))
 
@@ -260,6 +262,17 @@ async def _remove_conversation_tree(conversation: Conversation) -> None:
         await _remove_conversation_tree(child)
 
     await turns.cancel(conversation.id)
+    turns.forget(conversation.id)
+
+    # A sub-agent working in the background is a task, not a turn, and cancelling
+    # the turn left it running -- and calling a paid model -- until its first write
+    # to a conversation that no longer existed failed.
+    for task in await list_tasks(conversation.id):
+        if task.status == TaskStatus.RUNNING:
+            try:
+                await task_manager.stop_task(task.id)
+            except Exception:
+                logger.warning("Could not stop task %s", task.id, exc_info=True)
 
     # Sub-agents share the parent's container, so only tear down a container that
     # this conversation owns.
@@ -267,11 +280,15 @@ async def _remove_conversation_tree(conversation: Conversation) -> None:
         try:
             await sandbox_manager.stop_and_remove_sandbox(conversation.container_id)
         except Exception:
-            logger.debug("Sandbox teardown failed for %s", conversation.id, exc_info=True)
+            logger.warning("Sandbox teardown failed for %s", conversation.id, exc_info=True)
 
     workspace_directory: Path = settings.WORKSPACES_DIR / conversation.id
     if workspace_directory.exists():
-        shutil.rmtree(workspace_directory, ignore_errors=True)
+        # Off the event loop: a workspace with thousands of files (an installed
+        # node_modules) took long enough to delete that every open stream froze.
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: shutil.rmtree(workspace_directory, ignore_errors=True)
+        )
 
     await delete_conversation(conversation.id)
 
@@ -301,9 +318,13 @@ async def resolve_tool_approval(
         HTTPException: If no tool call with this id is awaiting a decision.
     """
     if not approval_registry.resolve(request.call_id, request.approved):
+        # The id is not repeated back: Gemini's run to thousands of characters.
         raise HTTPException(
-            status_code=404,
-            detail=f"No pending approval for tool call '{request.call_id}'.",
+            status_code=410,
+            detail=(
+                "This request had already expired, so nothing was run. Ask the agent "
+                "again if you still want it done."
+            ),
         )
     return {"status": "approved" if request.approved else "rejected"}
 
@@ -319,20 +340,21 @@ async def send_user_message(
     # user to resend once the key is in place.
     require_provider_key(conversation.agent_id)
 
-    # Wait for the previous turn to finish unwinding before appending, so its cleanup
-    # writes land ahead of the new user message.
-    await turns.cancel(conversation_id)
+    async with turns.turn_lock(conversation_id):
+        # Wait for the previous turn to finish unwinding before appending, so its
+        # cleanup writes land ahead of the new user message.
+        await turns.cancel(conversation_id)
 
-    message = await add_message(
-        conversation_id=conversation_id,
-        role=MessageRole.USER,
-        content=request.content,
-    )
-    conversation_events.publish(
-        conversation_id, events.user_message(message.model_dump())
-    )
+        message = await add_message(
+            conversation_id=conversation_id,
+            role=MessageRole.USER,
+            content=request.content,
+        )
+        conversation_events.publish(
+            conversation_id, events.user_message(message.model_dump())
+        )
 
-    turns.start(conversation_id, conversation.agent_id)
+        turns.start(conversation_id, conversation.agent_id)
     return message
 
 
@@ -348,15 +370,18 @@ async def revert_to_message(
     """
     await _load_conversation_and_anchor(conversation_id, request.message_id)
 
-    # Cancel first: the engine writes placeholder results for tool calls that never
-    # ran, and those writes must land before the history is truncated.
-    await turns.cancel(conversation_id)
+    async with turns.turn_lock(conversation_id):
+        # Cancel first: the engine writes placeholder results for tool calls that
+        # never ran, and those writes must land before the history is truncated.
+        await turns.cancel(conversation_id)
 
-    prompt_message = await get_preceding_user_message(conversation_id, request.message_id)
-    truncate_from = prompt_message.id if prompt_message else request.message_id
+        prompt_message = await get_preceding_user_message(
+            conversation_id, request.message_id
+        )
+        truncate_from = prompt_message.id if prompt_message else request.message_id
 
-    removed = await delete_messages_from(conversation_id, truncate_from)
-    await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
+        removed = await delete_messages_from(conversation_id, truncate_from)
+        await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
     conversation_events.publish(conversation_id, events.history_changed())
 
     return {
@@ -377,14 +402,18 @@ async def retry_from_message(
     # answer it was going to replace.
     require_provider_key(conversation.agent_id)
 
-    await turns.cancel(conversation_id)
+    async with turns.turn_lock(conversation_id):
+        await turns.cancel(conversation_id)
 
-    removed = await delete_messages_from(conversation_id, request.message_id)
-    if not removed:
-        raise HTTPException(status_code=409, detail="Nothing to retry from that message.")
+        removed = await delete_messages_from(conversation_id, request.message_id)
+        if not removed:
+            raise HTTPException(
+                status_code=409,
+                detail="That reply is no longer in this conversation. Reload it and try again.",
+            )
 
-    conversation_events.publish(conversation_id, events.history_changed())
-    turns.start(conversation_id, conversation.agent_id)
+        conversation_events.publish(conversation_id, events.history_changed())
+        turns.start(conversation_id, conversation.agent_id)
     return {"status": "running"}
 
 
@@ -410,7 +439,7 @@ async def branch_from_message(
     copied = await copy_messages_through(conversation_id, branch.id, request.message_id)
     if not copied:
         await _remove_conversation_tree(branch)
-        raise HTTPException(status_code=409, detail="Could not copy the conversation history.")
+        raise HTTPException(status_code=409, detail="Kayak couldn't copy this conversation. Try again.")
 
     # The transcript refers to files the agent made; a branch that cannot see them
     # would be reasoning about a workspace that does not exist.
@@ -419,12 +448,9 @@ async def branch_from_message(
     try:
         await ensure_sandbox(branch)
     except Exception as error:
-        logger.warning("Failed to create sandbox for branch %s: %s", branch.id, error)
         # The copied workspace goes too, not only the database row.
         await _remove_conversation_tree(branch)
-        raise HTTPException(
-            status_code=503, detail=f"{SANDBOX_UNAVAILABLE_DETAIL} ({error})"
-        )
+        raise HTTPException(status_code=503, detail=describe_sandbox_error(error))
 
     return branch
 
@@ -459,13 +485,17 @@ def _catch_up(conversation_id: str, status: str) -> List[ConversationEvent]:
     be told what it missed: how much of the answer exists, which tools have run, and
     whether the turn is parked on an approval it never saw announced.
     """
+    replay = conversation_events.replay_for(conversation_id)
     caught_up: List[ConversationEvent] = [
         # `is_running` is what restores the composer; the stored status alone lags a
         # turn that is finishing as we connect.
-        events.connected(status, turns.is_running(conversation_id))
+        events.connected(
+            status,
+            turns.is_running(conversation_id),
+            replay.anchor_message_id if replay is not None else None,
+        )
     ]
 
-    replay = conversation_events.replay_for(conversation_id)
     if replay is not None:
         caught_up.extend(replay.events())
 

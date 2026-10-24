@@ -62,7 +62,7 @@ class AudioRuntime(Runtime):
         if request.trust_remote_code:
             spec.command.append("--trust-remote-code")
 
-        spec.notes.append(f"ℹ Loading {self.label.lower()} model {request.model_id}...")
+        spec.notes.append(f"ℹ Loading {self.label.lower()} model {request.model_id} on this Mac's processor...")
         return spec
 
 
@@ -72,11 +72,8 @@ class SpeechRuntime(AudioRuntime):
     modality = Modality.SPEECH
     key = "tts"
     label = "Speech synthesis"
-    server_label = "The speech server"
-    description = (
-        "Turns text into audio. Serves any repository one of the runtime's backends "
-        "can load."
-    )
+    server_label = "The voice model"
+    description = "Models that read text aloud."
     container_name = "kayak-tts-server"
     server_mode = "speech"
     pipeline_tags = ("text-to-speech",)
@@ -106,11 +103,8 @@ class TranscriptionRuntime(AudioRuntime):
     modality = Modality.TRANSCRIPTION
     key = "stt"
     label = "Transcription"
-    server_label = "The transcription server"
-    description = (
-        "Turns recordings into text. Serves any speech-recognition repository "
-        "`transformers` implements, Whisper included."
-    )
+    server_label = "The transcription model"
+    description = "Models that turn recordings into text, Whisper among them."
     container_name = "kayak-stt-server"
     server_mode = "transcription"
     pipeline_tags = ("automatic-speech-recognition",)

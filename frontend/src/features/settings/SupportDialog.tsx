@@ -28,20 +28,23 @@ interface SupportDialogProps {
  * always possible by hand even when nothing else works.
  */
 export const SupportDialog: React.FC<SupportDialogProps> = ({ bundle, address, onClose }) => {
-  const [copied, setCopied] = useState(false);
+  // 'selected' when the clipboard was refused and the text was selected instead,
+  // so the button does not claim a copy that did not happen.
+  const [copied, setCopied] = useState<false | 'copied' | 'selected'>(false);
   const [addressCopied, setAddressCopied] = useState(false);
 
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(bundle);
+      setCopied('copied');
     } catch {
       // Clipboard permission can be refused; the textarea below is selectable,
       // so falling back to selecting it is enough.
       const field = document.getElementById('support-bundle') as HTMLTextAreaElement | null;
       field?.select();
+      setCopied('selected');
     }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setTimeout(() => setCopied(false), 2500);
   };
 
   const copyAddress = async () => {
@@ -49,6 +52,7 @@ export const SupportDialog: React.FC<SupportDialogProps> = ({ bundle, address, o
       await navigator.clipboard.writeText(address);
     } catch {
       // The address is `select-all`, so selecting it by hand still works.
+      return;
     }
     setAddressCopied(true);
     setTimeout(() => setAddressCopied(false), 2000);
@@ -139,7 +143,7 @@ export const SupportDialog: React.FC<SupportDialogProps> = ({ bundle, address, o
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-md-surface-container-high text-md-on-surface text-[11px] font-bold hover:brightness-95 cursor-pointer"
           >
             {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-            {copied ? 'Copied' : 'Copy report'}
+            {copied === 'copied' ? 'Copied' : copied === 'selected' ? 'Selected — press ⌘C' : 'Copy report'}
           </button>
           <button
             type="button"

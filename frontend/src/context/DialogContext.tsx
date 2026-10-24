@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, ReactNode } from 'react';
 import { 
   AlertTriangle, 
   AlertCircle, 
@@ -46,11 +46,22 @@ export const useDialog = () => {
 };
 
 export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const [dialogConfig, setDialogConfig] = useState<DialogOptions | null>(null);
-  // Settled with whether the user confirmed; an alert ignores the answer.
-  const [resolver, setResolver] = useState<{ resolve: (confirmed: boolean) => void } | null>(
-    null
+  // Dialogs wait their turn. A second one used to replace whatever was open, and the
+  // first never settled: an error arriving over a "Revert?" confirmation left the
+  // revert waiting on an answer the user could no longer give.
+  const [queue, setQueue] = useState<
+    Array<{ config: DialogOptions; resolve: (confirmed: boolean) => void }>
+  >([]);
+  const current = queue[0];
+  const dialogConfig = current?.config ?? null;
+  const isOpen = Boolean(current);
+
+  const open = useCallback(
+    (config: DialogOptions) =>
+      new Promise<boolean>((resolve) => {
+        setQueue((pending) => [...pending, { config, resolve }]);
+      }),
+    []
   );
 
   const confirm = useCallback(
@@ -60,21 +71,16 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       confirmText?: string;
       cancelText?: string;
       variant?: DialogVariant;
-    }): Promise<boolean> => {
-      return new Promise((resolve) => {
-        setDialogConfig({
-          title: options.title,
-          message: options.message,
-          variant: options.variant || 'question',
-          confirmText: options.confirmText || 'Confirm',
-          cancelText: options.cancelText || 'Cancel',
-          showCancel: true,
-        });
-        setResolver({ resolve });
-        setIsOpen(true);
-      });
-    },
-    []
+    }): Promise<boolean> =>
+      open({
+        title: options.title,
+        message: options.message,
+        variant: options.variant || 'question',
+        confirmText: options.confirmText || 'Confirm',
+        cancelText: options.cancelText || 'Cancel',
+        showCancel: true,
+      }),
+    [open]
   );
 
   const alert = useCallback(
@@ -83,31 +89,42 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       message: string | ReactNode;
       confirmText?: string;
       variant?: DialogVariant;
-    }): Promise<void> => {
-      return new Promise((resolve) => {
-        setDialogConfig({
-          title: options.title,
-          message: options.message,
-          variant: options.variant || 'info',
-          confirmText: options.confirmText || 'OK',
-          showCancel: false,
-        });
-        setResolver({ resolve: () => resolve() });
-        setIsOpen(true);
-      });
-    },
-    []
+    }): Promise<void> =>
+      open({
+        title: options.title,
+        message: options.message,
+        variant: options.variant || 'info',
+        confirmText: options.confirmText || 'OK',
+        showCancel: false,
+      }).then(() => undefined),
+    [open]
   );
 
-  const handleConfirm = () => {
-    setIsOpen(false);
-    resolver?.resolve(true);
+  // Removes exactly the dialog being answered. A double click reached here twice
+  // before the next render, and dropped the dialog queued behind it unanswered.
+  const settle = (confirmed: boolean) => {
+    if (!current) return;
+    current.resolve(confirmed);
+    setQueue((pending) => (pending[0] === current ? pending.slice(1) : pending));
   };
 
-  const handleCancel = () => {
-    setIsOpen(false);
-    resolver?.resolve(false);
-  };
+  const handleConfirm = () => settle(true);
+
+  const handleCancel = () => settle(false);
+
+  // Escape closes a dialog the way the close button does: a notice is acknowledged,
+  // a question is answered "no".
+  useEffect(() => {
+    if (!current) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      current.resolve(false);
+      setQueue((pending) => (pending[0] === current ? pending.slice(1) : pending));
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [current]);
 
   const getIcon = (variant?: DialogVariant) => {
     switch (variant) {

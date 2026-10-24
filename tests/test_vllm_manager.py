@@ -33,8 +33,14 @@ class FakeContainers:
 
 
 class FakeDockerClient:
-    def __init__(self, container: Optional[FakeContainer]):
+    def __init__(self, container: Optional[FakeContainer], alive: bool = True):
         self.containers = FakeContainers(container)
+        self._alive = alive
+
+    def ping(self) -> bool:
+        if not self._alive:
+            raise ConnectionError("Docker is not running")
+        return True
 
 
 class UnreachableClient:
@@ -92,7 +98,10 @@ class TestCrashedContainerIsReported:
 
         assert status.state == ServerState.ERROR
         assert status.exit_code == 1
-        assert "exited with code 1" in (status.error or "")
+        assert status.message == "Model couldn't start."
+        # Nothing in the output names a cause, so the sentence says where to look.
+        assert "Open Details below" in (status.error or "")
+        assert status.crashed is False
 
     def test_an_out_of_memory_kill_says_so(self, manager):
         manager._client = FakeDockerClient(
@@ -122,14 +131,19 @@ class TestCrashedContainerIsReported:
 
         assert status.state == ServerState.IDLE
 
-    def test_a_ready_server_that_stops_answering_is_reported_stopped(self, manager):
+    def test_a_ready_server_whose_container_vanished_is_reported(self, manager):
+        """It used to become STOPPED with no model, and its row silently vanished."""
         manager._client = FakeDockerClient(None)
         manager._status.state = ServerState.READY
         manager._status.model_id = "Org/Model"
 
         status = asyncio.run(manager.check_and_sync_status())
 
-        assert status.state == ServerState.STOPPED
+        assert status.state == ServerState.ERROR
+        assert status.model_id == "Org/Model"
+        assert status.message == "Model stopped unexpectedly."
+        assert status.error == "Model stopped unexpectedly. Start it again from Local Models."
+        assert status.crashed is True
 
     def test_a_serving_model_that_crashes_reports_why(self, manager):
         # A long context can exhaust memory well after the server came up healthy.
@@ -195,10 +209,12 @@ class TestMetalIntegration:
         assert payload["metal"]["running"] is True
         assert payload["metal"]["model"] == "mlx-community/Qwen2.5-7B"
 
-    def test_deploy_mlx_model_when_metal_unsupported(self, manager, monkeypatch):
+    def test_deploy_mlx_model_when_metal_unsupported(self, manager, tmp_path, monkeypatch):
         from backend.app.inference import metal
+        from backend.app.inference.manager import APPLE_CHIP_REQUIRED
         from backend.app.inference.models import MetalStatus, DeployRequest
 
+        monkeypatch.setattr(metal.settings, "DATA_DIR", tmp_path)
         monkeypatch.setattr(
             metal,
             "read_status",
@@ -210,7 +226,10 @@ class TestMetalIntegration:
         )
 
         assert progress.state == ServerState.ERROR
-        assert "MLX models require Apple Silicon" in progress.message
+        # The failure names its model, so the row and the chat composer can too.
+        assert progress.model_id == "mlx-community/Qwen2.5-7B"
+        assert progress.message == "Qwen2.5-7B couldn't start."
+        assert progress.error == APPLE_CHIP_REQUIRED
 
     def test_check_and_sync_status_reports_metal_ready(self, manager, monkeypatch):
         from backend.app.inference import metal
@@ -220,6 +239,11 @@ class TestMetalIntegration:
             metal,
             "read_status",
             lambda: MetalStatus(supported=True, state="ready", model="mlx-community/Qwen2.5-7B", port=8001),
+        )
+        monkeypatch.setattr(
+            metal,
+            "read_desired",
+            lambda: metal.MetalDesired(running=True, model="mlx-community/Qwen2.5-7B"),
         )
 
         status = asyncio.run(manager.check_and_sync_status())
@@ -236,6 +260,11 @@ class TestMetalIntegration:
             metal,
             "read_status",
             lambda: MetalStatus(supported=True, state="starting", model="mlx-community/Qwen2.5-7B"),
+        )
+        monkeypatch.setattr(
+            metal,
+            "read_desired",
+            lambda: metal.MetalDesired(running=True, model="mlx-community/Qwen2.5-7B"),
         )
 
         status = asyncio.run(manager.check_and_sync_status())
@@ -660,10 +689,13 @@ class TestInfrastructureResilience:
 
 
 class TestMetalCrashAfterReady:
-    def test_a_metal_server_that_errors_while_serving_reports_the_reason(self, manager, monkeypatch):
+    def test_a_metal_server_that_errors_while_serving_reports_the_reason(
+        self, manager, tmp_path, monkeypatch
+    ):
         from backend.app.inference import metal
         from backend.app.inference.models import MetalStatus
 
+        monkeypatch.setattr(metal.settings, "DATA_DIR", tmp_path)
         monkeypatch.setattr(
             metal,
             "read_status",
@@ -674,6 +706,7 @@ class TestMetalCrashAfterReady:
                 error="the GPU ran out of memory",
             ),
         )
+        metal.write_desired(running=True, model="mlx-community/M")
 
         manager._status.state = ServerState.READY
         manager._status.model_id = "mlx-community/M"
@@ -681,7 +714,44 @@ class TestMetalCrashAfterReady:
         status = asyncio.run(manager.check_and_sync_status())
 
         assert status.state == ServerState.ERROR
-        assert "out of memory" in (status.error or "")
+        assert status.crashed is True
+        assert status.message == "M stopped unexpectedly."
+        # An older launcher's raw text is explained, and kept in the Details.
+        assert "more memory than this Mac has free" in (status.error or "")
+        assert any("the GPU ran out of memory" in line for line in manager._log_history)
+        # And the launcher is told not to bring it back on its own.
+        assert metal.read_desired().running is False
+
+    def test_a_friendly_launcher_error_is_shown_as_it_is(self, manager, tmp_path, monkeypatch):
+        from backend.app.inference import metal
+        from backend.app.inference.models import MetalStatus
+
+        monkeypatch.setattr(metal.settings, "DATA_DIR", tmp_path)
+        friendly = "This model needs more memory than this Mac has free."
+        monkeypatch.setattr(
+            metal,
+            "read_status",
+            lambda: MetalStatus(
+                supported=True,
+                installed=True,
+                state="error",
+                model="mlx-community/M",
+                error=friendly,
+                error_detail="Traceback (most recent call last):\nRuntimeError: [metal] OOM",
+            ),
+        )
+        metal.write_desired(running=True, model="mlx-community/M")
+
+        manager._status.state = ServerState.LOADING
+        manager._status.model_id = "mlx-community/M"
+
+        status = asyncio.run(manager.check_and_sync_status())
+
+        assert status.state == ServerState.ERROR
+        assert status.error == friendly
+        assert status.message == "M couldn't start."
+        # The raw output goes to Details, never to the headline.
+        assert any("[metal] OOM" in line for line in manager._log_history)
 
 
 class TestContextRetryDecision:
@@ -876,8 +946,12 @@ class TestPortFallback:
             )
         )
 
+        from backend.app.inference import failures
+
         assert manager.get_status().state == ServerState.ERROR
-        assert "No free port" in (manager.get_status().error or "")
+        assert manager.get_status().error == failures.PORT_TAKEN
+        # The technical reason is kept for Details.
+        assert any("No free port" in line for line in manager._log_history)
 
     def test_api_base_follows_the_chosen_port(self, manager):
         from backend.app.config import local_api_base, settings
@@ -917,7 +991,9 @@ class TestSyncAdoptsTheContainersPort:
             "Ports": {"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8002"}]}
         }
         manager._client = FakeDockerClient(container)
-        manager._status.state = ServerState.STOPPED
+        # IDLE: what this process is in after a restart, the one time adopting a
+        # running container is right.
+        manager._status.state = ServerState.IDLE
 
         status = asyncio.run(manager.check_and_sync_status())
 

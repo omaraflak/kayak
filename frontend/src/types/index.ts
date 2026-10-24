@@ -84,6 +84,11 @@ export interface Message {
   tool_calls?: ToolCallItem[] | null;
   tool_call_id?: string | null;
   name?: string | null;
+  /**
+   * On a tool result, that the step failed. On an agent message, that it explains
+   * why a turn failed: written for the user, and never sent to the model.
+   */
+  is_error?: boolean;
   created_at?: string;
 }
 
@@ -324,6 +329,11 @@ export interface VLLMDeploymentProgress {
   error?: string | null;
   /** Set when the container stopped on its own, so a crash reads as a crash. */
   exit_code?: number | null;
+  /**
+   * Set on an error when the model had been running and then stopped, rather than
+   * never starting: "stopped unexpectedly" and "couldn't start" are different news.
+   */
+  crashed?: boolean;
 }
 
 export interface VLLMDeployRequest {
@@ -343,6 +353,8 @@ export interface VLLMDeployRequest {
    * where settings were chosen deliberately; bare deploys leave a running server alone.
    */
   force_restart?: boolean;
+  /** Overrides the tool-call format chosen for the model. Set by automatic retries. */
+  tool_parser?: string | null;
 }
 
 /**
@@ -375,6 +387,8 @@ export interface MetalStatus {
   model: string | null;
   port: number;
   error: string | null;
+  /** The raw output behind `error`, for a model's Details. Absent from older launchers. */
+  error_detail?: string | null;
   /**
    * Why Metal is unavailable when the hardware could otherwise do it, such as
    * an Intel build of the launcher running under Rosetta. Distinct from
@@ -511,4 +525,12 @@ export interface ModelClassification {
   supported: boolean;
   /** True when the Hub could not be reached, so the caller should fall back. */
   unknown: boolean;
+  /** The makers ask people to accept their terms before downloading it. */
+  gated?: boolean;
+  /** Hugging Face has no such repository, or none this Mac may see. */
+  not_found?: boolean;
+  /** Downloading it needs a Hugging Face token that is missing or was refused. */
+  needs_token?: boolean;
+  /** Why it cannot be started as things stand, written to be shown as it is. */
+  message?: string | null;
 }

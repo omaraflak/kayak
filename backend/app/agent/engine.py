@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 import json
+import logging
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple, Union
 import uuid
@@ -49,10 +50,14 @@ APPROVAL_TIMEOUT_RESULT = (
     "Error: This tool call timed out waiting for user approval and was not executed."
 )
 
+logger = logging.getLogger(__name__)
+
+#: Shown when a turn fails in a way nothing more specific explains.
+TURN_FAILED = "Something went wrong and the agent stopped. Try again."
+
 MAX_ITERATIONS_NOTICE = (
-    "I stopped because I reached the maximum number of tool-use steps allowed for a "
-    "single turn. The work above is incomplete. Tell me to continue if you want me to "
-    "keep going from here."
+    "I've paused after {limit} steps so I don't run on forever. The work above isn't "
+    "finished yet. Reply \"continue\" and I'll pick up where I left off."
 )
 
 
@@ -82,12 +87,15 @@ async def _resolve_session_context(
     """
     conv = await get_conversation(conversation_id)
     if not conv:
-        return None, f"Conversation '{conversation_id}' not found."
+        return None, "This conversation no longer exists."
 
     active_agent_id = agent_id or conv.agent_id
     agent_config = agent_manager.get_agent(active_agent_id) or agent_manager.get_agent("general")
     if not agent_config:
-        return None, f"Agent configuration '{active_agent_id}' not found."
+        return None, (
+            "The agent for this conversation no longer exists. Start a new "
+            "conversation with another agent."
+        )
 
     resolved_workspace = workspace_dir if workspace_dir else (settings.WORKSPACES_DIR / conversation_id)
     resolved_workspace.mkdir(parents=True, exist_ok=True)
@@ -142,7 +150,13 @@ def _build_llm_messages(
         {"role": MessageRole.SYSTEM.value, "content": system_prompt_text}
     ]
 
-    for msg in repair_tool_call_pairing(raw_messages):
+    # An explanation of why an earlier turn failed was written for the user, not
+    # said by the model; sending it back would have the model apologise for it.
+    spoken = [
+        msg for msg in raw_messages
+        if not (msg.is_error and msg.role == MessageRole.ASSISTANT)
+    ]
+    for msg in repair_tool_call_pairing(spoken):
         role_str = msg.role.value if isinstance(msg.role, MessageRole) else str(msg.role)
         entry: Dict[str, Any] = {"role": role_str}
         if msg.content is not None:
@@ -278,8 +292,14 @@ async def _record_tool_result(
     call_id: str,
     tool_name: str,
     output: str,
+    is_error: bool,
 ) -> None:
-    """Persists a tool result, shielded so it still lands during cancellation."""
+    """Persists a tool result, shielded so it still lands during cancellation.
+
+    Whether it failed is stored with it. The transcript used to work it out again
+    from the text, with a stricter rule than the one used live, so a step shown as
+    failed while it ran read as completed after a reload.
+    """
     await asyncio.shield(
         add_message(
             conversation_id=conversation_id,
@@ -287,6 +307,7 @@ async def _record_tool_result(
             content=output,
             tool_call_id=call_id,
             name=tool_name,
+            is_error=is_error,
         )
     )
 
@@ -311,10 +332,31 @@ async def _close_unexecuted_tool_calls(
                 call_id=tc["id"],
                 tool_name=tc["function"]["name"],
                 output=reason,
+                is_error=True,
             )
         except Exception:
             # History repair covers anything that fails to persist here.
             pass
+
+
+async def record_failure(conversation_id: str, message: str) -> None:
+    """Stores why a turn failed, as a message the user sees and the model does not.
+
+    Only announcing it left nothing behind: a turn that failed before the page was
+    listening -- a refused key on a new conversation fails in milliseconds -- showed
+    the user's message with no answer and no reason, and so did any reload.
+    """
+    try:
+        await asyncio.shield(
+            add_message(
+                conversation_id=conversation_id,
+                role=MessageRole.ASSISTANT,
+                content=message,
+                is_error=True,
+            )
+        )
+    except Exception:
+        logger.warning("Could not record a failed turn for %s", conversation_id, exc_info=True)
 
 
 @dataclass
@@ -323,7 +365,12 @@ class _AssistantTurn:
     content: str
     thinking: str
     tool_calls: List[Dict[str, Any]]
-    failed: bool
+    #: Why the model call failed, already worded for the user; None if it did not.
+    error: Optional[str] = None
+
+    @property
+    def failed(self) -> bool:
+        return self.error is not None
 
 
 class AgentEngine:
@@ -343,7 +390,7 @@ class AgentEngine:
         content = ""
         reasoning = ""
         active_tool_calls: Dict[int, Dict[str, Any]] = {}
-        failed = False
+        error: Optional[str] = None
 
         async for chunk in generate_completion_stream(
             model=session.agent_config.model,
@@ -370,15 +417,16 @@ class AgentEngine:
                 yield events.warning(str(chunk.get("warning", "")))
 
             elif chunk_type == "error":
-                yield events.error(str(chunk.get("error", "")))
-                failed = True
+                # Announced by the caller once it is stored, so that a client
+                # reloading on the event finds it in the history.
+                error = str(chunk.get("error") or "") or TURN_FAILED
                 break
 
         yield _AssistantTurn(
             content=content,
             thinking=reasoning,
             tool_calls=_finalize_tool_calls(active_tool_calls),
-            failed=failed,
+            error=error,
         )
 
     async def run(
@@ -411,7 +459,9 @@ class AgentEngine:
             depth=depth,
         )
         if error or not session:
-            yield events.error(error or "The conversation could not be started.")
+            message = error or TURN_FAILED
+            await record_failure(conversation_id, message)
+            yield events.error(message)
             yield events.done()
             return
 
@@ -436,6 +486,8 @@ class AgentEngine:
                     # Persist whatever was streamed before the failure so the partial
                     # turn is not silently lost, but drop any half-built tool calls.
                     await self._persist_assistant_turn(conversation_id, turn, with_calls=False)
+                    await record_failure(conversation_id, turn.error or TURN_FAILED)
+                    yield events.error(turn.error or TURN_FAILED)
                     hit_ceiling = False
                     break
 
@@ -459,12 +511,13 @@ class AgentEngine:
                     raise
 
             if hit_ceiling:
+                notice = MAX_ITERATIONS_NOTICE.format(limit=iteration_ceiling)
                 await add_message(
                     conversation_id=conversation_id,
                     role=MessageRole.ASSISTANT,
-                    content=MAX_ITERATIONS_NOTICE,
+                    content=notice,
                 )
-                yield events.max_iterations(iteration_ceiling, MAX_ITERATIONS_NOTICE)
+                yield events.max_iterations(iteration_ceiling, notice)
         finally:
             approval_registry.cancel_conversation(conversation_id)
             activity_tracker.set_idle(conversation_id)
@@ -523,7 +576,7 @@ class AgentEngine:
             fn_name = tc["function"]["name"]
             yield events.tool_call_result(call_id, fn_name, output, is_error=is_error)
             await _record_tool_result(
-                session.conversation_id, call_id, fn_name, output
+                session.conversation_id, call_id, fn_name, output, is_error
             )
             executed_ids.add(call_id)
 
@@ -559,7 +612,7 @@ class AgentEngine:
                 output = format_denial(fn_name, session.agent_config)
                 yield events.tool_call_result(call_id, fn_name, output, is_error=True)
                 await _record_tool_result(
-                    session.conversation_id, call_id, fn_name, output
+                    session.conversation_id, call_id, fn_name, output, True
                 )
                 executed_ids.add(call_id)
                 continue
@@ -581,7 +634,7 @@ class AgentEngine:
                     )
                     yield events.tool_call_result(call_id, fn_name, output, is_error=True)
                     await _record_tool_result(
-                        session.conversation_id, call_id, fn_name, output
+                        session.conversation_id, call_id, fn_name, output, True
                     )
                     executed_ids.add(call_id)
                     continue
@@ -593,7 +646,7 @@ class AgentEngine:
             yield events.tool_call_result(call_id, fn_name, output, is_error=is_error)
 
             await _record_tool_result(
-                session.conversation_id, call_id, fn_name, output
+                session.conversation_id, call_id, fn_name, output, is_error
             )
             executed_ids.add(call_id)
 

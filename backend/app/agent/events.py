@@ -196,6 +196,10 @@ class ConnectedEvent(TypedDict):
     type: Literal["connected"]
     status: str
     is_running: bool
+    #: While a turn runs, the last message stored before it began. The replay that
+    #: follows covers everything after it, so the client shows its loaded history
+    #: only this far until the turn ends.
+    turn_anchor: Optional[str]
 
 
 class PingEvent(TypedDict):
@@ -215,8 +219,15 @@ def history_changed() -> HistoryChangedEvent:
     return {"type": "history_changed"}
 
 
-def connected(status: str, is_running: bool) -> ConnectedEvent:
-    return {"type": "connected", "status": status, "is_running": is_running}
+def connected(
+    status: str, is_running: bool, turn_anchor: Optional[str] = None
+) -> ConnectedEvent:
+    return {
+        "type": "connected",
+        "status": status,
+        "is_running": is_running,
+        "turn_anchor": turn_anchor,
+    }
 
 
 def ping() -> PingEvent:

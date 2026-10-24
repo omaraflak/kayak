@@ -7,13 +7,13 @@ while a single agent waits on a build or a test run.
 """
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 import io
 import json
 import logging
 from pathlib import Path
-import queue
 import tarfile
 import threading
 import time
@@ -44,6 +44,9 @@ from backend.app.config import settings
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+#: Threads for blocking Docker SDK calls. See `SandboxManager._run_blocking`.
+_DOCKER_POOL = ThreadPoolExecutor(max_workers=16, thread_name_prefix="docker")
 
 #: Exit status of a process killed with SIGKILL: by `timeout --signal=KILL` when it
 #: runs out of time, or by the kernel when the container runs out of memory.
@@ -382,8 +385,12 @@ class SandboxManager:
         self._docker_available = self._client is not None
 
     async def _run_blocking(self, func: Callable[[], T]) -> T:
-        """Runs a blocking docker SDK call on the default thread pool."""
-        return await asyncio.get_running_loop().run_in_executor(None, func)
+        """Runs a blocking docker SDK call on the pool kept for Docker.
+
+        A pool of its own, so that nothing else waiting on a thread -- a web search,
+        an upload -- can hold up the calls that stop sandboxes when Kayak closes.
+        """
+        return await asyncio.get_running_loop().run_in_executor(_DOCKER_POOL, func)
 
     def _require_client(self) -> docker.DockerClient:
         """Returns the Docker client, reconnecting if Docker was down until now.
@@ -684,7 +691,18 @@ class SandboxManager:
             ExecChunk: A piece of stdout or stderr, in arrival order.
         """
         client = self._require_client()
-        chunks: queue.Queue[Optional[ExecChunk]] = queue.Queue(maxsize=256)
+        loop = asyncio.get_running_loop()
+        # Handed over with call_soon_threadsafe rather than waited for on a pooled
+        # thread: a quiet background task -- a dev server, a watcher -- used to hold
+        # one of the few shared threads for as long as it ran, and a handful of them
+        # left tool calls and shutdown with none. The semaphore keeps a chatty
+        # process from outrunning the reader without bound.
+        chunks: "asyncio.Queue[Optional[ExecChunk]]" = asyncio.Queue()
+        slots = threading.Semaphore(256)
+
+        def _put(chunk: Optional[ExecChunk]) -> None:
+            slots.acquire()
+            loop.call_soon_threadsafe(chunks.put_nowait, chunk)
 
         def _drain() -> None:
             try:
@@ -693,24 +711,20 @@ class SandboxManager:
                 )
                 for stdout_bytes, stderr_bytes in stream:
                     if stdout_bytes:
-                        chunks.put(
-                            ExecChunk(stdout_bytes.decode("utf-8", "replace"), False)
-                        )
+                        _put(ExecChunk(stdout_bytes.decode("utf-8", "replace"), False))
                     if stderr_bytes:
-                        chunks.put(
-                            ExecChunk(stderr_bytes.decode("utf-8", "replace"), True)
-                        )
+                        _put(ExecChunk(stderr_bytes.decode("utf-8", "replace"), True))
             except Exception as error:  # surfaced as task stderr rather than lost
-                chunks.put(ExecChunk(f"[stream ended: {error}]\n", True))
+                _put(ExecChunk(f"[stream ended: {error}]\n", True))
             finally:
-                chunks.put(None)
+                _put(None)
 
         worker = threading.Thread(target=_drain, daemon=True)
         worker.start()
 
-        loop = asyncio.get_running_loop()
         while True:
-            chunk = await loop.run_in_executor(None, chunks.get)
+            chunk = await chunks.get()
+            slots.release()
             if chunk is None:
                 return
             yield chunk

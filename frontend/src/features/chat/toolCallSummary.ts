@@ -14,9 +14,9 @@ export type ToolCallTone = 'clean' | 'partial';
 export interface ToolCallSummary {
   total: number;
   errorCount: number;
-  /** Describes the group, e.g. "8 tool calls executed". */
+  /** Describes the group, e.g. "8 steps". */
   label: string;
-  /** Short status chip, e.g. "completed" or "1 error". */
+  /** Short status chip, e.g. "done" or "1 didn't work". */
   badgeLabel: string;
   tone: ToolCallTone;
 }
@@ -30,11 +30,8 @@ export function summarizeToolCalls(
   return {
     total,
     errorCount,
-    label: `${total} ${total === 1 ? 'tool call' : 'tool calls'} executed`,
-    badgeLabel:
-      errorCount === 0
-        ? 'completed'
-        : `${errorCount} ${errorCount === 1 ? 'error' : 'errors'}`,
+    label: `${total} ${total === 1 ? 'step' : 'steps'}`,
+    badgeLabel: errorCount === 0 ? 'done' : `${errorCount} didn't work`,
     tone: errorCount === 0 ? 'clean' : 'partial',
   };
 }

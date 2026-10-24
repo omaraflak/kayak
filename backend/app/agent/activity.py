@@ -17,6 +17,7 @@ import asyncio
 import logging
 from typing import List, Set
 
+from backend.app import sse
 from backend.app.agent.events import ActivityEvent, conversation_activity
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,7 @@ class ActivityTracker:
             except asyncio.QueueFull:
                 logger.warning("Dropping activity listener that is not draining events.")
                 self.unsubscribe(queue)
+                sse.overflow(queue)
 
 
 activity_tracker = ActivityTracker()

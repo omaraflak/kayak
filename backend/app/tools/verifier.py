@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from backend.app.identifiers import clean_identifier
 from backend.app.tools.schema import ToolSourceError, read_custom_tool
+from backend.app.user_errors import describe_sandbox_error
 
 #: How long verify.py may run before it is killed.
 VERIFY_TIMEOUT_SECONDS = 60
@@ -61,13 +62,17 @@ async def run_tool_verification(
         )
     except Exception as error:
         return ToolVerificationResult(
-            success=False, stdout="", stderr=str(error), parsed_schema=schema, error=str(error)
+            success=False,
+            stdout="",
+            stderr=str(error),
+            parsed_schema=schema,
+            error=describe_sandbox_error(error),
         )
 
     if run.exit_code is None:
-        message = f"Verification script timed out after {timeout_seconds} seconds."
+        message = f"The tests took longer than {timeout_seconds} seconds and were stopped."
         return ToolVerificationResult(
-            success=False, stdout=run.stdout, stderr=message, parsed_schema=schema, error="Timeout"
+            success=False, stdout=run.stdout, stderr=message, parsed_schema=schema, error=message
         )
 
     success = run.exit_code == 0
@@ -76,5 +81,5 @@ async def run_tool_verification(
         stdout=run.stdout,
         stderr=run.stderr,
         parsed_schema=schema,
-        error=None if success else f"Tests failed with exit code {run.exit_code}",
+        error=None if success else "The tool's tests failed. Their output is below.",
     )

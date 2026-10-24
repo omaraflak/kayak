@@ -62,10 +62,17 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
   const [allowSelfSubagent, setAllowSelfSubagent] = useState(true);
   const [otherSubagents, setOtherSubagents] = useState<string[]>([]);
 
+  // Whether the lists of tools and skills arrived. Saving without them wrote an
+  // agent with no tools at all: the editor's grants start from those lists, so a
+  // failed load looked exactly like an agent the user had stripped of everything.
+  const [metadataState, setMetadataState] = useState<'loading' | 'error' | 'ready'>('loading');
+  const [metadataAttempt, setMetadataAttempt] = useState(0);
+
   // Tools and skills are re-read when the editor opens: they change from other tabs
   // and from agents installing them, and a stale list would silently drop grants.
   useEffect(() => {
     let cancelled = false;
+    setMetadataState('loading');
     Promise.all([api.listTools(), api.listToolCategories(), api.listSkills()])
       .then(([toolsData, categoriesData, skillsData]) => {
         if (cancelled) return;
@@ -73,12 +80,16 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
         setCategories(categoriesData);
         setSkills(skillsData);
         setToolAccess(deriveToolAccess(seed, toolsData));
+        setMetadataState('ready');
       })
-      .catch((err) => console.error('Failed to load tools/skills metadata:', err));
+      .catch((err) => {
+        console.error('Failed to load tools/skills metadata:', err);
+        if (!cancelled) setMetadataState('error');
+      });
     return () => {
       cancelled = true;
     };
-  }, [seed]);
+  }, [seed, metadataAttempt]);
 
   useEffect(() => {
     // A duplicate starts from the source profile but must not reuse its id.
@@ -112,7 +123,7 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
     return null;
   }, [isNew, id, existingAgents]);
 
-  const canSave = Boolean(name.trim()) && !idError;
+  const canSave = Boolean(name.trim()) && !idError && metadataState === 'ready';
 
   const handleReset = () => {
     if (!seed) return;
@@ -163,10 +174,10 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
       await api.saveAgent(payload);
       onSaved(payload.id);
     } catch (err) {
-      const reason = errorMessage(err) || 'Could not save this agent profile.';
+      const reason = errorMessage(err, "Couldn't save the agent. Try again.");
       setError(reason);
       dialog.alert({
-        title: 'Save Failed',
+        title: "Couldn't save the agent",
         message: reason,
         variant: 'danger',
       });
@@ -200,7 +211,7 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
               {isNew ? (duplicateOf ? `Duplicate of ${duplicateOf.name}` : 'New Agent') : `Editing ${agent?.name}`}
             </h2>
             <p className="text-[11px] text-md-on-surface-variant truncate">
-              Saved to <code className="font-mono">data/agents/{id || '<id>'}.yaml</code>
+              A model, with the instructions, tools and skills it works with.
             </p>
           </div>
         </div>
@@ -234,6 +245,21 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
 
       <div className="flex-1 overflow-y-auto p-8 bg-md-surface">
         <div className="space-y-6 max-w-4xl mx-auto pb-12">
+          {metadataState === 'error' && (
+            <div className="rounded-xl border border-md-outline-variant bg-md-error-container px-4 py-3 text-xs text-md-error flex items-center justify-between gap-3">
+              <span>
+                Couldn't load the list of tools and skills, so this agent can't be saved yet.
+              </span>
+              <button
+                type="button"
+                onClick={() => setMetadataAttempt((attempt) => attempt + 1)}
+                className="font-bold underline cursor-pointer shrink-0"
+              >
+                Try again
+              </button>
+            </div>
+          )}
+
           {error && (
             <div className="rounded-xl border border-md-outline-variant bg-md-error-container px-4 py-3 text-xs text-md-error">
               {error}
@@ -311,7 +337,7 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
                     <div className="truncate min-w-0">
                       <div className="text-xs font-bold text-md-on-surface font-mono truncate">{model}</div>
                       <div className="text-[11px] text-md-on-surface-variant mt-0.5">
-                        {model.startsWith('vllm/') ? 'Local server' : 'Cloud provider'} · LiteLLM
+                        {model.startsWith('vllm/') ? 'Runs on this Mac' : 'Online service'}
                       </div>
                     </div>
                   </div>
@@ -328,7 +354,7 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
 
               <div>
                 <div className="flex justify-between items-center mb-1.5">
-                  <label className="text-xs font-semibold text-md-on-surface">Temperature</label>
+                  <label className="text-xs font-semibold text-md-on-surface">Creativity</label>
                   <span className="font-mono text-xs text-md-primary font-bold">{temperature.toFixed(2)}</span>
                 </div>
                 <input
@@ -341,8 +367,8 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
                   className="w-full h-2 bg-md-surface-container-high rounded-lg appearance-none cursor-pointer accent-md-primary mt-2"
                 />
                 <div className="flex justify-between text-[10px] text-md-on-surface-variant mt-1.5">
-                  <span>0.0 deterministic</span>
-                  <span>2.0 exploratory</span>
+                  <span>Focused</span>
+                  <span>Inventive</span>
                 </div>
               </div>
             </div>
@@ -351,7 +377,7 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
           {/* Instructions */}
           <section className="space-y-2">
             <h3 className="text-xs font-bold uppercase tracking-wider text-md-on-surface">
-              System Prompt
+              Instructions
             </h3>
             <textarea
               rows={10}
@@ -384,11 +410,11 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
           {/* Skills */}
           <section className="space-y-2">
             <label className="text-xs font-bold uppercase tracking-wider text-md-on-surface flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-md-primary" /> Preloaded Skills ({preloadedSkills.length})
+              <Sparkles className="w-3.5 h-3.5 text-md-primary" /> Always-on skills ({preloadedSkills.length})
             </label>
             <p className="text-[11px] text-md-on-surface-variant leading-relaxed">
-              Preloaded skills are injected in full at the start of every turn. Every other skill
-              stays discoverable and is fetched on demand with <code className="font-mono">load_skill</code>.
+              Always-on skills are read at the start of every reply. The agent looks up
+              any other skill when it needs it.
             </p>
 
             {allowedSkills.length > 0 && (
@@ -460,12 +486,12 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
           {/* Sub-agent policy */}
           <section className="space-y-2">
             <label className="text-xs font-bold uppercase tracking-wider text-md-on-surface flex items-center gap-1.5">
-              <Network className="w-3.5 h-3.5 text-md-primary" /> Sub-agents
+              <Network className="w-3.5 h-3.5 text-md-primary" /> Helpers
             </label>
             <p className="text-[11px] text-md-on-surface-variant leading-relaxed">
-              Profiles this agent may start with <code className="font-mono">spawn_subagent</code>.
-              By default an agent may only start its own profile — otherwise it could
-              sidestep its restrictions by delegating to a more permissive agent.
+              Agents this one may hand part of its work to. By default an agent may only
+              hand work to itself — otherwise it could get around its own limits through
+              a less restricted agent.
             </p>
 
             <div className="space-y-2">

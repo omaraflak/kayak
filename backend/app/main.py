@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 import logging
 from typing import Set
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -30,6 +31,7 @@ from backend.app.routes.settings import LOOPBACK_HOSTS, reachable_address
 from backend.app.skills.registry import skill_registry
 from backend.app import support
 from backend.app.tools.registry import tool_registry
+from backend.app.user_errors import GENERIC_FAILURE, UserFacingError
 from backend.app.audio import routes as audio_routes
 from backend.app.inference import routes as inference_routes
 
@@ -109,11 +111,22 @@ async def lifespan(app: FastAPI):
     # and kept; model servers are stopped and removed, because a speech or text
     # server left behind holds gigabytes of memory after the app the user closed
     # is gone.
+    #
+    # Turns go first, since they are what is using the sandboxes; everything after
+    # that at once. The whole shutdown has the few seconds Docker grants before it
+    # kills the server, and one step at a time meant the model servers -- the most
+    # memory, and last in line -- were the ones most often left running.
     await turns.cancel_all()
-    await sandbox_manager.shutdown_all()
-    await audio_jobs.shutdown_all()
-    await speech_cache.shutdown()
-    await inference_registry.shutdown()
+    results = await asyncio.gather(
+        sandbox_manager.shutdown_all(),
+        inference_registry.shutdown(),
+        audio_jobs.shutdown_all(),
+        speech_cache.shutdown(),
+        return_exceptions=True,
+    )
+    for result in results:
+        if isinstance(result, BaseException):
+            logger.warning("A part of Kayak did not stop cleanly: %s", result, exc_info=result)
 
 
 app = FastAPI(
@@ -132,6 +145,37 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(UserFacingError)
+async def user_facing_error(_request: Request, error: UserFacingError) -> JSONResponse:
+    """Answers with a message that was written to be shown as it is."""
+    return JSONResponse(status_code=error.status_code, content={"detail": error.message})
+
+
+@app.exception_handler(RequestValidationError)
+async def malformed_request(_request: Request, error: RequestValidationError) -> JSONResponse:
+    """Answers a request the API could not parse.
+
+    The page builds every request itself, so this is a page out of step with the
+    server -- typically one left open across an update -- rather than something the
+    user typed. Pydantic's "Field required" told them nothing either way.
+    """
+    logger.warning("Rejected a malformed request: %s", error.errors())
+    return JSONResponse(
+        status_code=422,
+        content={"detail": "Kayak couldn't understand that request. Reload the page and try again."},
+    )
+
+
+@app.exception_handler(Exception)
+async def unexpected_error(_request: Request, _error: Exception) -> JSONResponse:
+    """Answers a crash with a sentence instead of a bare "Internal Server Error".
+
+    Not logged here: Starlette re-raises the exception after this answers, and the
+    server logs it with its traceback, which is what the support bundle picks up.
+    """
+    return JSONResponse(status_code=500, content={"detail": GENERIC_FAILURE})
 
 
 @app.middleware("http")

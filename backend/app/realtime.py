@@ -10,6 +10,7 @@ import asyncio
 import logging
 from typing import Dict, Iterator, List, Optional
 
+from backend.app import sse
 from backend.app.agent.events import ConversationEvent
 
 logger = logging.getLogger(__name__)
@@ -27,10 +28,15 @@ class TurnReplay:
     appeared to be doing nothing.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, anchor_message_id: Optional[str] = None) -> None:
         self.thinking = ""
         self.tokens = ""
         self.tool_calls: Dict[str, Dict[str, object]] = {}
+        #: The last message stored before this turn began. The turn saves its steps
+        #: as it goes, so a client that loads the history mid-turn holds those steps
+        #: as well as receiving them in this replay; it shows the history only up to
+        #: here until the turn ends, which is what kept them from appearing twice.
+        self.anchor_message_id = anchor_message_id
 
     def record(self, event: ConversationEvent) -> None:
         """Folds one event into the replayable state of the turn."""
@@ -109,6 +115,7 @@ class ConversationEventHub:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
                 self.unsubscribe(conversation_id, queue)
+                sse.overflow(queue)
                 logger.warning(
                     "Dropping SSE listener for conversation %s: client is not draining"
                     " events.",
@@ -117,9 +124,16 @@ class ConversationEventHub:
 
     # ------------------------------------------------------------------- replay
 
-    def begin_turn(self, conversation_id: str) -> None:
-        """Starts collecting a replay for a turn that is about to run."""
-        self._replays[conversation_id] = TurnReplay()
+    def begin_turn(
+        self, conversation_id: str, anchor_message_id: Optional[str] = None
+    ) -> None:
+        """Starts collecting a replay for a turn that is about to run.
+
+        Args:
+            conversation_id: The conversation the turn belongs to.
+            anchor_message_id: The last message stored before the turn began.
+        """
+        self._replays[conversation_id] = TurnReplay(anchor_message_id)
 
     def end_turn(self, conversation_id: str) -> None:
         """Discards the replay once the turn is over and history is authoritative."""

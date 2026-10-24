@@ -12,22 +12,38 @@ from typing import Dict
 
 from backend.app.agent import events
 from backend.app.agent.approvals import approval_registry
-from backend.app.agent.engine import agent_engine
+from backend.app.agent.engine import TURN_FAILED, agent_engine, record_failure
 from backend.app.agent.sandbox import sandbox_manager
 from backend.app.config import settings
-from backend.app.database import get_conversation, update_conversation
+from backend.app.database import get_conversation, get_last_message_id, update_conversation
 from backend.app.models import Conversation, ConversationStatus
 from backend.app.realtime import conversation_events
+from backend.app.user_errors import describe_sandbox_error
 
 logger = logging.getLogger(__name__)
 
-SANDBOX_UNAVAILABLE_DETAIL = (
-    "Could not start this conversation's isolated container. Kayak runs every"
-    " agent inside Docker, so Docker must be installed and running."
-)
-
 #: The turn currently running for each conversation.
 _running_turns: Dict[str, asyncio.Task[None]] = {}
+
+#: Held while a conversation's turn is being replaced. See `turn_lock`.
+_turn_locks: Dict[str, asyncio.Lock] = {}
+
+
+def turn_lock(conversation_id: str) -> asyncio.Lock:
+    """The lock to hold while stopping a conversation's turn and starting another.
+
+    Sending is cancel, then store the message, then start. Two of those interleaving
+    -- a double click, a second tab, Retry pressed while a message was going out --
+    started two runs in one conversation. Whichever finished first then removed the
+    other from `_running_turns`, so Stop no longer found the run that was still
+    going, and still spending.
+    """
+    return _turn_locks.setdefault(conversation_id, asyncio.Lock())
+
+
+def forget(conversation_id: str) -> None:
+    """Drops what this module keeps for a conversation that has been deleted."""
+    _turn_locks.pop(conversation_id, None)
 
 
 def is_running(conversation_id: str) -> bool:
@@ -85,7 +101,9 @@ async def _run(conversation_id: str, agent_id: str) -> None:
         if not await _prepare_container(conversation):
             return
 
-        conversation_events.begin_turn(conversation_id)
+        conversation_events.begin_turn(
+            conversation_id, await get_last_message_id(conversation_id)
+        )
         async for event in agent_engine.run(
             conversation_id=conversation_id,
             agent_id=agent_id,
@@ -97,13 +115,31 @@ async def _run(conversation_id: str, agent_id: str) -> None:
         await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
         conversation_events.publish(conversation_id, events.cancelled())
         raise
-    except Exception as error:
+    except Exception:
         logger.exception("Agent turn failed for conversation %s", conversation_id)
         await update_conversation(conversation_id, status=ConversationStatus.ACTIVE)
-        conversation_events.publish(conversation_id, events.error(str(error)))
+        await _report_failure(conversation_id, TURN_FAILED)
     finally:
-        conversation_events.end_turn(conversation_id)
-        _running_turns.pop(conversation_id, None)
+        # Only this run's own bookkeeping: if it was replaced, the entries now belong
+        # to the run that replaced it.
+        if _running_turns.get(conversation_id) is asyncio.current_task():
+            conversation_events.end_turn(conversation_id)
+            _running_turns.pop(conversation_id, None)
+
+
+async def _report_failure(conversation_id: str, message: str) -> None:
+    """Records why a turn failed, in the conversation and to anyone watching it.
+
+    Stored rather than only published: a turn that fails fast -- Docker Desktop not
+    running, no internet -- is usually over before a new conversation's page has
+    subscribed, and the event alone reached nobody. The user's message then sat
+    there with no answer and no reason, and the same after any reload.
+    """
+    await record_failure(conversation_id, message)
+    conversation_events.publish(conversation_id, events.error(message))
+    # Ended explicitly, as a turn the engine finished would be: the page releases
+    # its composer, and its bookkeeping for the turn, on this event.
+    conversation_events.publish(conversation_id, events.done())
 
 
 async def _prepare_container(conversation: Conversation) -> bool:
@@ -116,15 +152,8 @@ async def _prepare_container(conversation: Conversation) -> bool:
         await ensure_sandbox(conversation)
         return True
     except Exception as error:
-        logger.warning(
-            "Could not provide a sandbox for conversation %s: %s",
-            conversation.id,
-            error,
-        )
         await update_conversation(conversation.id, status=ConversationStatus.ACTIVE)
-        conversation_events.publish(
-            conversation.id, events.error(f"{SANDBOX_UNAVAILABLE_DETAIL} ({error})")
-        )
+        await _report_failure(conversation.id, describe_sandbox_error(error))
         return False
 
 
@@ -152,12 +181,18 @@ async def cancel(conversation_id: str) -> bool:
         # The turn's cancellation, not ours: swallowing it here is the point.
         pass
     except Exception:
-        logger.debug("Turn for %s failed while unwinding", conversation_id, exc_info=True)
+        logger.warning("Turn for %s failed while unwinding", conversation_id, exc_info=True)
     return True
 
 
 async def cancel_all() -> None:
-    """Stops every in-flight turn, for server shutdown."""
-    for conversation_id in list(_running_turns.keys()):
-        await cancel(conversation_id)
+    """Stops every in-flight turn, for server shutdown.
+
+    All at once: shutdown has only the few seconds Docker gives it, and the
+    containers this frees still have to be stopped after it.
+    """
+    await asyncio.gather(
+        *(cancel(conversation_id) for conversation_id in list(_running_turns)),
+        return_exceptions=True,
+    )
 

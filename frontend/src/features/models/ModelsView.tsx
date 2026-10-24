@@ -28,6 +28,7 @@ import {
 } from '../../types';
 import { HuggingFaceCatalog } from './HuggingFaceCatalog';
 import { isMlxModel } from './metalModels';
+import { shortModelName, startBlocker } from './serverStatus';
 import { VLLMLaunchDialog } from './VLLMLaunchDialog';
 import { formatBytes } from '../../utils/format';
 
@@ -54,13 +55,18 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   onSelectModality,
 }) => {
   const dialog = useDialog();
-  const { status, statuses, logsByModality, refresh: fetchStatus } = useVLLMStatus();
+  const { status, statuses, logsByModality, isStale, refresh: fetchStatus } = useVLLMStatus();
   const [capability, setCapability] = useState<HostCapability | null>(null);
   const [metal, setMetal] = useState<MetalStatus | null>(null);
   const [cache, setCache] = useState<ModelCacheInfo | null>(null);
   /** Which server is winding down, so only its row shows the stopping state. */
   const [stoppingModality, setStoppingModality] = useState<Modality | null>(null);
   const [isDeploying, setIsDeploying] = useState(false);
+  /**
+   * The model whose Start is being checked with Hugging Face before anything
+   * begins -- a few seconds in which the button would otherwise do nothing visible.
+   */
+  const [checkingModelId, setCheckingModelId] = useState<string | null>(null);
   const [pendingLaunch, setPendingLaunch] = useState<string | null>(null);
   /** Which server's log drawer is open. Only one at a time; they are long. */
   const [openLogsFor, setOpenLogsFor] = useState<Modality | null>(null);
@@ -71,7 +77,10 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   const [launchModality, setLaunchModality] = useState<Modality>('text');
   const logContainerRef = useRef<HTMLDivElement>(null);
 
-  const isLoading = isLoadingState(status?.state) || isDeploying;
+  // The catalogue's busy state follows the server being browsed, not always the
+  // text one: browsing voice models while a text model starts must not read as a
+  // voice model starting.
+  const isBrowsedServerBusy = isLoadingState(statuses[modality]?.state) || isDeploying;
 
   const refreshMachine = useCallback(async () => {
     const [capabilityResult, cacheResult, metalResult] = await Promise.allSettled([
@@ -185,9 +194,10 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
   const requestLaunch = (modelId: string) => {
     if (capability && !capability.docker_available) {
       dialog.alert({
-        title: 'Docker is not running',
+        title: "Docker Desktop isn't running",
         message:
-          'Local models run in Docker. Start Docker Desktop and this page will notice on its own.',
+          'Models that run on the processor need Docker Desktop. Open it, wait for it to ' +
+          'finish starting, then try again. This page notices on its own.',
         variant: 'danger',
       });
       return;
@@ -201,44 +211,72 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
    * MLX weights only run on the Apple GPU, where the container dialog's options --
    * KV cache size, container memory and cores -- mean nothing, so those models
    * skip it and start directly.
+   *
+   * Before anything starts, Hugging Face is asked whether the model can be
+   * fetched at all: a model whose makers require accepting their terms, or one
+   * that no longer exists, used to fail only after gigabytes had downloaded.
+   *
+   * @param fallbackModality Where the model goes when the Hub cannot say: the
+   *   row's own server for a model that is already running or failed, otherwise
+   *   the catalogue being browsed.
    */
-  const handleLaunchRequest = async (modelId: string) => {
+  const handleLaunchRequest = async (modelId: string, fallbackModality: Modality = modality) => {
+    const name = shortModelName(modelId);
+    const blocker = startBlocker(modelId, metal);
+    if (blocker) {
+      dialog.alert({ title: `${name} can't run on this Mac`, message: blocker, variant: 'danger' });
+      return;
+    }
+
+    setCheckingModelId(modelId);
+    let target: Modality = fallbackModality;
+    try {
+      // Which runtime can serve it is decided by the Hub's own metadata, not by
+      // the filter the user happens to be browsing: pressing Start on a cached
+      // Kokoro sent it to vLLM, which spent minutes on a model it cannot load.
+      try {
+        const classification = await api.classifyModel(modelId);
+        if (classification.message) {
+          dialog.alert({
+            title: `${name} can't start yet`,
+            message: classification.message,
+            variant: 'danger',
+          });
+          return;
+        }
+        if (classification.modality && !classification.supported) {
+          dialog.alert({
+            title: `${name} can't start`,
+            message: "Kayak can't run this model yet. Try another one from the list.",
+            variant: 'danger',
+          });
+          return;
+        }
+        if (classification.modality) target = classification.modality;
+      } catch {
+        // The Hub being unreachable must not stop a start; the best remaining
+        // guess stands, and the start itself reports anything that goes wrong.
+      }
+    } finally {
+      setCheckingModelId(null);
+    }
+
     if (metal?.supported && isMlxModel(modelId)) {
       setOpenLogsFor('text');
+      setIsDeploying(true);
       try {
         await api.deployVLLMModel({ model_id: modelId, force_restart: true }, 'text');
         await fetchStatus();
       } catch (err) {
         dialog.alert({
-          title: 'Could not start the model',
-          message: errorMessage(err),
+          title: `Couldn't start ${name}`,
+          message: errorMessage(err, `Couldn't start ${name}. Try again.`),
           variant: 'danger',
         });
+      } finally {
+        setIsDeploying(false);
       }
       return;
-    }
-
-    // Which runtime can serve it is decided by the Hub's own metadata, not by
-    // the filter the user happens to be browsing: pressing Start on a cached
-    // Kokoro sent it to vLLM, which spent minutes on a model it cannot load.
-    let target: Modality = modality;
-    try {
-      const classification = await api.classifyModel(modelId);
-      if (classification.modality && !classification.supported) {
-        dialog.alert({
-          title: 'This model cannot run here yet',
-          message:
-            `${modelId} is a ${classification.pipeline_tag ?? 'model'} that needs ` +
-            `${classification.library_name ?? 'a library'}, which the local runtime ` +
-            'does not ship a backend for.',
-          variant: 'danger',
-        });
-        return;
-      }
-      if (classification.modality) target = classification.modality;
-    } catch {
-      // The Hub being unreachable must not stop a start; the filter in view is
-      // the best remaining guess.
     }
 
     setLaunchModality(target);
@@ -254,9 +292,10 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
       await api.deployVLLMModel(request, launchModality);
       await fetchStatus();
     } catch (err) {
+      const name = shortModelName(request.model_id);
       dialog.alert({
-        title: 'Could not start the model',
-        message: `Could not start ${request.model_id}: ${errorMessage(err)}`,
+        title: `Couldn't start ${name}`,
+        message: errorMessage(err, `Couldn't start ${name}. Try again.`),
         variant: 'danger',
       });
     } finally {
@@ -264,29 +303,17 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
     }
   };
 
-  const handleStopServer = async (modality: Modality) => {
-    const label =
-      runtimes.find((runtime) => runtime.modality === modality)?.label ?? 'this server';
-    const confirmed = await dialog.confirm({
-      title: `Stop ${label}?`,
-      message:
-        'Stopping the server will terminate its container and unload the model from ' +
-        'memory. Anything using it right now will be interrupted. Other local servers ' +
-        'keep running.',
-      confirmText: 'Stop Server',
-      cancelText: 'Keep Running',
-      variant: 'danger',
-    });
-    if (!confirmed) return;
-
-    setStoppingModality(modality);
+  /** Stops one server. Shared by Stop, which asks first, and Dismiss, which need not. */
+  const stopServer = async (serverModality: Modality, modelId: string) => {
+    setStoppingModality(serverModality);
     try {
-      await api.stopVLLMServer(modality);
+      await api.stopVLLMServer(serverModality);
       await fetchStatus();
     } catch (err) {
+      const name = shortModelName(modelId);
       dialog.alert({
-        title: 'Could not stop the server',
-        message: errorMessage(err),
+        title: `Couldn't stop ${name}`,
+        message: errorMessage(err, `Couldn't stop ${name}. Try again.`),
         variant: 'danger',
       });
     } finally {
@@ -294,10 +321,33 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
     }
   };
 
-  const handleDeleteWeights = async (repoId: string, sizeBytes: number) => {
+  const handleStopServer = async (serverModality: Modality, modelId: string) => {
+    const name = shortModelName(modelId);
     const confirmed = await dialog.confirm({
-      title: 'Delete downloaded weights?',
-      message: `This frees ${formatBytes(sizeBytes)} by removing ${repoId} from this Mac. Starting it again re-downloads the whole model.`,
+      title: `Stop ${name}?`,
+      message:
+        'It will be unloaded from memory, and anything using it right now will stop. ' +
+        'Other models keep running.',
+      confirmText: 'Stop',
+      cancelText: 'Keep running',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    await stopServer(serverModality, modelId);
+  };
+
+  /**
+   * Clears a failed model's row. Nothing is running to interrupt, so there is
+   * nothing to confirm; it is a stop only so the server forgets the failure too.
+   */
+  const handleDismiss = (serverModality: Modality, modelId: string) =>
+    stopServer(serverModality, modelId);
+
+  const handleDeleteWeights = async (repoId: string, sizeBytes: number) => {
+    const name = shortModelName(repoId);
+    const confirmed = await dialog.confirm({
+      title: `Delete ${name}?`,
+      message: `This frees ${formatBytes(sizeBytes)} on this Mac. Starting it again downloads the whole model again.`,
       confirmText: 'Delete',
       cancelText: 'Keep',
       variant: 'danger',
@@ -309,8 +359,8 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
       await refreshMachine();
     } catch (err) {
       dialog.alert({
-        title: 'Could not delete weights',
-        message: errorMessage(err),
+        title: `Couldn't delete ${name}`,
+        message: errorMessage(err, "Couldn't delete this model's files. Try again."),
         variant: 'danger',
       });
     }
@@ -326,7 +376,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
           <div>
             <h2 className="font-bold text-sm text-md-on-surface">Local Models</h2>
             <p className="text-xs text-md-on-surface-variant">
-              Serve open-weights models on this Mac
+              Run AI models on this Mac, without sending anything online
             </p>
           </div>
         </div>
@@ -339,15 +389,18 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
           <SectionHeading
             icon={<HardDrive className="w-3.5 h-3.5 text-md-primary" />}
             title="This machine"
-            note={cache ? `${formatBytes(cache.total_bytes)} of weights cached` : undefined}
+            note={cache ? `${formatBytes(cache.total_bytes)} of models downloaded` : undefined}
           />
 
           {capability && !capability.docker_available && (
             <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800/80 text-rose-900 dark:text-rose-100 text-[11px] leading-relaxed flex items-start gap-2">
               <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <p>
-                Docker is not running, so no model can be served locally. Start Docker Desktop
-                — this page checks again every few seconds and will update by itself.
+                {metal?.supported
+                  ? "Docker Desktop isn't running, so only models marked GPU can start. "
+                  : "Docker Desktop isn't running, so no model can start. "}
+                Open Docker Desktop — this page checks again every few seconds and updates by
+                itself.
               </p>
             </div>
           )}
@@ -355,25 +408,25 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <Stat
               icon={<Zap className="w-3.5 h-3.5" />}
-              label="Accelerator"
+              label="Speed"
               // Docker on a Mac has no GPU access; the Apple GPU is reached through
               // the launcher, for MLX models only.
-              value={metal?.supported ? 'Apple GPU' : 'CPU only'}
+              value={metal?.supported ? "Your Mac's GPU" : 'Processor only'}
               detail={
                 metal?.supported
-                  ? 'For MLX models; others run on the CPU'
-                  : metal?.detail ?? 'Generation will be slow'
+                  ? 'Models marked GPU run fastest'
+                  : metal?.detail ?? 'Models will run slowly'
               }
               tone={metal?.supported ? 'default' : 'warning'}
             />
             <Stat
               icon={<Package className="w-3.5 h-3.5" />}
-              label="vLLM image"
+              label="Model software"
               value={
                 capability?.image_present === true
-                  ? 'Pulled'
+                  ? 'Downloaded'
                   : capability?.image_present === false
-                  ? 'Not pulled'
+                  ? 'Not downloaded yet'
                   : '—'
               }
               detail={
@@ -385,7 +438,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
             />
             <Stat
               icon={<HardDrive className="w-3.5 h-3.5" />}
-              label="Weights on disk"
+              label="Downloaded models"
               value={cache ? formatBytes(cache.total_bytes) : '—'}
               detail={cache ? `${cache.models.length} model${cache.models.length === 1 ? '' : 's'}` : undefined}
             />
@@ -407,8 +460,11 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                 const rowStopping = stoppingModality === rowModality;
                 const rowLogs = logsByModality[rowModality] ?? [];
                 const rowLogsOpen = openLogsFor === rowModality;
+                const name = shortModelName(model.repo_id);
 
                 if (!server) {
+                  const blocker = startBlocker(model.repo_id, metal);
+                  const isChecking = checkingModelId === model.repo_id;
                   return (
                     <div
                       key={model.repo_id}
@@ -420,6 +476,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                         </span>
                         <p className="text-[11px] text-md-on-surface-variant mt-0.5">
                           {formatBytes(model.size_bytes)} on disk
+                          {blocker && ' · Needs a Mac with an Apple chip'}
                         </p>
                       </div>
 
@@ -427,16 +484,21 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                         <button
                           type="button"
                           onClick={() => handleLaunchRequest(model.repo_id)}
-                          disabled={anyServerBusy}
+                          disabled={anyServerBusy || !!blocker || !!checkingModelId}
+                          title={blocker ?? undefined}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-md-outline-variant bg-md-surface-container-low hover:bg-md-surface-container-high disabled:opacity-40 text-[11px] font-semibold text-md-on-surface transition-colors cursor-pointer"
                         >
-                          <Play className="w-3 h-3 fill-current" />
-                          Start
+                          {isChecking ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Play className="w-3 h-3 fill-current" />
+                          )}
+                          {isChecking ? 'Checking…' : 'Start'}
                         </button>
                         <button
                           type="button"
                           onClick={() => handleDeleteWeights(model.repo_id, model.size_bytes)}
-                          title="Delete these weights"
+                          title={`Delete ${name} from this Mac`}
                           className="p-1.5 rounded-lg border border-md-outline-variant text-md-on-surface-variant hover:text-md-error hover:border-md-error/50 transition-colors cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -446,6 +508,12 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                   );
                 }
 
+                // The headline sits in the row and the reason in the box under it;
+                // a reason that repeats the headline is shown once.
+                const errorText = rowError ? server.error ?? null : null;
+                const showMessage =
+                  rowStopping || !errorText || !errorText.startsWith(server.message.replace(/\.$/, ''));
+
                 return (
                   <div
                     key={model.repo_id}
@@ -453,7 +521,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                       rowError
                         ? 'bg-md-surface border-rose-300 dark:border-rose-800/80'
                         : 'bg-md-primary-container/20 border-md-primary/50'
-                    }`}
+                    } ${isStale ? 'opacity-60' : ''}`}
                   >
                     <div className="p-4 space-y-3">
                       <div className="flex items-start justify-between gap-4">
@@ -467,39 +535,56 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                               isLoading={rowLoading}
                               isError={rowError}
                               isStopping={rowStopping}
+                              isStale={isStale}
                             />
                             <span className="text-[10px] font-bold uppercase tracking-wider text-md-on-surface-variant">
                               {runtimes.find((r) => r.modality === rowModality)?.label ??
                                 rowModality}
                             </span>
                           </div>
-                          <p className="text-[11px] text-md-on-surface-variant mt-1 leading-relaxed">
-                            {rowStopping
-                              ? 'Stopping the server and unloading the model...'
-                              : server.message}
-                            {model.size_bytes > 0 && ` · ${formatBytes(model.size_bytes)} on disk`}
-                          </p>
-                          {rowReady && server.endpoint && (
-                            <p className="text-[10px] font-mono text-md-on-surface-variant/80 mt-0.5">
-                              {server.endpoint}
+                          {(showMessage || model.size_bytes > 0) && (
+                            <p className="text-[11px] text-md-on-surface-variant mt-1 leading-relaxed">
+                              {rowStopping
+                                ? `Stopping ${name} and unloading it from memory…`
+                                : showMessage
+                                ? server.message
+                                : null}
+                              {model.size_bytes > 0 &&
+                                `${showMessage ? ' · ' : ''}${formatBytes(model.size_bytes)} on disk`}
                             </p>
                           )}
                         </div>
 
                         <div className="flex items-center gap-1.5 shrink-0">
                           {rowError ? (
-                            <button
-                              type="button"
-                              onClick={() => handleLaunchRequest(model.repo_id)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-md-outline-variant bg-md-surface-container-low hover:bg-md-surface-container-high text-[11px] font-semibold text-md-on-surface transition-colors cursor-pointer"
-                            >
-                              <Play className="w-3 h-3 fill-current" />
-                              Try again
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleLaunchRequest(model.repo_id, rowModality)}
+                                disabled={rowStopping || !!checkingModelId || isDeploying}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-md-outline-variant bg-md-surface-container-low hover:bg-md-surface-container-high disabled:opacity-40 text-[11px] font-semibold text-md-on-surface transition-colors cursor-pointer"
+                              >
+                                {checkingModelId === model.repo_id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Play className="w-3 h-3 fill-current" />
+                                )}
+                                {checkingModelId === model.repo_id ? 'Checking…' : 'Try again'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDismiss(rowModality, model.repo_id)}
+                                disabled={rowStopping}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-md-outline-variant text-[11px] font-semibold text-md-on-surface-variant hover:text-md-on-surface hover:bg-md-surface-container-high disabled:opacity-40 transition-colors cursor-pointer"
+                              >
+                                {rowStopping && <Loader2 className="w-3 h-3 animate-spin" />}
+                                Dismiss
+                              </button>
+                            </>
                           ) : (
                             <button
                               type="button"
-                              onClick={() => handleStopServer(rowModality)}
+                              onClick={() => handleStopServer(rowModality, model.repo_id)}
                               disabled={rowStopping}
                               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-md-error hover:opacity-90 disabled:opacity-50 text-md-on-error text-xs font-semibold shadow-xs transition-opacity cursor-pointer"
                             >
@@ -508,15 +593,15 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                               ) : (
                                 <Square className="w-3.5 h-3.5 fill-current" />
                               )}
-                              <span>Stop Server</span>
+                              <span>{rowStopping ? 'Stopping…' : 'Stop'}</span>
                             </button>
                           )}
                         </div>
                       </div>
 
-                      {rowError && server.error && (
+                      {errorText && (
                         <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800/80 text-rose-900 dark:text-rose-100 text-[11px] leading-relaxed">
-                          {server.error}
+                          {errorText}
                         </div>
                       )}
 
@@ -530,7 +615,7 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-md-outline-variant bg-md-surface-container-low hover:bg-md-surface-container-high text-xs font-semibold text-md-on-surface transition-colors cursor-pointer shadow-2xs"
                           >
                             <Terminal className="w-3.5 h-3.5 text-md-on-surface-variant" />
-                            <span>Container Logs ({rowLogs.length} lines)</span>
+                            <span>Details</span>
                             {rowLogsOpen ? (
                               <ChevronUp className="w-3.5 h-3.5 text-md-on-surface-variant" />
                             ) : (
@@ -544,8 +629,8 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
                               className="p-3.5 bg-md-surface-container-lowest text-md-on-surface font-mono text-[11px] rounded-xl overflow-y-auto space-y-0.5 leading-relaxed h-72 border border-md-outline-variant"
                             >
                               {rowLogs.length === 0 ? (
-                                <div className="text-md-on-surface-variant italic">
-                                  Waiting for container log output...
+                                <div className="text-md-on-surface-variant italic font-sans">
+                                  Nothing here yet.
                                 </div>
                               ) : (
                                 rowLogs.map((line, idx) => (
@@ -567,8 +652,16 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
 
           {displayModels.length === 0 && cache && (
             <p className="text-[11px] text-md-on-surface-variant py-2">
-              No weights downloaded yet. Starting a model from the catalog below downloads it to{' '}
-              <code className="font-mono">{cache.path}</code>.
+              No models downloaded yet. Start one from the list below.
+            </p>
+          )}
+
+          {/* GPU models are downloaded by the desktop app into the Mac's own
+              Hugging Face folder, which this list cannot see, so the list does not
+              pretend to be complete. */}
+          {metal?.supported && (
+            <p className="text-[11px] text-md-on-surface-variant">
+              Models that run on your Mac's GPU are stored separately and aren't listed here.
             </p>
           )}
         </section>
@@ -578,17 +671,19 @@ export const ModelsView: React.FC<ModelsViewProps> = ({
           <SectionHeading
             icon={<Layers className="w-3.5 h-3.5 text-md-primary" />}
             title="Find a model"
-            note="Open-weights models from the Hugging Face Hub"
+            note="Models anyone can download, from Hugging Face"
           />
 
           <HuggingFaceCatalog
             mode="deploy"
-            onDeployVLLM={handleLaunchRequest}
+            onDeployVLLM={(modelId) => handleLaunchRequest(modelId)}
             activeVllmModelId={activeModelOf(statuses[modality])}
-            isVllmLoading={isLoading}
+            isVllmLoading={isBrowsedServerBusy}
             cachedModelIds={cachedIds}
             availableMemoryGB={(capability?.total_memory_mb ?? 0) / 1024}
             metalSupported={metal?.supported ?? false}
+            metalDetail={metal?.detail ?? null}
+            startingModelId={checkingModelId}
             runtimes={runtimes}
             modality={modality}
             onSelectModality={onSelectModality}
@@ -635,14 +730,19 @@ const StatusPill: React.FC<{
   isLoading: boolean;
   isError: boolean;
   isStopping?: boolean;
-}> = ({ isReady, isLoading, isError, isStopping }) => {
+  /** Kayak is unreachable, so the state shown is what was last heard. */
+  isStale?: boolean;
+}> = ({ isReady, isLoading, isError, isStopping, isStale }) => {
   // Both transitions get their own state with a spinner inside the pill: a
   // server winding down is not "online", and one coming up is not "serving".
-  const inTransition = isStopping || isLoading;
+  const checking = !!isStale && !isStopping;
+  const inTransition = isStopping || isLoading || checking;
   return (
     <span
       className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-        isStopping || isLoading
+        checking
+          ? 'bg-md-surface-container-high text-md-on-surface-variant border-md-outline-variant'
+          : isStopping || isLoading
           ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-200 border-amber-300 dark:border-amber-800/80'
           : isReady
           ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 border-emerald-300 dark:border-emerald-800/80'
@@ -654,12 +754,14 @@ const StatusPill: React.FC<{
       {inTransition && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
       {isStopping
         ? 'STOPPING'
+        : checking
+        ? 'CHECKING…'
         : isLoading
         ? 'STARTING'
         : isReady
         ? 'ONLINE'
         : isError
-        ? 'ERROR'
+        ? 'FAILED'
         : 'STOPPED'}
     </span>
   );

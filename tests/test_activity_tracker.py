@@ -7,6 +7,7 @@ indicator vanish when the user switched tabs mid-turn.
 
 
 from backend.app.agent.activity import ActivityTracker
+from backend.app.sse import RESYNC
 
 
 class TestRunningIds:
@@ -84,9 +85,11 @@ class TestBroadcasting:
         for index in range(200):
             tracker.set_running(f"conv-{index}")
 
-        # The stalled listener is discarded rather than growing without bound,
-        # and the tracker itself stays correct for everyone else.
-        assert queue.full()
+        # The stalled listener is discarded rather than growing without bound, and
+        # told to end its stream so the page reconnects and is sent a fresh
+        # snapshot. The tracker itself stays correct for everyone else.
+        assert queue.qsize() == 1
+        assert queue.get_nowait() is RESYNC
         assert len(tracker.running_ids()) == 200
 
     def test_state_survives_a_listener_disconnecting_mid_turn(self):

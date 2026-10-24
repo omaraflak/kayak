@@ -1,3 +1,4 @@
+from datetime import datetime
 import json
 import logging
 import os
@@ -202,8 +203,17 @@ class Settings:
                 setattr(self, key, value)
         except Exception:
             # Losing this file silently makes a fully configured install look blank,
-            # so it is worth a real log line rather than a print to stdout.
+            # so it is worth a real log line rather than a print to stdout. It is
+            # also moved aside: the next save would otherwise overwrite it, and with
+            # it every key that could still have been recovered by hand.
             logger.exception("Could not read settings file %s", self.SETTINGS_FILE)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            try:
+                self.SETTINGS_FILE.rename(
+                    self.SETTINGS_FILE.with_name(f"{self.SETTINGS_FILE.name}.unreadable-{stamp}")
+                )
+            except OSError:
+                logger.exception("Could not move the unreadable settings file aside")
 
     def save_settings(self, updates: Dict[str, Any]) -> None:
         """Persists updated configuration to data/settings.json.

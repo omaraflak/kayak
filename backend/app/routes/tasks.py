@@ -39,9 +39,7 @@ async def stop_running_task(task_id: str) -> Dict[str, str]:
     """
     task = await get_task(task_id)
     if not task:
-        raise HTTPException(
-            status_code=404, detail=f"Task '{task_id}' not found"
-        )
+        raise HTTPException(status_code=404, detail="This task no longer exists.")
 
     success = await task_manager.stop_task(task_id)
     return {"status": "stopped" if success else "failed"}

@@ -51,6 +51,17 @@ SUPPORTED_FORMATS = {
 #: Silence inserted between chunks so sentences do not run together.
 _GAP_SECONDS = 0.12
 
+#: What a failed request says. The exception itself is logged instead: its text is
+#: for whoever reads the server's output, not for the person waiting on the result.
+SYNTHESIS_FAILED = (
+    "The voice model couldn't read this text aloud. Try again. If it keeps failing, "
+    "restart it from Local Models."
+)
+TRANSCRIPTION_FAILED = (
+    "Kayak couldn't turn this recording into text. Make sure it's an audio file (like "
+    ".mp3, .m4a or .wav), then try again."
+)
+
 
 class SpeechRequest(BaseModel):
     """OpenAI's ``POST /v1/audio/speech`` body.
@@ -207,9 +218,11 @@ async def create_speech(request: SpeechRequest) -> Response:
             audio, sample_rate = await asyncio.get_running_loop().run_in_executor(
                 None, _synthesize_all, chunks, request.voice, request.speed
             )
-        except Exception as error:
+        except Exception:
+            # The raw error goes to this server's log, which Kayak shows under the
+            # model's Details; the caller gets a sentence a person can act on.
             logger.exception("Synthesis failed for %s", state.model_id)
-            raise HTTPException(status_code=500, detail=f"Synthesis failed: {error}")
+            raise HTTPException(status_code=500, detail=SYNTHESIS_FAILED)
         finally:
             # Cleared even on failure: a stuck "active" would have every client
             # showing a bar that never moves again.
@@ -256,11 +269,9 @@ async def create_transcription(
                 text, used_language = await asyncio.get_running_loop().run_in_executor(
                     None, backend.transcribe, temp_path, language, report
                 )
-            except Exception as error:
+            except Exception:
                 logger.exception("Transcription failed for %s", state.model_id)
-                raise HTTPException(
-                    status_code=500, detail=f"Transcription failed: {error}"
-                )
+                raise HTTPException(status_code=500, detail=TRANSCRIPTION_FAILED)
             finally:
                 # Cleared even on failure: a stuck "active" would leave every
                 # client showing a ring that never moves again.

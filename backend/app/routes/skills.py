@@ -57,6 +57,6 @@ async def delete_skill(skill_name: str) -> Dict[str, str]:
     success = skill_registry.delete_skill(skill_name)
     if not success:
         raise HTTPException(
-            status_code=404, detail=f"Skill '{skill_name}' not found"
+            status_code=404, detail="This skill was already deleted."
         )
     return {"status": "deleted"}

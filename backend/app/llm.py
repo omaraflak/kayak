@@ -1,11 +1,13 @@
 import logging
 import re
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+import httpx
 import litellm
 from backend.app.config import local_api_base, settings
 from backend.app.providers import API_KEY_SETTINGS, get_provider
 from backend.app.inference import metal
 from backend.app.inference.models import ServerState
+from backend.app.user_errors import describe_llm_error
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,15 @@ _PROVIDER_KEY_SETTINGS: Dict[str, str] = {
 
 # LiteLLM prefix -> id in the provider registry, for the aliases that differ.
 _PROVIDER_REGISTRY_IDS: Dict[str, str] = {"hf": "huggingface"}
+
+#: How long a model may go quiet before the call is abandoned. LiteLLM's own
+#: default is 6000 seconds, so a provider that stopped answering left the chat
+#: "thinking" for an hour and a half. `read` bounds the gap between two streamed
+#: chunks, not the whole answer, so a long reply is never cut off by it.
+_CLOUD_TIMEOUT = httpx.Timeout(connect=15.0, read=180.0, write=30.0, pool=15.0)
+#: A model on this Mac's processor can take minutes to read a long conversation
+#: before its first word.
+_LOCAL_TIMEOUT = httpx.Timeout(connect=15.0, read=900.0, write=30.0, pool=15.0)
 
 # Substrings that identify a provider genuinely refusing tool calling, as opposed to
 # any other 400. Matching loosely here turns unrelated failures (a malformed history,
@@ -171,31 +182,84 @@ def missing_key_error(model: str) -> Optional[str]:
     if getattr(settings, _PROVIDER_KEY_SETTINGS[provider], ""):
         return None
 
-    info = get_provider(_PROVIDER_REGISTRY_IDS.get(provider, provider))
-    name = info.name if info else provider
+    name = provider_display_name(provider)
     return (
-        f"No {name} API key is configured, so '{model}' cannot run. "
-        "Add one in Settings."
+        f"This agent uses {name}, and no {name} key has been added yet. Add one in "
+        "Platform Settings, then send your message again."
     )
 
 
-def _local_api_base() -> str:
-    """Where the local text server answers right now.
+def provider_display_name(provider: Optional[str]) -> Optional[str]:
+    """The name a person knows a provider by ("OpenAI"), from its LiteLLM prefix."""
+    if not provider:
+        return None
+    if provider == "vllm":
+        return "This Mac"
+    info = get_provider(_PROVIDER_REGISTRY_IDS.get(provider, provider))
+    return info.name if info else provider
 
-    Metal is asked directly rather than through the manager, so a model the launcher
-    has just brought up is reachable before the next status sync. A container may be
-    published on a neighbouring port when the configured one was taken -- on launcher
-    installs Kayak itself occupies the default -- and the manager's status says where.
+
+def _local_model_id(model: str) -> str:
+    """The Hugging Face repository a ``vllm/`` model string names."""
+    for prefix in ("openai/vllm/", "vllm/"):
+        if model.startswith(prefix):
+            return model[len(prefix):]
+    return model
+
+
+def turn_blocker(model: str) -> Optional[str]:
+    """Why a turn on this model cannot start right now, or None if it can.
+
+    Checked before a message is stored, for the same reason as a missing key: the
+    composer puts a refused message back, while a turn that fails at once is often
+    over before anyone is listening. A local model that is not running is the
+    common case -- the composer waits for it, but a sub-agent or a second tab
+    does not.
     """
-    metal_status = metal.read_status()
-    if metal_status.supported and metal_status.state == "ready" and metal_status.port:
-        return local_api_base(metal_status.port)
+    missing = missing_key_error(model)
+    if missing:
+        return missing
+    if resolve_provider(model) != "vllm":
+        return None
 
     from backend.app.inference import registry as inference_registry
 
+    wanted = _local_model_id(model)
     status = inference_registry.text_manager.get_status()
-    if status.state == ServerState.READY and status.endpoint:
+    if status.state == ServerState.READY and status.model_id == wanted:
+        return None
+    name = wanted.rsplit("/", 1)[-1]
+    return (
+        f"{name} isn't running on this Mac. Start it from Local Models, then send "
+        "your message again."
+    )
+
+
+def _local_api_base(model_id: str) -> str:
+    """Where the local server serving this model answers right now.
+
+    The manager's status is asked first: it believes the launcher only when the
+    launcher's status answers the run Kayak asked for, so it is never fooled by a
+    file still describing the GPU model that was just stopped -- which sent
+    messages to a port nothing was serving. Metal is asked directly as a fallback,
+    for a model the launcher has just brought up before the next status sync, but
+    only when it names this model. A container may be published on a neighbouring
+    port when the configured one was taken, and the manager's status says where.
+    """
+    from backend.app.inference import registry as inference_registry
+
+    status = inference_registry.text_manager.get_status()
+    if status.state == ServerState.READY and status.endpoint and status.model_id == model_id:
         return status.endpoint
+
+    metal_status = metal.read_status()
+    if (
+        metal_status.supported
+        and metal_status.state == "ready"
+        and metal_status.port
+        and metal_status.model == model_id
+    ):
+        return local_api_base(metal_status.port)
     return local_api_base(settings.VLLM_PORT)
 
 
@@ -228,18 +292,16 @@ def _build_llm_kwargs(
     provider = resolve_provider(model)
 
     if provider == "vllm":
-        raw_model = model
-        for prefix in ("openai/vllm/", "vllm/"):
-            if raw_model.startswith(prefix):
-                raw_model = raw_model[len(prefix):]
-                break
-        kwargs["model"] = f"openai/{raw_model}"
-        kwargs["api_base"] = _local_api_base()
+        kwargs["model"] = f"openai/{_local_model_id(model)}"
+        kwargs["api_base"] = _local_api_base(_local_model_id(model))
         kwargs["api_key"] = "EMPTY"
-    elif provider:
-        api_key = getattr(settings, _PROVIDER_KEY_SETTINGS[provider], "")
-        if api_key:
-            kwargs["api_key"] = api_key
+        kwargs["timeout"] = _LOCAL_TIMEOUT
+    else:
+        kwargs["timeout"] = _CLOUD_TIMEOUT
+        if provider:
+            api_key = getattr(settings, _PROVIDER_KEY_SETTINGS[provider], "")
+            if api_key:
+                kwargs["api_key"] = api_key
 
     if tools:
         kwargs["tools"] = tools
@@ -323,18 +385,34 @@ async def generate_completion_stream(
     Yields:
         Dict[str, Any]: Token chunks, thinking chunks, tool call deltas, or errors.
     """
-    missing_key = missing_key_error(model)
-    if missing_key:
-        yield {"type": "error", "error": missing_key}
+    blocker = turn_blocker(model)
+    if blocker:
+        yield {"type": "error", "error": blocker}
         return
 
     kwargs = _build_llm_kwargs(model, messages, tools, temperature, stream=True)
+    provider = resolve_provider(model)
+    # Whether the answer had begun, which changes what a local failure means: before
+    # the first word the model was not there, after it the model stopped.
+    answering = False
+
+    def explain(error: BaseException) -> Dict[str, Any]:
+        return {
+            "type": "error",
+            "error": describe_llm_error(
+                error,
+                provider_display_name(provider) if provider != "vllm" else None,
+                local=provider == "vllm",
+                answering=answering,
+            ),
+        }
 
     try:
         async for event in _stream_response(kwargs):
+            answering = True
             yield event
     except Exception as error:
-        if tools and _is_tool_unsupported_error(error):
+        if tools and not answering and _is_tool_unsupported_error(error):
             logger.warning(
                 "Model '%s' rejected tool calling; retrying without tools: %s",
                 model,
@@ -343,18 +421,20 @@ async def generate_completion_stream(
             yield {
                 "type": "warning",
                 "warning": (
-                    f"Model '{model}' does not support tool calling. Retrying without "
-                    "tools; this agent's tools are unavailable for this turn."
+                    "This model can't use the agent's tools, so this answer is text "
+                    "only. Pick a different model in Agent Profiles to let the agent "
+                    "work with files and run things."
                 ),
             }
             try:
                 async for event in _stream_response(_strip_tools(kwargs)):
+                    answering = True
                     yield event
                 return
             except Exception as fallback_error:
-                yield {"type": "error", "error": str(fallback_error)}
+                yield explain(fallback_error)
                 return
-        yield {"type": "error", "error": str(error)}
+        yield explain(error)
 
 
 async def generate_text(model: str, messages: List[Dict[str, Any]], temperature: float) -> str:

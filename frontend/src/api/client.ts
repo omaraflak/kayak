@@ -53,9 +53,26 @@ export function setStoredAuthToken(token: string | null): void {
   }
 }
 
-/** Error carrying the HTTP status, so callers can distinguish auth failures. */
+/** Shown whenever the server cannot be reached at all. */
+export const OFFLINE_MESSAGE =
+  "Kayak can't reach its server right now. It may be restarting, so try again in a moment.";
+
+/** Shown when a failure carries nothing a person could act on. */
+const GENERIC_MESSAGE = 'Something went wrong. Try again.';
+
+/**
+ * Error carrying the HTTP status, so callers can distinguish auth failures.
+ *
+ * `readable` marks a message written to be shown as it is -- the server's own
+ * explanation. Anything else (a bare "Internal Server Error", a validation dump)
+ * is replaced by the caller's fallback rather than put in front of someone.
+ */
 export class ApiError extends Error {
-  constructor(public readonly status: number, message: string) {
+  constructor(
+    public readonly status: number,
+    message: string,
+    public readonly readable = true
+  ) {
     super(message);
     this.name = 'ApiError';
   }
@@ -64,16 +81,41 @@ export class ApiError extends Error {
 /**
  * The sentence to show a user for a thrown value.
  *
- * `String(error)` prefixes it with the class name, so a message written to be read by
- * someone who does not code arrived as "ApiError: No Google Gemini API key is
- * configured...". The prefix says nothing they can act on.
+ * Only messages written for people are passed through. The webview's own errors --
+ * "Load failed" for a server that is restarting, "The string did not match the
+ * expected pattern." for a response that was not JSON -- are accurate and mean
+ * nothing to someone who does not code, so they become `fallback`, which callers
+ * phrase as what failed and what to do ("Couldn't save the skill. Try again.").
+ * `String(error)` was worse still: it prefixed every message with the class name.
  */
-export function errorMessage(error: unknown): string {
-  // An Error is asked for its message directly: String() on a message-less one yields
-  // the bare word "Error", which reads as a bug rather than an explanation.
-  if (error instanceof Error) return error.message.trim() || 'Something went wrong.';
-  const text = String(error).trim();
-  return text || 'Something went wrong.';
+export function errorMessage(error: unknown, fallback: string = GENERIC_MESSAGE): string {
+  if (error instanceof ApiError) {
+    if (error.status === 0) return OFFLINE_MESSAGE;
+    const text = error.message.trim();
+    return error.readable && text ? text : fallback;
+  }
+  // Raised by the browser rather than written by Kayak.
+  if (error instanceof TypeError || error instanceof SyntaxError) return fallback;
+  if (typeof DOMException !== 'undefined' && error instanceof DOMException) return fallback;
+  if (error instanceof Error) return error.message.trim() || fallback;
+  const text = typeof error === 'string' ? error.trim() : '';
+  return text || fallback;
+}
+
+/**
+ * `fetch`, with an unreachable server reported as an ApiError.
+ *
+ * The browser rejects with a TypeError whose text differs per engine, so a server
+ * restarting under the page was reported as "Load failed" in one place and
+ * "Failed to fetch" in another, and neither said what to do.
+ */
+async function request(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, withAuth(init));
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    throw new ApiError(0, OFFLINE_MESSAGE);
+  }
 }
 
 function withAuth(init?: RequestInit): RequestInit {
@@ -86,51 +128,43 @@ function withAuth(init?: RequestInit): RequestInit {
 }
 
 /**
- * Extracts the human-readable part of an error response.
+ * The explanation a failed response carries, if it carries one.
  *
- * FastAPI answers with `{"detail": ...}`, so showing the raw body put JSON braces in
- * front of users for every failure the UI reports.
+ * Kayak answers every failure with `{"detail": "<sentence>"}`. Anything else -- a
+ * plain-text error page, FastAPI's list of validation problems -- was not written
+ * for a person, so it is reported as unreadable rather than shown.
  */
-function readErrorDetail(body: string): string | null {
+export function readErrorDetail(body: string): string | null {
   if (!body) return null;
   try {
-    const parsed = JSON.parse(body);
-    const detail = parsed?.detail;
-    if (typeof detail === 'string') return detail;
-    // Validation errors arrive as a list of {loc, msg, type} entries.
-    if (Array.isArray(detail)) {
-      const messages = detail.map((item) => item?.msg).filter(Boolean);
-      if (messages.length) return messages.join('; ');
-    }
+    const detail = JSON.parse(body)?.detail;
+    return typeof detail === 'string' && detail.trim() ? detail.trim() : null;
   } catch {
-    /* not JSON; fall through to the raw text */
+    return null;
   }
-  return body;
 }
 
 async function assertOk(res: Response): Promise<void> {
   if (res.ok) return;
   const body = await res.text().catch(() => '');
-  throw new ApiError(res.status, readErrorDetail(body) || res.statusText);
+  const detail = readErrorDetail(body);
+  throw new ApiError(res.status, detail ?? (body || res.statusText), detail !== null);
 }
 
 /** Fetches JSON from the API, throwing on non-OK responses. */
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, withAuth(init));
+  const res = await request(url, init);
   await assertOk(res);
   return res.json();
 }
 
 /** Shorthand for a JSON request body on any method. */
 function sendJSON(url: string, method: string, data: unknown): Promise<Response> {
-  return fetch(
-    url,
-    withAuth({
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-  );
+  return request(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
 }
 
 async function fetchJSONSend<T>(url: string, method: string, data: unknown): Promise<T> {
@@ -143,9 +177,8 @@ function fetchJSONPost<T>(url: string, data: unknown): Promise<T> {
   return fetchJSONSend<T>(url, 'POST', data);
 }
 
-async function requestVoid(url: string, method: string, action: string): Promise<void> {
-  const res = await fetch(url, withAuth({ method }));
-  if (!res.ok) throw new ApiError(res.status, `Failed to ${action}: ${res.statusText}`);
+async function requestVoid(url: string, method: string): Promise<void> {
+  await assertOk(await request(url, { method }));
 }
 
 export const api = {
@@ -160,7 +193,7 @@ export const api = {
     fetchJSONPost(`${API_BASE}/conversations`, data),
 
   deleteConversation: (id: string): Promise<void> =>
-    requestVoid(`${API_BASE}/conversations/${id}`, 'DELETE', 'delete conversation'),
+    requestVoid(`${API_BASE}/conversations/${id}`, 'DELETE'),
 
   cancelConversation: (id: string): Promise<{ status: string }> =>
     fetchJSON(`${API_BASE}/conversations/${id}/cancel`, { method: 'POST' }),
@@ -193,11 +226,32 @@ export const api = {
   workspaceFileUrl: (conversationId: string, path: string): string =>
     `${API_BASE}/conversations/${conversationId}/fs/file?path=${encodeURIComponent(path)}`,
 
-  /** Fetches a workspace file as text, for the text preview. */
-  readWorkspaceFileText: async (conversationId: string, path: string): Promise<string> => {
-    const res = await fetch(api.workspaceFileUrl(conversationId, path), withAuth());
+  /**
+   * Fetches the start of a workspace file as text, for the text preview.
+   *
+   * Only the first `maxBytes` are asked for. The whole file used to be downloaded
+   * and then cut down, so opening an agent's multi-gigabyte log hung the window
+   * for the sake of showing its first half-megabyte.
+   */
+  readWorkspaceFileText: async (
+    conversationId: string,
+    path: string,
+    maxBytes: number
+  ): Promise<{ text: string; truncated: boolean }> => {
+    const res = await request(api.workspaceFileUrl(conversationId, path), {
+      headers: { Range: `bytes=0-${maxBytes - 1}` },
+    });
+    // An empty file has no first byte to send, which the server reports as an
+    // unsatisfiable range rather than as empty.
+    if (res.status === 416) return { text: '', truncated: false };
     await assertOk(res);
-    return res.text();
+    const total = Number(res.headers.get('Content-Range')?.split('/')[1]);
+    const text = await res.text();
+    // A server that ignores the range sends everything; it is still cut here.
+    return {
+      text: text.length > maxBytes ? text.slice(0, maxBytes) : text,
+      truncated: (Number.isFinite(total) && total > maxBytes) || text.length > maxBytes,
+    };
   },
 
   /**
@@ -210,10 +264,10 @@ export const api = {
   ): Promise<{ status: string; count: number }> => {
     const form = new FormData();
     for (const entry of entries) form.append('files', entry.file, entry.path);
-    return fetch(
-      `${API_BASE}/conversations/${conversationId}/fs/upload`,
-      withAuth({ method: 'POST', body: form })
-    ).then(async (res) => {
+    return request(`${API_BASE}/conversations/${conversationId}/fs/upload`, {
+      method: 'POST',
+      body: form,
+    }).then(async (res) => {
       await assertOk(res);
       return res.json();
     });
@@ -239,7 +293,7 @@ export const api = {
     fetchJSONPost(`${API_BASE}/agents`, agent),
 
   deleteAgent: (id: string): Promise<void> =>
-    requestVoid(`${API_BASE}/agents/${id}`, 'DELETE', 'delete agent'),
+    requestVoid(`${API_BASE}/agents/${id}`, 'DELETE'),
 
   // Skills
   listSkills: (): Promise<Skill[]> =>
@@ -249,7 +303,7 @@ export const api = {
     fetchJSONPost(`${API_BASE}/skills`, data),
 
   deleteSkill: (name: string): Promise<void> =>
-    requestVoid(`${API_BASE}/skills/${encodeURIComponent(name)}`, 'DELETE', 'delete skill'),
+    requestVoid(`${API_BASE}/skills/${encodeURIComponent(name)}`, 'DELETE'),
 
   // Tools
   listTools: (): Promise<ToolDefinition[]> =>
@@ -262,7 +316,7 @@ export const api = {
     fetchJSON(`${API_BASE}/tools/reload`, { method: 'POST' }),
 
   deleteTool: (name: string): Promise<void> =>
-    requestVoid(`${API_BASE}/tools/${encodeURIComponent(name)}`, 'DELETE', 'delete tool'),
+    requestVoid(`${API_BASE}/tools/${encodeURIComponent(name)}`, 'DELETE'),
 
   // Tool Builder
   verifyTool: (data: { tool_name: string; tool_code: string; verify_code: string }): Promise<VerifyToolResponse> =>
@@ -283,6 +337,16 @@ export const api = {
     fetchJSONSend<{ memories: string[] }>(`${API_BASE}/memories`, 'PUT', { memories })
       .then((data) => data.memories),
 
+  /**
+   * Rewrites one memory, or forgets it when `replacement` is empty, leaving every
+   * other memory as the server has it -- including any an agent added meanwhile.
+   */
+  editMemory: (previous: string, replacement: string): Promise<string[]> =>
+    fetchJSONSend<{ memories: string[] }>(`${API_BASE}/memories`, 'PATCH', {
+      previous,
+      replacement,
+    }).then((data) => data.memories),
+
   // Tasks
   listTasks: (conversationId?: string): Promise<BackgroundTask[]> => {
     const url = conversationId ? `${API_BASE}/tasks?conversation_id=${conversationId}` : `${API_BASE}/tasks`;
@@ -290,7 +354,7 @@ export const api = {
   },
 
   stopTask: (taskId: string): Promise<void> =>
-    requestVoid(`${API_BASE}/tasks/${taskId}/stop`, 'POST', 'stop task'),
+    requestVoid(`${API_BASE}/tasks/${taskId}/stop`, 'POST'),
 
   // Auth (only enforced when the server has KAYAK_AUTH_TOKEN set)
   getAuthStatus: (): Promise<{ auth_required: boolean; authenticated: boolean }> =>
@@ -347,8 +411,8 @@ export const api = {
 
   /** Plain-text diagnostics bundle, for a user to attach to a problem report. */
   getSupportBundle: async (): Promise<string> => {
-    const response = await fetch(`${API_BASE}/settings/support-bundle`, withAuth());
-    if (!response.ok) throw new Error(`Could not build the report (${response.status})`);
+    const response = await request(`${API_BASE}/settings/support-bundle`);
+    await assertOk(response);
     return response.text();
   },
 
@@ -415,7 +479,7 @@ export const api = {
     // record MP4, and a .webm name sends the decoder after the wrong container.
     const extension = recording.type.includes('mp4') ? 'm4a' : 'webm';
     body.append('file', recording, `dictation.${extension}`);
-    const response = await fetch(`${API_BASE}/audio/listen`, withAuth({ method: 'POST', body }));
+    const response = await request(`${API_BASE}/audio/listen`, { method: 'POST', body });
     await assertOk(response);
     return (await response.json()).text ?? '';
   },
@@ -434,10 +498,7 @@ export const api = {
     for (const file of files) body.append('files', file);
     if (language) body.append('language', language);
     // No Content-Type header: the browser has to set the multipart boundary itself.
-    const response = await fetch(`${API_BASE}/audio/transcriptions`, withAuth({
-      method: 'POST',
-      body,
-    }));
+    const response = await request(`${API_BASE}/audio/transcriptions`, { method: 'POST', body });
     await assertOk(response);
     return response.json();
   },

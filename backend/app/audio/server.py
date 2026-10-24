@@ -8,15 +8,19 @@ another's progress, and its timeout would count the wait.
 """
 
 import asyncio
+import errno
 from io import BytesIO
+import logging
 from typing import Any, Callable, Dict, Optional
 import wave
 
-from fastapi import HTTPException
 import httpx
 
 from backend.app.inference import registry
 from backend.app.inference.models import Modality, ServerState
+from backend.app.user_errors import UserFacingError
+
+logger = logging.getLogger(__name__)
 
 #: Synthesis of a long article, or transcription of a long recording, runs for
 #: minutes on a CPU. The generous ceiling exists to catch a hung server, not to bound
@@ -33,23 +37,84 @@ _locks: Dict[Modality, asyncio.Lock] = {}
 ProgressCallback = Callable[[int, int], None]
 
 
-def server_base(modality: Modality) -> str:
-    """The base URL of a running audio server, or a 409 explaining what to start.
+#: What each direction's failures are called, when the response carries nothing
+#: better. Phrased as what did not happen and what to try next.
+SYNTHESIS_FAILED = (
+    "The voice model couldn't read this text aloud. Try again. If it keeps failing, "
+    "restart it from Local Models."
+)
+TRANSCRIPTION_FAILED = (
+    "Kayak couldn't turn this recording into text. Make sure it's an audio file (like "
+    ".mp3, .m4a or .wav), then try again."
+)
+DISK_FULL = "Kayak couldn't save the result because your Mac is low on disk space."
+TIMED_OUT = (
+    "This took too long and was stopped. Try something shorter, or restart the model "
+    "from Local Models."
+)
+
+
+def label_of(modality: Modality) -> str:
+    """How a person would name the model serving one direction: "speech synthesis"."""
+    return registry.manager_for(modality).runtime.label.lower()
+
+
+def not_running(modality: Modality) -> UserFacingError:
+    """The refusal for work sent to a model that is not running.
 
     A 409 rather than a 500: nothing is broken, the user simply has not started the
     model yet, and the message says which one.
     """
+    return UserFacingError(
+        f"The {label_of(modality)} model isn't running. Start it from Local Models, "
+        "then try again.",
+        409,
+    )
+
+
+def server_base(modality: Modality) -> str:
+    """The base URL of a running audio server.
+
+    Raises:
+        UserFacingError: 409 when the model is not running. Raised as a
+            UserFacingError rather than an HTTPException because the work queues
+            call this too, and record the message as the job's error.
+    """
     manager = registry.manager_for(modality)
     status = manager.get_status()
     if status.state != ServerState.READY:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"No {manager.runtime.label.lower()} model is running. "
-                f"Start one from Local Models."
-            ),
-        )
+        raise not_running(modality)
     return status.endpoint.rstrip("/")
+
+
+def describe_failure(error: BaseException, modality: Modality, fallback: str) -> str:
+    """The sentence for a piece of audio work that raised, for the person waiting on it.
+
+    Recorded as a job's error, where ``str(error)`` used to put "409: " in front of a
+    message, or nothing at all for a timeout, whose text is empty.
+
+    Args:
+        error: What the work raised.
+        modality: Which server the work was sent to.
+        fallback: What to say when the error is none of the known kinds.
+    """
+    if isinstance(error, UserFacingError):
+        return error.message
+    if isinstance(error, httpx.ConnectTimeout):
+        return (
+            f"The {label_of(modality)} model stopped while working on this. Restart it "
+            "from Local Models, then try again."
+        )
+    if isinstance(error, httpx.TimeoutException):
+        return TIMED_OUT
+    if isinstance(error, httpx.TransportError):
+        return (
+            f"The {label_of(modality)} model stopped while working on this. Restart it "
+            "from Local Models, then try again."
+        )
+    if isinstance(error, OSError) and error.errno in (errno.ENOSPC, errno.EDQUOT):
+        return DISK_FULL
+    return fallback
 
 
 def model_of(modality: Modality) -> str:
@@ -66,7 +131,7 @@ async def post(
     """Posts one piece of work to a server, reporting its progress as it runs.
 
     Raises:
-        HTTPException: 409 if the server is not running.
+        UserFacingError: 409 if the server is not running.
         httpx.HTTPError: If the server cannot be reached.
     """
     lock = _locks.setdefault(modality, asyncio.Lock())
@@ -106,16 +171,27 @@ async def _watch_progress(
 
 
 def upstream_detail(response: httpx.Response, fallback: str) -> str:
-    """The audio server's own explanation, when it gave one.
+    """The audio server's own explanation of a refusal, when it gave one.
 
-    Replacing it with a generic message would hide the only sentence that says what
-    went wrong -- an unsupported format, or a model that cannot do this direction.
+    A refusal (4xx) carries a sentence about the request -- "There is no text to
+    speak." -- that says more than any fallback could, so it is passed on. A failure
+    (5xx) is the server's own trouble, and its text is not for the person waiting:
+    it is logged, and the fallback, which says what to do, is shown instead.
+
+    Args:
+        response: The audio server's answer.
+        fallback: A full sentence saying what failed and what to do next.
     """
     try:
         detail = response.json().get("detail")
     except Exception:
         detail = None
-    return str(detail) if detail else f"{fallback} ({response.status_code})."
+    if response.status_code >= 500 or not isinstance(detail, str) or not detail.strip():
+        logger.warning(
+            "Audio server answered %s: %s", response.status_code, detail or response.text[:500]
+        )
+        return fallback
+    return detail.strip()
 
 
 def wav_duration(data: bytes) -> Optional[float]:

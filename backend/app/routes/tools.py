@@ -59,19 +59,11 @@ async def delete_custom_tool(tool_name: str) -> Dict[str, str]:
     Raises:
         HTTPException: If the tool does not exist or is a protected builtin tool.
     """
-    tool = tool_registry.get_tool(tool_name)
-    if not tool:
-        raise HTTPException(
-            status_code=404, detail=f"Tool '{tool_name}' not found"
-        )
+    if not tool_registry.has_tool(tool_name):
+        raise HTTPException(status_code=404, detail="This tool was already deleted.")
+    if not tool_registry.is_custom(tool_name):
+        raise HTTPException(status_code=400, detail="Tools that come with Kayak can't be deleted.")
 
-    tool_directory = settings.TOOLS_DIR / tool_name
-    if not tool_directory.exists():
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot delete builtin or non-directory tool '{tool_name}'",
-        )
-
-    shutil.rmtree(tool_directory, ignore_errors=True)
+    shutil.rmtree(settings.TOOLS_DIR / tool_name, ignore_errors=True)
     tool_registry.load_custom_tools()
     return {"status": "deleted"}

@@ -216,6 +216,12 @@ async def update_settings(request: UpdateSettingsRequest) -> Dict[str, object]:
         for key, value in submitted.items()
         if not (key in _SECRET_KEYS and isinstance(value, str) and is_masked(value))
     }
+    # A key pasted with a trailing newline or space was stored as typed, and then
+    # refused by the provider -- or failed as an illegal header -- with nothing on
+    # screen that hinted at the invisible character.
+    for key in _SECRET_KEYS:
+        if isinstance(updates.get(key), str):
+            updates[key] = updates[key].strip()
     if sandbox is not None:
         updates["SANDBOX_MEMORY_GB"] = sandbox.get("memory_gb")
         updates["SANDBOX_CPUS"] = sandbox.get("cpus")
